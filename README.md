@@ -19,9 +19,9 @@
         - [ ] Naštelované na bicykli?
 
 - [ ] Otáčky/trip distance
-    - [x] Rýchlosť (vypočítané z otáčok motora)
+    - [x] Rýchlosť (vypočítané z otáčok predného motora)
         - [ ] Naštelované na bicykli?
-    - [ ] Otáčky motora (vypočítané z otáčok predného kolesa)
+    - [x] Rýchlosť (vypočítané z otáčok motora)
         - [ ] Naštelované na bicykli?
     - [ ] Trip distance (celodobý)
     - [ ] Trip distance (vyresetovaný po nejakej dobe neaktivity, dajme tomu že po 6 hodín)
