@@ -17,14 +17,14 @@ public:
     double VCC = 3.3;
     float temp;
     double calculateTemp(double input) {
-        VRT_1 = input;                       //Acquisition of analog value of VRT
+        VRT_1 = input;                          //Acquisition of analog value of VRT
         VRT_1 = (VCC / 1023) * (1023 - VRT_1);  //VRT = (3.3 / 1023) * VRT; //Conversion to voltage
         VR_1 = VCC - VRT_1;
-        RT_1 = VRT_1 / (VR_1 / R_1);              //Resistance of RT
+        RT_1 = VRT_1 / (VR_1 / R_1);            //Resistance of RT
         temp = (RT_1 / RT0_1);
         ln_1 = log(temp);
         TX_1 = (1 / ((ln_1 / B_1) + (1 / T0))); //Temperature from thermistor
-        Temperature = TX_1 - 273.15;                   //Conversion to Celsius
+        Temperature = TX_1 - 273.15;            //Conversion to Celsius
 
         return Temperature;
     }

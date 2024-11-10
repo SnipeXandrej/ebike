@@ -21,7 +21,6 @@ public:
 
         // avoid spurious interrupts
         if (duration >= time_between_interrupt_duration_us) {
-
             double duration_ms = duration / 1000;
             double distance_travelled_mm = wheel_circumference_mm * (1000/duration_ms);
             double distance_travelled_meters = distance_travelled_mm / 1000;
