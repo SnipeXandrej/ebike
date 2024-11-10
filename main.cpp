@@ -4,6 +4,7 @@
 #include "temperature.h"
 #include <thread>
 #include <chrono>
+#include "speedometer.h"
 
 using namespace std;
 
@@ -17,6 +18,10 @@ int main()
     // setup mcp3004 and GPIO
     mcp3004Setup(BASE,SPI_CHAN);
     wiringPiSetupGpio(); // uses the BCM GPIO numbering
+
+    Speedometer *speedometer_front_wheel = new Speedometer;
+    speedometer_front_wheel->init(630, 71.26*1000); // with 71.26ms the limit is 100km/h with the 630mm wheel diameter
+    speedometer_front_wheel->start(21, INT_EDGE_FALLING);
 
     // Temperature readout setup
     Temperature* temp1 = new Temperature();
