@@ -16,6 +16,7 @@ int main()
 
     // setup mcp3004 and GPIO
     mcp3004Setup(BASE,SPI_CHAN);
+    wiringPiSetupGpio(); // uses the BCM GPIO numbering
 
     // Temperature readout setup
     Temperature* temp1 = new Temperature();
