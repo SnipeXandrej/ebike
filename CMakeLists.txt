@@ -5,7 +5,9 @@ project(backend LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(backend main.cpp)
+add_executable(backend main.cpp temperature.h)
+
+target_link_libraries(backend wiringPi)
 
 include(GNUInstallDirs)
 install(TARGETS backend
