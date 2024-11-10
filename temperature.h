@@ -7,11 +7,10 @@ class Temperature {
 public:
     int RT0_1, B_1, R_1, R_2;
     double T0 = 25 + 273.15;
-    void init(int thermistor_R, int thermistor_B, int divider_R1, int divider_R2) {
+    void init(int thermistor_R, int thermistor_B, int resistor_R1) {
         RT0_1 = thermistor_R; //Ω
         B_1   = thermistor_B; //Beta of thermistor
-        R_1   = divider_R1; //R=1,5KΩ
-        R_2   = divider_R2; //R=1,5KΩ
+        R_1   = resistor_R1;  //R=1,5KΩ
     }
 
     double VRT_1, VR_1, RT_1, ln_1, TX_1, Temperature;

@@ -14,16 +14,20 @@ int main()
 {
     cout << "Hello World!" << endl;
 
-    // setup mcp3004
+    // setup mcp3004 and GPIO
     mcp3004Setup(BASE,SPI_CHAN);
 
     // Temperature readout setup
-    Temperature* temp = new Temperature();
-    temp->init(2200, 3930, 6800, 6920);
+    Temperature* temp1 = new Temperature();
+    temp1->init(2200, 3930, 6800);
+
+    Temperature* temp2 = new Temperature();
+    temp2->init(2200, 3930, 6920);
 
     // calculate temperature
     while(1) {
-        cout << "Temperature: " << temp->calculateTemp(analogRead(BASE+0)) << "\n";
+        cout << "temp1: " << temp1->calculateTemp(analogRead(BASE+0)) << "\n";
+        cout << "temp2: " << temp2->calculateTemp(analogRead(BASE+1)) << "\n";
         this_thread::sleep_for(std::chrono::milliseconds(250));
     }
 
