@@ -42,20 +42,16 @@ float potThrottleVoltage;
 float batteryPercentage;
 bool  batteryPercentageVoltageBased = 1;
 
-float odometer;
-float trip;
+float odometer, DNU_odometer_refresh; 
+float trip, DNU_trip_refresh;
+
 float speedkmh;
 
-bool printDebugStuff = 1;
-bool printUptime = 1;
-
-InputOffset BatVoltageCorrection;
-InputOffset BatCurrentCorrection;
-InputOffset PotThrottleCorrection;
-
-MovingAverage BatVoltageMovingAverage;
-MovingAverage BatCurrentMovingAverage;
-MovingAverage PotThrottleMovingAverage;
+//
+bool drawDebug = 0;
+bool drawUptime = 1;
+bool printCoreExecutionTime = 0;
+bool disableOptimizedDrawing = 0;
 
 uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
 uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
@@ -65,22 +61,30 @@ int core0loopcount = 0;
 int core1loopcount = 0;
 
 float totalSecondsSinceBoot;
-int secondsSinceBoot;
+int secondsSinceBoot, DNU_secondsSinceBoot;
 int minutesSinceBoot;
 int hoursSinceBoot;
 int daysSinceBoot;
 
-int selected_gear = 1;
-int selected_power_mode = 1;
+int selectedGear = 1, DNU_selectedGear;
+int selectedPowerMode = 1, DNU_selectedPowerMode;
 float wh_over_km = 0;
 
-int clockHours = 21;
-int clockMinutes = 37;
+int clockHours = 21, DNU_clockHours;
+int clockMinutes = 37, DNU_clockMinutes;
 
-char text[128];
+// char text[128];
 char text2[128];
 
 std::string readString;
+
+InputOffset BatVoltageCorrection;
+InputOffset BatCurrentCorrection;
+InputOffset PotThrottleCorrection;
+
+MovingAverage BatVoltageMovingAverage;
+MovingAverage BatCurrentMovingAverage;
+MovingAverage PotThrottleMovingAverage;
 
 #define pinRotor          13                // D13
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
@@ -137,32 +141,36 @@ void redrawScreen() {
     firsttime_draw = 1;
 }
 
-void printDebug() {
-        sprintf(text, "RAW:       %.04dV"
-              "\nCorrected: %.04fV"
-              "\n"
-              "\nExecution time:"
-              "\n core0: %lu us   "
-              "\n core1: %lu us   \n",
-              _batteryVoltage, batteryVoltage, timeCore0, timeCore1);
+// void printDebug() {
+//         sprintf(text, "RAW:       %.04dV"
+//               "\nCorrected: %.04fV"
+//               "\n"
+//               "\nExecution time:"
+//               "\n core0: %lu us   "
+//               "\n core1: %lu us   \n",
+//               _batteryVoltage, batteryVoltage, timeCore0, timeCore1);
 
-        tft.setTextSize(2);
-        tft.setCursor(0, 0);
-        tft.println(text);
-}
+//         tft.setTextSize(2);
+//         tft.setCursor(0, 0);
+//         tft.println(text);
+// }
 
 void printDisplay() {
     // TODO: only update the variables, not the whole text, as it takes longer to draw
 
     // Clock
     tft.setTextSize(2);
-    tft.setCursor(3, 3); tft.printf("%02d:%02d", clockHours, clockMinutes);
+    if (firsttime_draw || (DNU_clockMinutes != clockMinutes) || (DNU_clockHours != clockHours)) {
+        DNU_clockMinutes = clockMinutes;
+        DNU_clockHours = clockHours;
+        tft.setCursor(3, 3); tft.printf("%02d:%02d", clockHours, clockMinutes);
+    }
 
     // Battery
     tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
 
+    // Upper Divider
     if (firsttime_draw) {
-        // Upper Divider
         tft.drawLine(0, 20, 320, 20, ST77XX_WHITE);
     }
 
@@ -185,18 +193,23 @@ void printDisplay() {
     }
 
     // Gear // Power Level
-    // tft.setTextColor(ST77XX_BLACK, ST77XX_WHITE);
-    tft.setCursor(125, 147); tft.printf("Gear:  %d", selected_gear);
-    tft.setCursor(125, 166); tft.printf("Power: %d", selected_power_mode);
-    // tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    if (firsttime_draw || (DNU_selectedGear != selectedGear) || (DNU_selectedPowerMode != selectedPowerMode)) {
+        DNU_selectedGear = selectedGear;
+        DNU_selectedPowerMode = selectedPowerMode;
 
-    tft.setTextSize(1);
+        // tft.setTextColor(ST77XX_BLACK, ST77XX_WHITE);
+        tft.setCursor(125, 147); tft.printf("Gear:  %d", selectedGear);
+        tft.setCursor(125, 166); tft.printf("Power: %d", selectedPowerMode);
+        // tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    }
+
     // Uptime
-    if (printUptime)  {
+    tft.setTextSize(1);
+    if (drawUptime && (firsttime_draw || DNU_secondsSinceBoot != secondsSinceBoot))  {
+        DNU_secondsSinceBoot = secondsSinceBoot;
         tft.setCursor(3, 205);
         tft.printf("Uptime: %2dd %2dh %2dm %2ds\n", daysSinceBoot, hoursSinceBoot, minutesSinceBoot, secondsSinceBoot);
     }
-
 
     if (firsttime_draw) {
         // Bottom Divider
@@ -204,16 +217,22 @@ void printDisplay() {
     }
 
     // Odometer
-    tft.setTextSize(2);
-    tft.setCursor(3, 220);
-    tft.printf("O: %.1f", odometer);
+    if (firsttime_draw || DNU_odometer_refresh != odometer) {
+        DNU_odometer_refresh = odometer;
+        tft.setTextSize(2);
+        tft.setCursor(3, 220);
+        tft.printf("O: %.1f", odometer);
+    }
 
     // Trip
-    tft.setCursor(220, 220);
-    tft.printf("T: %.1f", trip);
+    if (firsttime_draw || DNU_trip_refresh != trip) {
+        DNU_trip_refresh = trip;
+        tft.setCursor(220, 220);
+        tft.printf("T: %.1f", trip);
+    }
 
 
-    if (printDebugStuff) {
+    if (drawDebug) {
         tft.setTextSize(1);
         sprintf(text2, "\nExecution time:"
                         "\n core0: %lu us   "
@@ -224,7 +243,7 @@ void printDisplay() {
     }
 
     if (firsttime_draw) {
-        firsttime_draw = 0; // should be 0
+        firsttime_draw = disableOptimizedDrawing; // should be 0
     }
 }
 
@@ -385,8 +404,6 @@ void app_main(void)
     odometer = preferences.getFloat("odometer", -1);
     trip     = preferences.getFloat("trip", -1);
 
-
-
     xTaskCreatePinnedToCore (
     loop2,     // Function to implement the task
     "loop2",   // Name of the task
@@ -396,7 +413,6 @@ void app_main(void)
     NULL,      // Task handle.
     1          // Core where the task should run
     );
-
 
     while(1) {
         if (core0loopcount == 0) {
@@ -433,16 +449,36 @@ void app_main(void)
                 clockMinutes = getValueFromString("clockMinutes", readString);
             }
 
-
-            if (readString.contains("printDebug="))
+            if (readString.contains("printCoreExecutionTime="))
             {
-                printDebugStuff = getValueFromString("printDebug", readString);
+                printCoreExecutionTime = getValueFromString("printCoreExecutionTime", readString);
+            }
+
+            if (readString.contains("disableOptimizedDrawing="))
+            {
+                disableOptimizedDrawing = getValueFromString("disableOptimizedDrawing", readString);
                 redrawScreen();
             }
 
-            if (readString.contains("printUptime="))
+            if (readString.contains("gear="))
             {
-                printUptime = getValueFromString("printUptime", readString);
+                selectedGear = getValueFromString("gear", readString);
+            }
+
+            if (readString.contains("powerMode="))
+            {
+                selectedPowerMode = getValueFromString("powerMode", readString);
+            }
+
+            if (readString.contains("drawDebug="))
+            {
+                drawDebug = getValueFromString("drawDebug", readString);
+                redrawScreen();
+            }
+
+            if (readString.contains("drawUptime="))
+            {
+                drawUptime = getValueFromString("drawUptime", readString);
                 redrawScreen();
             }
 
@@ -480,6 +516,13 @@ void app_main(void)
             core0loopcount++;
         } else {
             core0loopcount = 0;
+
+            if (printCoreExecutionTime) {
+                Serial.printf("\n\rExecution time:"
+                            "\n\r core0: %lu us   "
+                            "\n\r core1: %lu us   \n\r",
+                            timeCore0, timeCore1);
+            }
         }
             timeCore0 = (timer_u32() - timeStartCore0);
 
