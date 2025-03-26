@@ -47,12 +47,6 @@ float trip, DNU_trip_refresh;
 
 float speedkmh;
 
-//
-bool drawDebug = 0;
-bool drawUptime = 1;
-bool printCoreExecutionTime = 0;
-bool disableOptimizedDrawing = 0;
-
 uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
 uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
 uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
@@ -60,18 +54,27 @@ uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDis
 int core0loopcount = 0;
 int core1loopcount = 0;
 
-float totalSecondsSinceBoot;
-int secondsSinceBoot, DNU_secondsSinceBoot;
-int minutesSinceBoot;
-int hoursSinceBoot;
-int daysSinceBoot;
+// settings
+bool drawDebug = 1;
+bool drawUptime = 1;
+bool printCoreExecutionTime = 0;
+bool disableOptimizedDrawing = 0;
 
+// settings clock
+float totalSecondsSinceBoot;
+int clockSecondsSinceBoot, DNU_clockSecondsSinceBoot;
+int clockMinutesSinceBoot;
+int clockHoursSinceBoot;
+int clockDaysSinceBoot;
+
+int clockHours = 21, DNU_clockHours;
+int clockMinutes = 37, DNU_clockMinutes;
+
+// settings for gearing and power
 int selectedGear = 1, DNU_selectedGear;
 int selectedPowerMode = 1, DNU_selectedPowerMode;
 float wh_over_km = 0;
 
-int clockHours = 21, DNU_clockHours;
-int clockMinutes = 37, DNU_clockMinutes;
 
 // char text[128];
 char text2[128];
@@ -205,10 +208,10 @@ void printDisplay() {
 
     // Uptime
     tft.setTextSize(1);
-    if (drawUptime && (firsttime_draw || DNU_secondsSinceBoot != secondsSinceBoot))  {
-        DNU_secondsSinceBoot = secondsSinceBoot;
+    if (drawUptime && (firsttime_draw || DNU_clockSecondsSinceBoot != clockSecondsSinceBoot))  {
+        DNU_clockSecondsSinceBoot = clockSecondsSinceBoot;
         tft.setCursor(3, 205);
-        tft.printf("Uptime: %2dd %2dh %2dm %2ds\n", daysSinceBoot, hoursSinceBoot, minutesSinceBoot, secondsSinceBoot);
+        tft.printf("Uptime: %2dd %2dh %2dm %2ds\n", clockDaysSinceBoot, clockHoursSinceBoot, clockMinutesSinceBoot, clockSecondsSinceBoot);
     }
 
     if (firsttime_draw) {
@@ -235,9 +238,9 @@ void printDisplay() {
     if (drawDebug) {
         tft.setTextSize(1);
         sprintf(text2, "\nExecution time:"
-                        "\n core0: %lu us   "
-                        "\n core1: %lu us   \n",
-                        timeCore0, timeCore1);
+                        "\n core0: %.1f us   "
+                        "\n core1: %.1f us   \n",
+                        timer_delta_us(timeCore0), timer_delta_us(timeCore1));
         tft.setCursor(160, 150);
         tft.println(text2);
     }
@@ -247,9 +250,10 @@ void printDisplay() {
     }
 }
 
-void loop2 (void* pvParameters) {
+// runs on core 1
+void loop_core1 (void* pvParameters) {
     while (1) {
-        if (core1loopcount == 0)
+        // if (core1loopcount == 0)
             timeStartCore1 = timer_u32();
 
         // Reset temporary values
@@ -307,11 +311,13 @@ void loop2 (void* pvParameters) {
             core1loopcount++;
         } else {
             core1loopcount = 0;
-            timeCore1 = (timer_u32() - timeStartCore1) / 200;
+            // timeCore1 = (timer_u32() - timeStartCore1) / 200;
         }
+        timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
 
+// runs on core 0
 void app_main(void)
 {
     initArduino();
@@ -330,8 +336,8 @@ void app_main(void)
     tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
     tft.setCursor(0, 0);
 
-    BatVoltageCorrection.offsetPoints = {
-    // input, offset
+    BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
+    // input, offset // 5/10/20 are the DAC values I used to use as an adjustable input to the ADC
     {0.0, 0},
     {0.0046, 0.1234}, // 5
     {0.0519, 0.1331}, // 10
@@ -370,13 +376,13 @@ void app_main(void)
     BatCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
-    BatVoltageCorrection.smoothingFactor = 1;
+    // BatVoltageCorrection.smoothingFactor = 1;
     BatVoltageMovingAverage.smoothingFactor = 0.01;
 
-    BatCurrentCorrection.smoothingFactor = 1;
+    // BatCurrentCorrection.smoothingFactor = 1;
     BatCurrentMovingAverage.smoothingFactor = 0.01;
 
-    PotThrottleCorrection.smoothingFactor = 1;
+    // PotThrottleCorrection.smoothingFactor = 1;
     PotThrottleMovingAverage.smoothingFactor = 0.5;
 
 
@@ -405,8 +411,8 @@ void app_main(void)
     trip     = preferences.getFloat("trip", -1);
 
     xTaskCreatePinnedToCore (
-    loop2,     // Function to implement the task
-    "loop2",   // Name of the task
+    loop_core1,     // Function to implement the task
+    "loop_core1",   // Name of the task
     10000,      // Stack size in bytes
     NULL,      // Task input parameter
     0,         // Priority of the task
@@ -491,11 +497,11 @@ void app_main(void)
         }
 
 
-        totalSecondsSinceBoot += ((float)timeCore0 / 1000000);
-        secondsSinceBoot = (int)(totalSecondsSinceBoot) % 60;
-        minutesSinceBoot = (int)(totalSecondsSinceBoot / 60) % 60;
-        hoursSinceBoot =   (int)(totalSecondsSinceBoot / 60 / 60) % 24;
-        daysSinceBoot =    totalSecondsSinceBoot / 60 / 60 / 24;
+        totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
+        clockSecondsSinceBoot = (int)(totalSecondsSinceBoot) % 60;
+        clockMinutesSinceBoot = (int)(totalSecondsSinceBoot / 60) % 60;
+        clockHoursSinceBoot =   (int)(totalSecondsSinceBoot / 60 / 60) % 24;
+        clockDaysSinceBoot =    totalSecondsSinceBoot / 60 / 60 / 24;
 
 
         // if ((timeEndDisplay - timeStartDisplay) > 66) { // 15Hz
@@ -519,9 +525,10 @@ void app_main(void)
 
             if (printCoreExecutionTime) {
                 Serial.printf("\n\rExecution time:"
-                            "\n\r core0: %lu us   "
-                            "\n\r core1: %lu us   \n\r",
-                            timeCore0, timeCore1);
+                            "\n\r core0: %.1f us   "
+                            "\n\r core1: %.1f us   "
+                            "\n\r timer_u32(): %llu ns                      \n\r",
+                            timer_delta_us(timeCore0), timer_delta_us(timeCore1), timer_u32());
             }
         }
             timeCore0 = (timer_u32() - timeStartCore0);

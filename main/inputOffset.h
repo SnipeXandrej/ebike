@@ -47,12 +47,12 @@ private:
         return 0.0; // Default case (shouldn't reach here if input is valid)
     }
 
-    // Smoothing function using a moving average
-    float smoothValue(float newValue, float previousValue, float smoothingFactor) {
-        return previousValue + smoothingFactor * (newValue - previousValue);
-    }
+    // // Smoothing function using a moving average
+    // float smoothValue(float newValue, float previousValue, float smoothingFactor) {
+    //     return previousValue + smoothingFactor * (newValue - previousValue);
+    // }
 
-    float previousAdjustedInput = 0;
+    // float previousAdjustedInput = 0;
 
 public:
     std::vector<OffsetPoint> offsetPoints;
@@ -66,10 +66,10 @@ public:
         float adjustedInput = input + offset;
 
         // Apply smoothing
-        adjustedInput = smoothValue(adjustedInput, previousAdjustedInput, smoothingFactor);
+        // adjustedInput = smoothValue(adjustedInput, previousAdjustedInput, smoothingFactor);
 
         // Store the smoothed value as previous for the next iteration
-        previousAdjustedInput = adjustedInput;
+        // previousAdjustedInput = adjustedInput;
 
         return adjustedInput;
     }
