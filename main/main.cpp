@@ -1,25 +1,25 @@
 #include <stdio.h>
-#include "Arduino.h"
+#include <iostream>
+#include <chrono>
 
+// Arduino Libraries
+#include "Arduino.h"
 #include <SPI.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include "HardwareSerial.h"
-
-#include <iostream>
-#include <chrono>
+#include "Preferences.h"
 
 #include "esp32-hal-dac.h"
 #include "esp32-hal-ledc.h"
 #include "hal/dac_types.h"
+#include "driver/adc.h"
+#include "esp_adc_cal.h"
+
 #include "inputOffset.h"
 #include "fastGPIO.h"
-// #include "timer.h"
 #include "timer_u32.h"
-
-#include "Preferences.h"
-
-Preferences preferences;
+#include "MiniPID.h"
 
 bool firsttime_draw = 1;
 
@@ -30,35 +30,47 @@ bool firsttime_draw = 1;
 // Adafruit_ST7789 tft = Adafruit_ST7789(&tftVSPI, TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
-int  _batteryVoltage;
+float  _batteryVoltage;
 float batteryVoltage;
 
-int  _batteryCurrent;
+float  _batteryCurrent;
 float batteryCurrent;
 
-int  _potThrottleVoltage;
+float batteryWattConsumption;
+
+float  _vescCurrent;
+float vescCurrent;
+
+float  _auxCurrent;
+float auxCurrent;
+
+float  _potThrottleVoltage;
 float potThrottleVoltage;
 
 float batteryPercentage;
-bool  batteryPercentageVoltageBased = 1;
 
 float odometer, DNU_odometer_refresh; 
 float trip, DNU_trip_refresh;
 
 float speedkmh;
+float wh_over_km = 0;
 
 uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
 uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
 uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
 
+// uint32_t timeStartCutMotorPowerTimeout = 0 ,timeCutMotorPowerTimeout = 0;
+
 int core0loopcount = 0;
 int core1loopcount = 0;
 
 // settings
-bool drawDebug = 1;
+bool drawDebug = 0;
 bool drawUptime = 1;
 bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
+bool batteryPercentageVoltageBased = 1;
+bool cutMotorPower = 0;
 
 // settings clock
 float totalSecondsSinceBoot;
@@ -71,9 +83,8 @@ int clockHours = 21, DNU_clockHours;
 int clockMinutes = 37, DNU_clockMinutes;
 
 // settings for gearing and power
-int selectedGear = 1, DNU_selectedGear;
-int selectedPowerMode = 1, DNU_selectedPowerMode;
-float wh_over_km = 0;
+int selectedGear, DNU_selectedGear;
+int selectedPowerMode, DNU_selectedPowerMode;
 
 
 // char text[128];
@@ -82,29 +93,98 @@ char text2[128];
 std::string readString;
 
 InputOffset BatVoltageCorrection;
-InputOffset BatCurrentCorrection;
+InputOffset AuxCurrentCorrection;
 InputOffset PotThrottleCorrection;
+InputOffset VESCCurrentCorrection;
 
 MovingAverage BatVoltageMovingAverage;
-MovingAverage BatCurrentMovingAverage;
+MovingAverage AuxCurrentMovingAverage;
 MovingAverage PotThrottleMovingAverage;
+MovingAverage VESCCurrentMovingAverage;
+
+MovingAverage Throttle;
+
+Preferences preferences;
+
+double PotThrottleAdjustment;
+double PotThrottleLevel;
+double PotThrottleLevelPowerLimited;
+
+double kP = 0.2, kI = 0.1, kD = 2; //kP = 0.1, 0.3 is unstable
+MiniPID powerLimiterPID(kP, kI, kD);
 
 #define pinRotor          13                // D13
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
-#define pinBatteryCurrent ADC1_CHANNEL_3    // D39
+#define pinAuxCurrent     ADC1_CHANNEL_3    // D39
 #define pinPotThrottle    ADC1_CHANNEL_6    // D34
+#define pinVESCCurrent    ADC1_CHANNEL_7    // D35
 #define pinOutToVESC      25                // D25
 #define pinTFTbacklight   2                 // D2
 
-#include "driver/adc.h"
-#include "esp_adc_cal.h"
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
 
 // Enabling C++ compile
 extern "C" { void app_main(); }
 
-float map(float x, float in_min, float in_max, float out_min, float out_max) {
+int PowerLevelnegative1Watts = 1000000;
+int PowerLevel0Watts = 100;
+int PowerLevel1Watts = 250;
+int PowerLevel2Watts = 500;
+int PowerLevel3Watts = 1000;
+
+void setPowerLevel(int level) {
+    if (level == -1) {
+        powerLimiterPID.setSetpoint(PowerLevelnegative1Watts);
+        selectedPowerMode = -1;
+    }
+
+    if (level == 0) {
+        powerLimiterPID.setSetpoint(PowerLevel0Watts);
+        selectedPowerMode = 0;
+    }
+
+    if (level == 1) {
+        powerLimiterPID.setSetpoint(PowerLevel1Watts);
+        selectedPowerMode = 1;
+    }
+
+    if (level == 2) {
+        powerLimiterPID.setSetpoint(PowerLevel2Watts);
+        selectedPowerMode = 2;
+    }
+
+    if (level == 3) {
+        powerLimiterPID.setSetpoint(PowerLevel3Watts);
+        selectedPowerMode = 3;
+    }
+}
+
+int GearLevel1DutyCycle = 20;
+int GearLevel2DutyCycle = 10;
+int GearLevel3DutyCycle = 5;
+int GearDutyCycle;
+
+void setGearLevel(int level) {
+    if (level == 1) {
+        selectedGear = 1;
+        GearDutyCycle = GearLevel1DutyCycle;
+    }
+
+    if (level == 2) {
+        selectedGear = 2;
+        GearDutyCycle = GearLevel2DutyCycle;
+    }
+
+    if (level == 3) {
+        selectedGear = 3;
+        GearDutyCycle = GearLevel3DutyCycle;
+    }
+
+    ledcWrite( pinRotor, GearDutyCycle);
+}
+
+float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
     int temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 
     if (temp < out_min)
@@ -127,7 +207,7 @@ std::string removeStringWithEqualSignAtTheEnd(const std::string toRemove, std::s
 float getValueFromString(const std::string toRemove, std::string str) {
     float value;
 
-    value = stoi(removeStringWithEqualSignAtTheEnd(toRemove, str));
+    value = stof(removeStringWithEqualSignAtTheEnd(toRemove, str));
 
     // try {
 
@@ -178,10 +258,12 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("W: %5.0f", batteryVoltage * batteryCurrent);
-    tft.setCursor(3, 47); tft.printf("V: %5.2f", batteryVoltage);
-    tft.setCursor(3, 66); tft.printf("A: %5.2f", batteryCurrent);
-    tft.setCursor(3, 85); tft.printf("Pot:%3.0f%%", map(potThrottleVoltage, 0.3f, 3.3f, 0.0f, 100.0f));
+    tft.setCursor(3, 28); tft.printf("W: %5.0f  ", batteryWattConsumption);
+    tft.setCursor(3, 47); tft.printf("V: %5.2f  ", batteryVoltage);
+    tft.setCursor(3, 66); tft.printf("A: %5.2f  ", auxCurrent);
+    tft.setCursor(3, 85); tft.printf("A: %5.2f  ", vescCurrent);
+    tft.setCursor(3, 104); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
+    tft.setCursor(3, 123); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
@@ -258,20 +340,23 @@ void loop_core1 (void* pvParameters) {
 
         // Reset temporary values
         _batteryVoltage = 0;
-        _batteryCurrent = 0;
+        _auxCurrent = 0;
         _potThrottleVoltage = 0;
+        _vescCurrent = 0;
 
         for (int i = 0; i < 5; i++) {
             _batteryVoltage += adc1_get_raw(pinBatteryVoltage); // PIN 36/VP
-            _batteryCurrent += adc1_get_raw(pinBatteryCurrent); // PIN 39/VN
+            _auxCurrent += adc1_get_raw(pinAuxCurrent); // PIN 39/VN
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
+            _vescCurrent += adc1_get_raw(pinVESCCurrent); // PIN 35
         }
         _batteryVoltage = _batteryVoltage / 5;
-        _batteryCurrent = _batteryCurrent / 5;
+        _auxCurrent = _auxCurrent / 5;
         _potThrottleVoltage = _potThrottleVoltage / 5;
+        _vescCurrent = _vescCurrent / 5;
 
         // BATTERY VOLTAGE
-        batteryVoltage = (30.265f *
+        batteryVoltage = (29.963f *
             BatVoltageCorrection.correctInput(
                 BatVoltageMovingAverage.moveAverage(
                     ((float)3.3/(float)4095) * _batteryVoltage
@@ -279,14 +364,34 @@ void loop_core1 (void* pvParameters) {
             )
         ); //29.839
 
-        // BATTERY CURRENT
-        batteryCurrent = (
-            BatCurrentCorrection.correctInput(
-                BatCurrentMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _batteryCurrent
+        // AUX CURRENT
+        _auxCurrent = (
+            AuxCurrentCorrection.correctInput(
+                AuxCurrentMovingAverage.moveAverage(
+                    ((float)3.3/(float)4095) * _auxCurrent
                 )
             )
         );
+        _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
+        auxCurrent = (_auxCurrent - (float)2.545) / (float)0.192;
+
+        // AUX CURRENT
+        _vescCurrent = (
+            VESCCurrentCorrection.correctInput(
+                VESCCurrentMovingAverage.moveAverage(
+                    ((float)3.3/(float)4095) * _vescCurrent
+                )
+            )
+        );
+        _vescCurrent = ((((float)965+(float)560)/(float)965) * _vescCurrent);
+        vescCurrent = (_vescCurrent - (float)2.529) / (float)0.116; //122
+        // vescCurrent = _vescCurrent;
+
+        // Battery Current
+        batteryCurrent = auxCurrent + vescCurrent;
+
+        // Battery Watt Consumption
+        batteryWattConsumption = batteryVoltage * batteryCurrent;
 
         // Throttle Voltage
         potThrottleVoltage = (
@@ -297,11 +402,33 @@ void loop_core1 (void* pvParameters) {
             )
         );
 
+        // if (selectedPowerMode == 1) {
+        //     if (batteryWattConsumption > 100) {
+        //         cutMotorPower = 1;
+        //         timeStartCutMotorPowerTimeout = timer_u32();
+        //     } else {
+        //         if (timer_delta_ms(timer_u32() - timeStartCutMotorPowerTimeout) > 50) {
+        //             cutMotorPower = 0;
+        //         } else {
+
+        //         }
+        //     }
+        // }
+
         // for now, directly map voltage from the throttle to the pot input pin of VESC
-        dacWrite(pinOutToVESC, map(potThrottleVoltage, 0, 3.3, 0, 255));
+        if (cutMotorPower) {
+            dacWrite(pinOutToVESC, 0); //no power
+        } else {
+            PotThrottleLevel = map_f(potThrottleVoltage, 0, 3.3, 0, 100);
+            PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
+            
+            PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
+            dacWrite(pinOutToVESC, (int)map_f(PotThrottleLevelPowerLimited, 0, 100, 0, 255));
+        }
+        
 
         if (batteryPercentageVoltageBased) {
-            batteryPercentage = map(batteryVoltage, 34, 41, 0, 100);
+            batteryPercentage = map_f(batteryVoltage, 34, 41, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
             batteryPercentage = 0;
@@ -373,25 +500,31 @@ void app_main(void)
     {3.3, 0}
     };
 
-    BatCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
+    AuxCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
+    VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
     // BatVoltageCorrection.smoothingFactor = 1;
-    BatVoltageMovingAverage.smoothingFactor = 0.01;
+    BatVoltageMovingAverage.smoothingFactor = 0.2; //0.2
 
     // BatCurrentCorrection.smoothingFactor = 1;
-    BatCurrentMovingAverage.smoothingFactor = 0.01;
+    AuxCurrentMovingAverage.smoothingFactor = 0.2; // 0.2
 
     // PotThrottleCorrection.smoothingFactor = 1;
-    PotThrottleMovingAverage.smoothingFactor = 0.5;
+    PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
+
+    VESCCurrentMovingAverage.smoothingFactor = 0.2; // 0.5
+
+    Throttle.smoothingFactor = 0.1;
 
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
     // Configure ADC channel and attenuation
     adc1_config_channel_atten(pinBatteryVoltage, ADC_ATTEN); // PIN 36/VP
-    adc1_config_channel_atten(pinBatteryCurrent, ADC_ATTEN); // PIN 39/VN
+    adc1_config_channel_atten(pinAuxCurrent,     ADC_ATTEN); // PIN 39/VN
     adc1_config_channel_atten(pinPotThrottle,    ADC_ATTEN); // PIN 34
+    adc1_config_channel_atten(pinVESCCurrent,    ADC_ATTEN); // PIN 35
 
     pinMode( pinOutToVESC, OUTPUT);
     dacWrite(pinOutToVESC, 0);
@@ -400,13 +533,18 @@ void app_main(void)
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
 
     ledcAttach(pinRotor, 5000, 8);
-    ledcWrite( pinRotor, 100);
+    ledcWrite( pinRotor, 0);
 
+
+    powerLimiterPID.setOutputLimits(-100, 0);
+    // powerLimiterPID.setSetpoint(50); // max power watts
+    setPowerLevel(-1);
+    setGearLevel(3);
 
 
     // setup ebike namespace
     preferences.begin("ebike", false);
-    // retrieve values
+    // retrieve values      
     odometer = preferences.getFloat("odometer", -1);
     trip     = preferences.getFloat("trip", -1);
 
@@ -468,12 +606,33 @@ void app_main(void)
 
             if (readString.contains("gear="))
             {
-                selectedGear = getValueFromString("gear", readString);
+                setGearLevel((int)getValueFromString("gear", readString));
+            }
+
+            if (readString.contains("kP="))
+            {
+                kP = (double)getValueFromString("kP", readString);
+                // Serial.printf("kP: %0.3lf \n", kP);
+                powerLimiterPID.setPID(kP, kI, kD);
+            }
+
+            if (readString.contains("kI="))
+            {
+                kI = (double)getValueFromString("kI", readString);
+                // Serial.printf("kI: %0.3lf \n", kI);
+                powerLimiterPID.setPID(kP, kI, kD);
+            }
+
+            if (readString.contains("kD="))
+            {
+                kD = (double)getValueFromString("kD", readString);
+                // Serial.printf("kD: %0.3lf \n", kI);
+                powerLimiterPID.setPID(kP, kI, kD);
             }
 
             if (readString.contains("powerMode="))
             {
-                selectedPowerMode = getValueFromString("powerMode", readString);
+                setPowerLevel((int)getValueFromString("powerMode", readString));
             }
 
             if (readString.contains("drawDebug="))
@@ -518,7 +677,7 @@ void app_main(void)
         // }
         // timeEndDisplay = millis();
 
-        if (core0loopcount < 100) {
+        if (core0loopcount < 20) {
             core0loopcount++;
         } else {
             core0loopcount = 0;

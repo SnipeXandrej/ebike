@@ -47,13 +47,6 @@ private:
         return 0.0; // Default case (shouldn't reach here if input is valid)
     }
 
-    // // Smoothing function using a moving average
-    // float smoothValue(float newValue, float previousValue, float smoothingFactor) {
-    //     return previousValue + smoothingFactor * (newValue - previousValue);
-    // }
-
-    // float previousAdjustedInput = 0;
-
 public:
     std::vector<OffsetPoint> offsetPoints;
     float smoothingFactor = 1; // Smoothing factor (0 = no smoothing, 1 = instant change)
@@ -62,15 +55,7 @@ public:
         // Interpolate offset
         float offset = interpolateOffset(offsetPoints, input);
 
-        // Compute adjusted RPM
-        float adjustedInput = input + offset;
-
-        // Apply smoothing
-        // adjustedInput = smoothValue(adjustedInput, previousAdjustedInput, smoothingFactor);
-
-        // Store the smoothed value as previous for the next iteration
-        // previousAdjustedInput = adjustedInput;
-
-        return adjustedInput;
+        // Compute and return adjusted RPM
+        return input + offset;
     }
 };
