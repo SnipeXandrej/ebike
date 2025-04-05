@@ -1,8 +1,12 @@
-void pinDigitalWrite(int BITpinnumber, int state) {
+#include "hal/gpio_ll.h"
+
+void pinDigitalWrite(int pin, int state) {
     if (state) {
-        REG_WRITE(GPIO_OUT_W1TS_REG, BITpinnumber);
+        GPIO.out_w1ts = ((uint32_t)1 << pin);
+        // REG_WRITE(GPIO_OUT_W1TS_REG, pin);
     } else {
-        REG_WRITE(GPIO_OUT_W1TC_REG, BITpinnumber);
+        GPIO.out_w1tc = ((uint32_t)1 << pin);
+        // REG_WRITE(GPIO_OUT_W1TC_REG, pin);
     }
 
 // switch (pin) {
@@ -21,5 +25,5 @@ bool pinDigitalRead(int pin) {
 }
 
 int pinAnalogRead(int pin) {
-    return 0;
+    return (REG_READ(GPIO_IN1_REG) & pin);
 }

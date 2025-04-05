@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <iostream>
 #include <chrono>
+#include <mutex>
 
 // Arduino Libraries
 #include "Arduino.h"
@@ -58,6 +59,7 @@ float wh_over_km = 0;
 uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
 uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
 uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
+uint32_t timeExecEverySecond = 0;
 
 // uint32_t timeStartCutMotorPowerTimeout = 0 ,timeCutMotorPowerTimeout = 0;
 
@@ -65,27 +67,45 @@ int core0loopcount = 0;
 int core1loopcount = 0;
 
 // settings
-bool drawDebug = 0;
+bool drawDebug = 1;
 bool drawUptime = 1;
 bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
 bool batteryPercentageVoltageBased = 1;
 bool cutMotorPower = 0;
 
-// settings clock
+// uptime
 float totalSecondsSinceBoot;
 int clockSecondsSinceBoot, DNU_clockSecondsSinceBoot;
 int clockMinutesSinceBoot;
 int clockHoursSinceBoot;
 int clockDaysSinceBoot;
 
-int clockHours = 21, DNU_clockHours;
-int clockMinutes = 37, DNU_clockMinutes;
+
+// clock
+int clockYear = 2025;
+int clockMonth = 4;
+int clockDay = 1;
+int clockHours = 19;
+int clockMinutes = 0;
+float clockSeconds = 15, DNU_clockSeconds;
+
+int daysInJanuary = 31;
+int daysInFebruary = 28;
+int daysInMarch = 31;
+int daysInApril = 30;
+int daysInMay = 31;
+int daysInJune = 30;
+int daysInJuly = 31;
+int daysInAugust = 31;
+int daysInSeptember = 30;
+int daysInOctober = 31;
+int daysInNovember = 30;
+int daysInDecember = 31;
 
 // settings for gearing and power
 int selectedGear, DNU_selectedGear;
 int selectedPowerMode, DNU_selectedPowerMode;
-
 
 // char text[128];
 char text2[128];
@@ -184,6 +204,79 @@ void setGearLevel(int level) {
     ledcWrite( pinRotor, GearDutyCycle);
 }
 
+int daysInCurrentMonth = 0;
+void clock_date_and_time() {
+    clockSeconds += ((float)timer_delta_us(timeCore0) / 1000000);
+    if (clockSeconds >= 60) {
+        // substract 60 seconds to "reset" the counter
+        /* if we were to reset it to "0" we may lose some milliseconds
+           and over time those milliseconds will become significant enough
+           for the time to slowly drift away from what it should really be */
+        clockSeconds -= 60;
+        clockMinutes++;
+    }
+    // mutex_clock.unlock();
+
+    if (clockMinutes >= 60) {
+        clockMinutes = 0;
+        clockHours++;
+    }
+
+    if (clockHours >= 24) {
+        clockHours = 0;
+        clockDay++;
+    }
+
+    switch (clockMonth) {
+        case 1:
+            daysInCurrentMonth = daysInJanuary;
+            break;
+        case 2:
+            daysInCurrentMonth = daysInFebruary;
+            break;
+        case 3:
+            daysInCurrentMonth = daysInMarch;
+            break;
+        case 4:
+            daysInCurrentMonth = daysInApril;
+            break;
+        case 5:
+            daysInCurrentMonth = daysInMay;
+            break;
+        case 6:
+            daysInCurrentMonth = daysInJune;
+            break;
+        case 7:
+            daysInCurrentMonth = daysInJuly;
+            break;
+        case 8:
+            daysInCurrentMonth = daysInAugust;
+            break;
+        case 9:
+            daysInCurrentMonth = daysInSeptember;
+            break;
+        case 10:
+            daysInCurrentMonth = daysInOctober;
+            break;
+        case 11:
+            daysInCurrentMonth = daysInNovember;
+            break;
+        case 12:
+            daysInCurrentMonth = daysInDecember;
+            break;
+    }
+
+    if (clockDay > daysInCurrentMonth) {
+        clockDay = 1;
+        clockMonth++;
+    }
+
+    if (clockMonth > 12) {
+        clockMonth = 1;
+        clockYear++;
+    }
+}
+
 float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
     int temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 
@@ -243,11 +336,13 @@ void printDisplay() {
 
     // Clock
     tft.setTextSize(2);
-    if (firsttime_draw || (DNU_clockMinutes != clockMinutes) || (DNU_clockHours != clockHours)) {
-        DNU_clockMinutes = clockMinutes;
-        DNU_clockHours = clockHours;
-        tft.setCursor(3, 3); tft.printf("%02d:%02d", clockHours, clockMinutes);
+    if (firsttime_draw || ((int)DNU_clockSeconds != (int)clockSeconds)) {
+        DNU_clockSeconds = clockSeconds;
+        tft.setCursor(3, 3); tft.printf("%02d:%02d:%02.0f", clockHours, clockMinutes, clockSeconds);
+        tft.setTextSize(1);
+        tft.setCursor(100, 10); tft.printf("%1d.%1d.%4d  ", clockDay, clockMonth, clockYear);
     }
+    tft.setTextSize(2);
 
     // Battery
     tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
@@ -344,16 +439,20 @@ void loop_core1 (void* pvParameters) {
         _potThrottleVoltage = 0;
         _vescCurrent = 0;
 
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 15; i++) {
             _batteryVoltage += adc1_get_raw(pinBatteryVoltage); // PIN 36/VP
             _auxCurrent += adc1_get_raw(pinAuxCurrent); // PIN 39/VN
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
             _vescCurrent += adc1_get_raw(pinVESCCurrent); // PIN 35
+            // _batteryVoltage += pinAnalogRead(36); // PIN 36/VP
+            // _auxCurrent += pinAnalogRead(39); // PIN 39/VN
+            // _potThrottleVoltage += pinAnalogRead(34);
+            // _vescCurrent += pinAnalogRead(35); // PIN 35
         }
-        _batteryVoltage = _batteryVoltage / 5;
-        _auxCurrent = _auxCurrent / 5;
-        _potThrottleVoltage = _potThrottleVoltage / 5;
-        _vescCurrent = _vescCurrent / 5;
+        _batteryVoltage = _batteryVoltage / 15;
+        _auxCurrent = _auxCurrent / 15;
+        _potThrottleVoltage = _potThrottleVoltage / 15;
+        _vescCurrent = _vescCurrent / 15;
 
         // BATTERY VOLTAGE
         batteryVoltage = (29.963f *
@@ -440,6 +539,11 @@ void loop_core1 (void* pvParameters) {
             core1loopcount = 0;
             // timeCore1 = (timer_u32() - timeStartCore1) / 200;
         }
+
+        if (timer_delta_ms(timer_u32() - timeExecEverySecond) >= 1000) {
+            timeExecEverySecond = timer_u32();
+        }
+
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -516,7 +620,6 @@ void app_main(void)
     VESCCurrentMovingAverage.smoothingFactor = 0.2; // 0.5
 
     Throttle.smoothingFactor = 0.1;
-
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
@@ -662,6 +765,9 @@ void app_main(void)
         clockHoursSinceBoot =   (int)(totalSecondsSinceBoot / 60 / 60) % 24;
         clockDaysSinceBoot =    totalSecondsSinceBoot / 60 / 60 / 24;
 
+        // function for counting the current time and date
+        clock_date_and_time();
+
 
         // if ((timeEndDisplay - timeStartDisplay) > 66) { // 15Hz
         printDisplay();
@@ -691,6 +797,5 @@ void app_main(void)
             }
         }
             timeCore0 = (timer_u32() - timeStartCore0);
-
     }
 }
