@@ -20,6 +20,7 @@
 
 #include "inputOffset.h"
 #include "fastGPIO.h"
+#include "ebike-utils.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
 
@@ -329,35 +330,6 @@ void clock_date_and_time() {
         clockMonth = 1;
         clockYear++;
     }
-}
-
-float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
-    int temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-
-    if (temp < out_min)
-        temp = out_min;
-
-    if (temp > out_max)
-        temp = out_max;
-
-    return temp;
-}
-
-std::string removeStringWithEqualSignAtTheEnd(const std::string toRemove, std::string str) {
-    size_t pos = str.find(toRemove);
-    str.erase(pos, toRemove.length() + 1);
-
-    // cout << str << "\n";
-    return str;
-}
-
-// why have this?
-float getValueFromString(const std::string toRemove, std::string str) {
-    float value;
-
-    value = stof(removeStringWithEqualSignAtTheEnd(toRemove, str));
-
-    return value;
 }
 
 void redrawScreen() {
@@ -692,12 +664,6 @@ void app_main(void)
     );
 
     while(1) {
-        if (core0loopcount == 0) {
-            // Save values
-            // preferences.putFloat("odometer", odometer);
-            // preferences.putFloat("trip", trip);
-            // Serial.println("Preferences saved!\n");
-        }
         timeStartCore0 = timer_u32();
 
         while (Serial.available()) {
@@ -779,8 +745,8 @@ void app_main(void)
         totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
         clockSecondsSinceBoot = (int)(totalSecondsSinceBoot) % 60;
         clockMinutesSinceBoot = (int)(totalSecondsSinceBoot / 60) % 60;
-        clockHoursSinceBoot =   (int)(totalSecondsSinceBoot / 60 / 60) % 24;
-        clockDaysSinceBoot =    totalSecondsSinceBoot / 60 / 60 / 24;
+        clockHoursSinceBoot   = (int)(totalSecondsSinceBoot / 60 / 60) % 24;
+        clockDaysSinceBoot    = totalSecondsSinceBoot / 60 / 60 / 24;
 
         // function for counting the current time and date
         clock_date_and_time();
@@ -800,7 +766,12 @@ void app_main(void)
                             timer_delta_us(timeCore0), timer_delta_us(timeCore1), timer_u32());
             }
         }
+
+        // Save values
+        // preferences.putFloat("odometer", odometer);
+        // preferences.putFloat("trip", trip);
+        // Serial.println("Preferences saved!\n");
         
-            timeCore0 = (timer_u32() - timeStartCore0);
+        timeCore0 = (timer_u32() - timeStartCore0);
     }
 }
