@@ -15,6 +15,7 @@
 #include "esp32-hal-ledc.h"
 #include "hal/dac_types.h"
 #include "driver/adc.h"
+#include "driver/ledc.h"
 #include "esp_adc_cal.h"
 
 #include "inputOffset.h"
@@ -60,14 +61,11 @@ uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeSta
 uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
 uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
 uint32_t timeExecEverySecond = 0;
-
-// uint32_t timeStartCutMotorPowerTimeout = 0 ,timeCutMotorPowerTimeout = 0;
-
-int core0loopcount = 0;
-int core1loopcount = 0;
+uint32_t timeExecEverySecondCore0 = 0;
+uint32_t timeButton1 = 0; uint32_t timeButton2 = 0;
 
 // settings
-bool drawDebug = 1;
+bool drawDebug = 0;
 bool drawUptime = 1;
 bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
@@ -81,15 +79,13 @@ int clockMinutesSinceBoot;
 int clockHoursSinceBoot;
 int clockDaysSinceBoot;
 
-
 // clock
 int clockYear = 2025;
 int clockMonth = 4;
-int clockDay = 1;
-int clockHours = 19;
-int clockMinutes = 0;
+int clockDay = 11;
+int clockHours = 9;
+int clockMinutes = 54;
 float clockSeconds = 15, DNU_clockSeconds;
-
 int daysInJanuary = 31;
 int daysInFebruary = 28;
 int daysInMarch = 31;
@@ -121,7 +117,7 @@ MovingAverage BatVoltageMovingAverage;
 MovingAverage AuxCurrentMovingAverage;
 MovingAverage PotThrottleMovingAverage;
 MovingAverage VESCCurrentMovingAverage;
-
+MovingAverage BatWattMovingAverage;
 MovingAverage Throttle;
 
 Preferences preferences;
@@ -140,6 +136,10 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinVESCCurrent    ADC1_CHANNEL_7    // D35
 #define pinOutToVESC      25                // D25
 #define pinTFTbacklight   2                 // D2
+#define pinButton1  4  // D4
+#define pinButton2  16 // RX2
+#define pinButton3  17 // TX2
+#define pinButton4  21 // D21
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
@@ -180,12 +180,26 @@ void setPowerLevel(int level) {
     }
 }
 
-int GearLevel1DutyCycle = 20;
-int GearLevel2DutyCycle = 10;
-int GearLevel3DutyCycle = 5;
+// 0 = 70W
+// 10 = 78W
+// 25 = 75W
+// 50 = 48W
+// 75 = 35W
+// 100 = 28W
+// 150 = 10W
+// 200 = 2W
+int GearLevel0DutyCycle = 255; // 0W
+int GearLevel1DutyCycle = 255 - 245; // 65W??
+int GearLevel2DutyCycle = 255 - 155; // 12W
+int GearLevel3DutyCycle = 255 - 55; // 3W??
 int GearDutyCycle;
 
 void setGearLevel(int level) {
+    if (level == 0) {
+        selectedGear = 0;
+        GearDutyCycle = GearLevel0DutyCycle;
+    }
+
     if (level == 1) {
         selectedGear = 1;
         GearDutyCycle = GearLevel1DutyCycle;
@@ -201,7 +215,48 @@ void setGearLevel(int level) {
         GearDutyCycle = GearLevel3DutyCycle;
     }
 
-    ledcWrite( pinRotor, GearDutyCycle);
+    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearDutyCycle);
+    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+void IRAM_ATTR ISR_Button1() {
+    if (timer_delta_ms(timer_u32() - timeButton1) >= 200) {
+        timeButton1 = timer_u32();
+
+        switch(selectedGear) {
+            case 3:
+                setGearLevel(2);
+                break;
+            case 2:
+                setGearLevel(1);
+                break;
+            case 1:
+                setGearLevel(0);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void IRAM_ATTR ISR_Button2() {
+    if (timer_delta_ms(timer_u32() - timeButton2) >= 200) {
+        timeButton2 = timer_u32();
+
+        switch(selectedGear) {
+            case 0:
+                setGearLevel(1);
+                break;
+            case 1:
+                setGearLevel(2);
+                break;
+            case 2:
+                setGearLevel(3);
+                break;
+            default:
+                break;
+        }
+    }
 }
 
 int daysInCurrentMonth = 0;
@@ -215,7 +270,6 @@ void clock_date_and_time() {
         clockSeconds -= 60;
         clockMinutes++;
     }
-    // mutex_clock.unlock();
 
     if (clockMinutes >= 60) {
         clockMinutes = 0;
@@ -297,17 +351,11 @@ std::string removeStringWithEqualSignAtTheEnd(const std::string toRemove, std::s
     return str;
 }
 
+// why have this?
 float getValueFromString(const std::string toRemove, std::string str) {
     float value;
 
     value = stof(removeStringWithEqualSignAtTheEnd(toRemove, str));
-
-    // try {
-
-    // }
-    // catch (std::invalid_argument const& ex) {
-    //     std::cout << "this did an oopsie: " << ex.what() << '\n';
-    // }
 
     return value;
 }
@@ -316,20 +364,6 @@ void redrawScreen() {
     tft.fillScreen(ST77XX_BLACK);
     firsttime_draw = 1;
 }
-
-// void printDebug() {
-//         sprintf(text, "RAW:       %.04dV"
-//               "\nCorrected: %.04fV"
-//               "\n"
-//               "\nExecution time:"
-//               "\n core0: %lu us   "
-//               "\n core1: %lu us   \n",
-//               _batteryVoltage, batteryVoltage, timeCore0, timeCore1);
-
-//         tft.setTextSize(2);
-//         tft.setCursor(0, 0);
-//         tft.println(text);
-// }
 
 void printDisplay() {
     // TODO: only update the variables, not the whole text, as it takes longer to draw
@@ -411,7 +445,6 @@ void printDisplay() {
         tft.printf("T: %.1f", trip);
     }
 
-
     if (drawDebug) {
         tft.setTextSize(1);
         sprintf(text2, "\nExecution time:"
@@ -430,8 +463,7 @@ void printDisplay() {
 // runs on core 1
 void loop_core1 (void* pvParameters) {
     while (1) {
-        // if (core1loopcount == 0)
-            timeStartCore1 = timer_u32();
+        timeStartCore1 = timer_u32();
 
         // Reset temporary values
         _batteryVoltage = 0;
@@ -444,10 +476,6 @@ void loop_core1 (void* pvParameters) {
             _auxCurrent += adc1_get_raw(pinAuxCurrent); // PIN 39/VN
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
             _vescCurrent += adc1_get_raw(pinVESCCurrent); // PIN 35
-            // _batteryVoltage += pinAnalogRead(36); // PIN 36/VP
-            // _auxCurrent += pinAnalogRead(39); // PIN 39/VN
-            // _potThrottleVoltage += pinAnalogRead(34);
-            // _vescCurrent += pinAnalogRead(35); // PIN 35
         }
         _batteryVoltage = _batteryVoltage / 15;
         _auxCurrent = _auxCurrent / 15;
@@ -490,7 +518,7 @@ void loop_core1 (void* pvParameters) {
         batteryCurrent = auxCurrent + vescCurrent;
 
         // Battery Watt Consumption
-        batteryWattConsumption = batteryVoltage * batteryCurrent;
+        batteryWattConsumption = BatWattMovingAverage.moveAverage(batteryVoltage * batteryCurrent);
 
         // Throttle Voltage
         potThrottleVoltage = (
@@ -501,21 +529,8 @@ void loop_core1 (void* pvParameters) {
             )
         );
 
-        // if (selectedPowerMode == 1) {
-        //     if (batteryWattConsumption > 100) {
-        //         cutMotorPower = 1;
-        //         timeStartCutMotorPowerTimeout = timer_u32();
-        //     } else {
-        //         if (timer_delta_ms(timer_u32() - timeStartCutMotorPowerTimeout) > 50) {
-        //             cutMotorPower = 0;
-        //         } else {
-
-        //         }
-        //     }
-        // }
-
         // for now, directly map voltage from the throttle to the pot input pin of VESC
-        if (cutMotorPower) {
+        if (cutMotorPower || selectedGear == 0) {
             dacWrite(pinOutToVESC, 0); //no power
         } else {
             PotThrottleLevel = map_f(potThrottleVoltage, 0, 3.3, 0, 100);
@@ -533,15 +548,11 @@ void loop_core1 (void* pvParameters) {
             batteryPercentage = 0;
         }
 
-        if (core1loopcount < 200) {
-            core1loopcount++;
-        } else {
-            core1loopcount = 0;
-            // timeCore1 = (timer_u32() - timeStartCore1) / 200;
-        }
-
+        // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecond) >= 1000) {
             timeExecEverySecond = timer_u32();
+
+            // stuff to run
         }
 
         timeCore1 = (timer_u32() - timeStartCore1);
@@ -608,17 +619,11 @@ void app_main(void)
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
-    // BatVoltageCorrection.smoothingFactor = 1;
     BatVoltageMovingAverage.smoothingFactor = 0.2; //0.2
-
-    // BatCurrentCorrection.smoothingFactor = 1;
     AuxCurrentMovingAverage.smoothingFactor = 0.2; // 0.2
-
-    // PotThrottleCorrection.smoothingFactor = 1;
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
-
     VESCCurrentMovingAverage.smoothingFactor = 0.2; // 0.5
-
+    BatWattMovingAverage.smoothingFactor = 0.1;
     Throttle.smoothingFactor = 0.1;
 
     // Configure ADC width (resolution)
@@ -632,17 +637,42 @@ void app_main(void)
     pinMode( pinOutToVESC, OUTPUT);
     dacWrite(pinOutToVESC, 0);
 
+    pinMode(pinButton1, INPUT_PULLDOWN);
+    pinMode(pinButton2, INPUT_PULLDOWN);
+    pinMode(pinButton3, INPUT_PULLDOWN);
+    pinMode(pinButton4, INPUT_PULLDOWN);
+    attachInterrupt(pinButton1, ISR_Button1, HIGH);
+    attachInterrupt(pinButton2, ISR_Button2, HIGH);
+
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
 
-    ledcAttach(pinRotor, 5000, 8);
-    ledcWrite( pinRotor, 0);
+    ledc_timer_config_t timer_conf = {
+        .speed_mode = LEDC_HIGH_SPEED_MODE,
+        .duty_resolution = static_cast<ledc_timer_bit_t>(8),
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 1000,
+        .clk_cfg = LEDC_USE_APB_CLK,
+    };
+    ledc_timer_config(&timer_conf);
+
+    // Channel Configuration
+    ledc_channel_config_t channel_conf = {
+        .gpio_num = 13,
+        .speed_mode = LEDC_HIGH_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .intr_type = LEDC_INTR_DISABLE,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 127,
+        .hpoint = 0
+    };
+    ledc_channel_config(&channel_conf);
 
 
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
-    setGearLevel(3);
+    setGearLevel(0);
 
 
     // setup ebike namespace
@@ -682,24 +712,16 @@ void app_main(void)
             // Serial.printf("text %s\n", readString.c_str());
 
             if (readString.contains("displayRefresh\n"))
-            {
                 redrawScreen();
-            }
 
             if (readString.contains("clockHours="))
-            {
                 clockHours = getValueFromString("clockHours", readString);
-            }
 
             if (readString.contains("clockMinutes="))
-            {
                 clockMinutes = getValueFromString("clockMinutes", readString);
-            }
 
             if (readString.contains("printCoreExecutionTime="))
-            {
                 printCoreExecutionTime = getValueFromString("printCoreExecutionTime", readString);
-            }
 
             if (readString.contains("disableOptimizedDrawing="))
             {
@@ -708,9 +730,7 @@ void app_main(void)
             }
 
             if (readString.contains("gear="))
-            {
                 setGearLevel((int)getValueFromString("gear", readString));
-            }
 
             if (readString.contains("kP="))
             {
@@ -734,10 +754,8 @@ void app_main(void)
             }
 
             if (readString.contains("powerMode="))
-            {
                 setPowerLevel((int)getValueFromString("powerMode", readString));
-            }
-
+            
             if (readString.contains("drawDebug="))
             {
                 drawDebug = getValueFromString("drawDebug", readString);
@@ -758,7 +776,6 @@ void app_main(void)
             readString="";
         }
 
-
         totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
         clockSecondsSinceBoot = (int)(totalSecondsSinceBoot) % 60;
         clockMinutesSinceBoot = (int)(totalSecondsSinceBoot / 60) % 60;
@@ -768,26 +785,13 @@ void app_main(void)
         // function for counting the current time and date
         clock_date_and_time();
 
-
-        // if ((timeEndDisplay - timeStartDisplay) > 66) { // 15Hz
         printDisplay();
 
+        // Execute every second that elapsed
+        if (timer_delta_ms(timer_u32() - timeExecEverySecondCore0) >= 1000) {
+            timeExecEverySecondCore0 = timer_u32();
 
-          // totalSecondsSinceBoot = esp_timer_get_time() / 1000000; // +353000 = 4d 2h 3m 20s
-
-
-          // Serial.printf("Uptime: %02d:%02d:%02d:%02d\n", daysSinceBoot, hoursSinceBoot, minutesSinceBoot, secondsSinceBoot);
-
-
-          // timeStartDisplay = millis();
-        // }
-        // timeEndDisplay = millis();
-
-        if (core0loopcount < 20) {
-            core0loopcount++;
-        } else {
-            core0loopcount = 0;
-
+            // stuff to run
             if (printCoreExecutionTime) {
                 Serial.printf("\n\rExecution time:"
                             "\n\r core0: %.1f us   "
@@ -796,6 +800,7 @@ void app_main(void)
                             timer_delta_us(timeCore0), timer_delta_us(timeCore1), timer_u32());
             }
         }
+        
             timeCore0 = (timer_u32() - timeStartCore0);
     }
 }
