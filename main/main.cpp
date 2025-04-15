@@ -40,6 +40,8 @@ float  _batteryCurrent;
 float batteryCurrent;
 
 float batteryWattConsumption;
+float batteryVESCWatts;
+float batteryAuxWatts;
 
 float  _vescCurrent;
 float vescCurrent;
@@ -181,6 +183,8 @@ void setPowerLevel(int level) {
     }
 }
 
+// rotor electromagnet DC resistance is around 3,05 ohms
+// All values down below are not to be taken as accurate at all
 // 0 = 70W
 // 10 = 78W
 // 25 = 75W
@@ -190,7 +194,7 @@ void setPowerLevel(int level) {
 // 150 = 10W
 // 200 = 2W
 int GearLevel0DutyCycle = 255; // 0W
-int GearLevel1DutyCycle = 255 - 245; // 65W??
+int GearLevel1DutyCycle = 255 - 255; // 65W??
 int GearLevel2DutyCycle = 255 - 155; // 12W
 int GearLevel3DutyCycle = 255 - 55; // 3W??
 int GearDutyCycle;
@@ -220,9 +224,21 @@ void setGearLevel(int level) {
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
+int button1PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
+                            // "1" causes the button to activate specified function *after* releasing the button
 void IRAM_ATTR ISR_Button1() {
-    if (timer_delta_ms(timer_u32() - timeButton1) >= 200) {
+    if (timer_delta_ms(timer_u32() - timeButton1) >= 20) {
         timeButton1 = timer_u32();
+
+        // the button sends two interrupts... once when pressed, and once when released
+        // so run this function once every 2 interrupts
+        if (button1PressCount >= 2) {
+            button1PressCount = 1;
+        } else {
+            button1PressCount++;
+            return;
+        }
+        
 
         switch(selectedGear) {
             case 3:
@@ -240,9 +256,20 @@ void IRAM_ATTR ISR_Button1() {
     }
 }
 
+int button2PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
+                            // "1" causes the button to activate specified function *after* releasing the button
 void IRAM_ATTR ISR_Button2() {
-    if (timer_delta_ms(timer_u32() - timeButton2) >= 200) {
+    if (timer_delta_ms(timer_u32() - timeButton2) >= 20) {
         timeButton2 = timer_u32();
+
+        // the button sends two interrupts... once when pressed, and once when released
+        // so run this function once every 2 interrupts
+        if (button2PressCount >= 2) {
+            button2PressCount = 1;
+        } else {
+            button2PressCount++;
+            return;
+        }
 
         switch(selectedGear) {
             case 0:
@@ -359,12 +386,13 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("W: %5.0f  ", batteryWattConsumption);
-    tft.setCursor(3, 47); tft.printf("V: %5.2f  ", batteryVoltage);
-    tft.setCursor(3, 66); tft.printf("A: %5.2f  ", auxCurrent);
-    tft.setCursor(3, 85); tft.printf("A: %5.2f  ", vescCurrent);
-    tft.setCursor(3, 104); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
-    tft.setCursor(3, 123); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
+    tft.setCursor(3, 28); tft.printf("Wmotor:%4.0f  ", batteryVESCWatts);
+    tft.setCursor(3, 47); tft.printf("Waux  :%3.0f  ", batteryAuxWatts);
+    tft.setCursor(3, 66); tft.printf("V: %5.2f  ", batteryVoltage);
+    tft.setCursor(3, 85); tft.printf("A: %5.2f  ", auxCurrent);
+    tft.setCursor(3, 104); tft.printf("A: %5.2f  ", vescCurrent);
+    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
+    tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
@@ -463,6 +491,7 @@ void loop_core1 (void* pvParameters) {
             )
         ); //29.839
 
+        // PRESNÉ!! 12.4.2025 17:08
         // AUX CURRENT
         _auxCurrent = (
             AuxCurrentCorrection.correctInput(
@@ -472,8 +501,9 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
-        auxCurrent = (_auxCurrent - (float)2.545) / (float)0.192;
+        auxCurrent = (_auxCurrent - (float)2.544) / (float)0.185;
 
+        // PRESNÉ!! 12.4.2025 17:45
         // AUX CURRENT
         _vescCurrent = (
             VESCCurrentCorrection.correctInput(
@@ -483,16 +513,16 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _vescCurrent = ((((float)965+(float)560)/(float)965) * _vescCurrent);
-        vescCurrent = (_vescCurrent - (float)2.529) / (float)0.116; //122
-        // vescCurrent = _vescCurrent;
+        vescCurrent = (_vescCurrent - (float)2.527) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
+                                                                                  // previous max A reading was 20A, not it should be at least 155.6A
 
-        // Battery Current
+
         batteryCurrent = auxCurrent + vescCurrent;
 
-        // Battery Watt Consumption
         batteryWattConsumption = BatWattMovingAverage.moveAverage(batteryVoltage * batteryCurrent);
+        batteryVESCWatts = batteryVoltage * vescCurrent;
+        batteryAuxWatts = batteryVoltage * auxCurrent;
 
-        // Throttle Voltage
         potThrottleVoltage = (
             PotThrottleCorrection.correctInput(
                 PotThrottleMovingAverage.moveAverage(
@@ -503,9 +533,11 @@ void loop_core1 (void* pvParameters) {
 
         // for now, directly map voltage from the throttle to the pot input pin of VESC
         if (cutMotorPower || selectedGear == 0) {
+            PotThrottleLevel = 0;
+            PotThrottleLevelPowerLimited = 0;
             dacWrite(pinOutToVESC, 0); //no power
         } else {
-            PotThrottleLevel = map_f(potThrottleVoltage, 0, 3.3, 0, 100);
+            PotThrottleLevel = map_f(potThrottleVoltage, 0, 3.2, 0, 100);
             PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
@@ -591,10 +623,12 @@ void app_main(void)
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
-    BatVoltageMovingAverage.smoothingFactor = 0.2; //0.2
-    AuxCurrentMovingAverage.smoothingFactor = 0.2; // 0.2
+    // Battery
+    BatVoltageMovingAverage.smoothingFactor = 0.05; //0.2
+    AuxCurrentMovingAverage.smoothingFactor = 0.05; // 0.2
+    VESCCurrentMovingAverage.smoothingFactor = 0.05; // 0.5
+
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
-    VESCCurrentMovingAverage.smoothingFactor = 0.2; // 0.5
     BatWattMovingAverage.smoothingFactor = 0.1;
     Throttle.smoothingFactor = 0.1;
 
@@ -613,8 +647,8 @@ void app_main(void)
     pinMode(pinButton2, INPUT_PULLDOWN);
     pinMode(pinButton3, INPUT_PULLDOWN);
     pinMode(pinButton4, INPUT_PULLDOWN);
-    attachInterrupt(pinButton1, ISR_Button1, HIGH);
-    attachInterrupt(pinButton2, ISR_Button2, HIGH);
+    attachInterrupt(pinButton1, ISR_Button1, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton2, ISR_Button2, GPIO_INTR_POSEDGE);
 
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
