@@ -65,7 +65,7 @@ uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEnd
 uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
 uint32_t timeExecEverySecond = 0;
 uint32_t timeExecEverySecondCore0 = 0;
-uint32_t timeButton1 = 0; uint32_t timeButton2 = 0;
+uint32_t timeButton1 = 0, timeButton2 = 0, timeButton3 = 0, timeButton4 = 0;
 
 // settings
 bool drawDebug = 0;
