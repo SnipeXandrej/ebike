@@ -23,6 +23,7 @@
 #include "ebike-utils.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
+#include "Button.h"
 
 bool firsttime_draw = 1;
 
@@ -224,110 +225,47 @@ void setGearLevel(int level) {
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
-
-// TODO: deduplicate these buttons
-int button1PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
-                            // "1" causes the button to activate specified function *after* releasing the button
-void IRAM_ATTR ISR_Button1() {
-    if (timer_delta_ms(timer_u32() - timeButton1) >= 20) {
-        timeButton1 = timer_u32();
-
-        // the button sends two interrupts... once when pressed, and once when released
-        // so run this function once every 2 interrupts
-        if (button1PressCount >= 2) {
-            button1PressCount = 1;
-        } else {
-            button1PressCount++;
-            return;
-        }
-        
-
-        switch(selectedGear) {
-            case 3:
-                setGearLevel(2);
-                break;
-            case 2:
-                setGearLevel(1);
-                break;
-            case 1:
-                setGearLevel(0);
-                break;
-            default:
-                break;
-        }
+void button1Callback() { // Switch Gears
+    switch(selectedGear) {
+        case 3:
+            setGearLevel(2);
+            break;
+        case 2:
+            setGearLevel(1);
+            break;
+        case 1:
+            setGearLevel(0);
+            break;
+        default:
+            break;
     }
 }
 
-int button2PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
-                            // "1" causes the button to activate specified function *after* releasing the button
-void IRAM_ATTR ISR_Button2() {
-    if (timer_delta_ms(timer_u32() - timeButton2) >= 20) {
-        timeButton2 = timer_u32();
-
-        // the button sends two interrupts... once when pressed, and once when released
-        // so run this function once every 2 interrupts
-        if (button2PressCount >= 2) {
-            button2PressCount = 1;
-        } else {
-            button2PressCount++;
-            return;
-        }
-
-        switch(selectedGear) {
-            case 0:
-                setGearLevel(1);
-                break;
-            case 1:
-                setGearLevel(2);
-                break;
-            case 2:
-                setGearLevel(3);
-                break;
-            default:
-                break;
-        }
+void button2Callback() { // Switch Power
+    switch(selectedGear) {
+        case 0:
+            setGearLevel(1);
+            break;
+        case 1:
+            setGearLevel(2);
+            break;
+        case 2:
+            setGearLevel(3);
+            break;
+        default:
+            break;
     }
 }
 
-int button3PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
-                            // "1" causes the button to activate specified function *after* releasing the button
-void IRAM_ATTR ISR_Button3() {
-    if (timer_delta_ms(timer_u32() - timeButton3) >= 20) {
-        timeButton3 = timer_u32();
-
-        // the button sends two interrupts... once when pressed, and once when released
-        // so run this function once every 2 interrupts
-        if (button3PressCount >= 2) {
-            button3PressCount = 1;
-        } else {
-            button3PressCount++;
-            return;
-        }
-
-        // code
-
-    }
+void button3Callback() {
+    // nothing right now
 }
 
-int button4PressCount = 2;  // "2" causes the button to activate specified function when pressing the button
-                            // "1" causes the button to activate specified function *after* releasing the button
-void IRAM_ATTR ISR_Button4() {
-    if (timer_delta_ms(timer_u32() - timeButton4) >= 20) {
-        timeButton4 = timer_u32();
 
-        // the button sends two interrupts... once when pressed, and once when released
-        // so run this function once every 2 interrupts
-        if (button4PressCount >= 2) {
-            button4PressCount = 1;
-        } else {
-            button4PressCount++;
-            return;
-        }
-
-        // code
-
-    }
+void button4Callback() {
+    // nothing right now
 }
+
 
 int daysInCurrentMonth = 0;
 void clock_date_and_time() {
@@ -690,10 +628,20 @@ void app_main(void)
     pinMode(pinButton2, INPUT_PULLDOWN);
     pinMode(pinButton3, INPUT_PULLDOWN);
     pinMode(pinButton4, INPUT_PULLDOWN);
-    attachInterrupt(pinButton1, ISR_Button1, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton2, ISR_Button2, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton3, ISR_Button3, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton4, ISR_Button4, GPIO_INTR_POSEDGE);
+    //
+    Button button1ISR;
+    Button button2ISR;
+    Button button3ISR;
+    Button button4ISR;
+    button1ISR.registerCallback(button1Callback); // Switch Gears
+    button2ISR.registerCallback(button2Callback); // Switch Power
+    button3ISR.registerCallback(button3Callback);
+    button4ISR.registerCallback(button4Callback);
+    //
+    attachInterrupt(pinButton1, button1ISR.ISR, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton2, button2ISR.ISR, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton3, button3ISR.ISR, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton4, button4ISR.ISR, GPIO_INTR_POSEDGE);
 
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
