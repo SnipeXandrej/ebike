@@ -23,7 +23,7 @@
 #include "ebike-utils.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
-#include "Button.h"
+#include "Speedometer.h"
 
 bool firsttime_draw = 1;
 
@@ -58,7 +58,6 @@ float batteryPercentage;
 float odometer, DNU_odometer_refresh; 
 float trip, DNU_trip_refresh;
 
-float speedkmh;
 float wh_over_km = 0;
 
 uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
@@ -126,6 +125,8 @@ MovingAverage Throttle;
 
 Preferences preferences;
 
+Speedometer speedometer;
+
 double PotThrottleAdjustment;
 double PotThrottleLevel;
 double PotThrottleLevelPowerLimited;
@@ -144,6 +145,7 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinButton2  16 // RX2
 #define pinButton3  17 // TX2
 #define pinButton4  21 // D21
+#define pinWheelSpeed  12 // D12
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
@@ -225,7 +227,31 @@ void setGearLevel(int level) {
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
+int buttonPressCount = 2;
+uint32_t timeButton;
+int buttonWait() {
+    int ret = 1;
+    if (timer_delta_ms(timer_u32() - timeButton) >= 20) {
+        timeButton = timer_u32();
+
+        // the button sends two interrupts... once when pressed, and once when released
+        // so run this function once every 2 interrupts
+        if (buttonPressCount >= 2) {
+            buttonPressCount = 1;
+            ret = 0;
+        } else {
+            buttonPressCount++;
+            ret = 1;
+        }
+    }
+    return ret;
+}
+
 void button1Callback() { // Switch Gears
+    if (buttonWait() == 1) {
+        return;
+    }
+
     switch(selectedGear) {
         case 3:
             setGearLevel(2);
@@ -241,7 +267,11 @@ void button1Callback() { // Switch Gears
     }
 }
 
-void button2Callback() { // Switch Power
+void button2Callback() { // Switch Gears
+    if (buttonWait() == 1) {
+        return;
+    }
+
     switch(selectedGear) {
         case 0:
             setGearLevel(1);
@@ -264,6 +294,14 @@ void button3Callback() {
 
 void button4Callback() {
     // nothing right now
+}
+
+void buttonWheelSpeedCallback() {
+    if (buttonWait() == 1) {
+        return;
+    }
+
+    speedometer.ISR();
 }
 
 
@@ -380,7 +418,7 @@ void printDisplay() {
 
     // Speed
     tft.setTextSize(5);
-    tft.setCursor(125, 106); tft.printf("%.0f", speedkmh);
+    tft.setCursor(125, 106); tft.printf("%2.0f", speedometer.speed_in_kmh);
     tft.setCursor(185, 127); tft.setTextSize(2);
     if (firsttime_draw) {
         tft.println("km/h");
@@ -481,7 +519,7 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
-        auxCurrent = (_auxCurrent - (float)2.544) / (float)0.185;
+        auxCurrent = (_auxCurrent - (float)2.546) / (float)0.185;
 
         // PRESNÉ!! 12.4.2025 17:45
         // AUX CURRENT
@@ -545,7 +583,7 @@ void loop_core1 (void* pvParameters) {
 
 // runs on core 0
 void app_main(void)
-{
+{   
     initArduino();
     Serial.begin(460800);
 
@@ -612,6 +650,9 @@ void app_main(void)
     BatWattMovingAverage.smoothingFactor = 0.1;
     Throttle.smoothingFactor = 0.1;
 
+    speedometer.init(630, 71.26*1000.0f); // with 71.26ms the limit is 100km/h with the 630mm wheel diameter
+
+
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
     // Configure ADC channel and attenuation
@@ -628,20 +669,13 @@ void app_main(void)
     pinMode(pinButton2, INPUT_PULLDOWN);
     pinMode(pinButton3, INPUT_PULLDOWN);
     pinMode(pinButton4, INPUT_PULLDOWN);
-    //
-    Button button1ISR;
-    Button button2ISR;
-    Button button3ISR;
-    Button button4ISR;
-    button1ISR.registerCallback(button1Callback); // Switch Gears
-    button2ISR.registerCallback(button2Callback); // Switch Power
-    button3ISR.registerCallback(button3Callback);
-    button4ISR.registerCallback(button4Callback);
-    //
-    attachInterrupt(pinButton1, button1ISR.ISR, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton2, button2ISR.ISR, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton3, button3ISR.ISR, GPIO_INTR_POSEDGE);
-    attachInterrupt(pinButton4, button4ISR.ISR, GPIO_INTR_POSEDGE);
+    pinMode(pinWheelSpeed, INPUT_PULLDOWN);
+
+    attachInterrupt(pinButton1, button1Callback, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton2, button2Callback, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton3, button3Callback, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinButton4, button4Callback, GPIO_INTR_POSEDGE);
+    attachInterrupt(pinWheelSpeed, buttonWheelSpeedCallback, GPIO_INTR_POSEDGE);
 
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
@@ -667,6 +701,8 @@ void app_main(void)
     };
     ledc_channel_config(&channel_conf);
 
+
+    delay(1500);
 
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
@@ -785,6 +821,8 @@ void app_main(void)
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore0) >= 1000) {
             timeExecEverySecondCore0 = timer_u32();
+
+            speedometer.resetSpeedAfterTimeout();
 
             // stuff to run
             if (printCoreExecutionTime) {
