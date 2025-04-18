@@ -25,14 +25,14 @@
 #include "MiniPID.h"
 #include "Speedometer.h"
 
-bool firsttime_draw = 1;
-
 #define TFT_CS         5
 #define TFT_RST        -1
 #define TFT_DC         32
 // SPIClass tftVSPI = SPIClass(VSPI);
 // Adafruit_ST7789 tft = Adafruit_ST7789(&tftVSPI, TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+
+bool firsttime_draw = 1;
 
 float  _batteryVoltage;
 float batteryVoltage;
@@ -60,12 +60,12 @@ float trip, DNU_trip_refresh;
 
 float wh_over_km = 0;
 
-uint32_t timeStartCore1 = 0;    uint32_t timeStartCore0 = 0;    uint32_t timeStartDisplay = 0;
-uint32_t timeEndCore1 = 0;      uint32_t timeEndCore0 = 0;      uint32_t timeEndDisplay = 0;
-uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDisplay = 0;
-uint32_t timeExecEverySecond = 0;
+uint32_t timeStartCore1 = 0, timeCore1 = 0;    
+uint32_t timeStartCore0 = 0, timeCore0 = 0;    
+uint32_t timeStartDisplay = 0; //timeDisplay = 0;
 uint32_t timeExecEverySecondCore0 = 0;
-uint32_t timeButton1 = 0, timeButton2 = 0, timeButton3 = 0, timeButton4 = 0;
+uint32_t timeExecEverySecondCore1 = 0;
+uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 
 // settings
@@ -79,7 +79,6 @@ bool cutRotorPower = 1;
 
 bool rotorCanPowerMotor = 1;
 bool rotorCutOff_temp = 1;
-// bool throttleAtZero_temp = 1;
 
 // uptime
 float totalSecondsSinceBoot;
@@ -95,25 +94,29 @@ int clockDay = 11;
 int clockHours = 9;
 int clockMinutes = 54;
 float clockSeconds = 15, DNU_clockSeconds;
-int daysInJanuary = 31;
-int daysInFebruary = 28;
-int daysInMarch = 31;
-int daysInApril = 30;
-int daysInMay = 31;
-int daysInJune = 30;
-int daysInJuly = 31;
-int daysInAugust = 31;
-int daysInSeptember = 30;
-int daysInOctober = 31;
-int daysInNovember = 30;
-int daysInDecember = 31;
+const int daysInJanuary = 31;
+const int daysInFebruary = 28;
+const int daysInMarch = 31;
+const int daysInApril = 30;
+const int daysInMay = 31;
+const int daysInJune = 30;
+const int daysInJuly = 31;
+const int daysInAugust = 31;
+const int daysInSeptember = 30;
+const int daysInOctober = 31;
+const int daysInNovember = 30;
+const int daysInDecember = 31;
 
 // settings for gearing and power
 int selectedGear, DNU_selectedGear;
 int selectedPowerMode, DNU_selectedPowerMode;
 
-// char text[128];
-char text2[128];
+float PotThrottleAdjustment;
+float PotThrottleLevelReal;
+float PotThrottleLevel;
+float PotThrottleLevelPowerLimited;
+
+char text[128];
 
 std::string readString;
 
@@ -132,11 +135,6 @@ MovingAverage Throttle;
 Preferences preferences;
 
 Speedometer speedometer;
-
-double PotThrottleAdjustment;
-double PotThrottleLevelReal;
-double PotThrottleLevel;
-double PotThrottleLevelPowerLimited;
 
 double kP = 0.2, kI = 0.1, kD = 2; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
@@ -234,28 +232,30 @@ void setGearLevel(int level) {
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
-int buttonPressCount = 2;
-uint32_t timeButton;
-int buttonWait() {
+int buttonWait(int buttonPressCounter, uint32_t timeKeeper, int msToWaitBetweenInterrupts) {
     int ret = 1;
-    if (timer_delta_ms(timer_u32() - timeButton) >= 20) {
-        timeButton = timer_u32();
+    if (timer_delta_ms(timer_u32() - timeKeeper) >= msToWaitBetweenInterrupts) {
+        timeKeeper = timer_u32();
 
         // the button sends two interrupts... once when pressed, and once when released
         // so run this function once every 2 interrupts
-        if (buttonPressCount >= 2) {
-            buttonPressCount = 1;
+        if (buttonPressCounter >= 2) {
+            buttonPressCounter = 1;
             ret = 0;
         } else {
-            buttonPressCount++;
+            buttonPressCounter++;
             ret = 1;
         }
     }
     return ret;
 }
 
-void button1Callback() { // Switch Gears
-    if (buttonWait() == 1) {
+int buttonPressCount[5] = {2};
+uint32_t timeButton[5] = {0};
+
+int buttonsDebounceMs = 20;
+void IRAM_ATTR button1Callback() { // Switch Gears
+    if (buttonWait(buttonPressCount[0], timeButton[0], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -274,8 +274,8 @@ void button1Callback() { // Switch Gears
     }
 }
 
-void button2Callback() { // Switch Gears
-    if (buttonWait() == 1) {
+void IRAM_ATTR button2Callback() { // Switch Gears
+    if (buttonWait(buttonPressCount[1], timeButton[1], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -294,17 +294,23 @@ void button2Callback() { // Switch Gears
     }
 }
 
-void button3Callback() {
+void IRAM_ATTR button3Callback() {
+    if (buttonWait(buttonPressCount[2], timeButton[2], buttonsDebounceMs) == 1) {
+        return;
+    }
     // nothing right now
 }
 
 
-void button4Callback() {
+void IRAM_ATTR button4Callback() {
+    if (buttonWait(buttonPressCount[3], timeButton[3], buttonsDebounceMs) == 1) {
+        return;
+    }
     // nothing right now
 }
 
-void buttonWheelSpeedCallback() {
-    if (buttonWait() == 1) {
+void IRAM_ATTR buttonWheelSpeedCallback() {
+    if (buttonWait(buttonPressCount[4], timeButton[4], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -473,12 +479,12 @@ void printDisplay() {
 
     if (drawDebug) {
         tft.setTextSize(1);
-        sprintf(text2, "\nExecution time:"
+        sprintf(text, "\nExecution time:"
                         "\n core0: %.1f us   "
                         "\n core1: %.1f us   \n",
                         timer_delta_us(timeCore0), timer_delta_us(timeCore1));
         tft.setCursor(160, 150);
-        tft.println(text2);
+        tft.println(text);
     }
 
     if (firsttime_draw) {
@@ -556,7 +562,6 @@ void loop_core1 (void* pvParameters) {
                 )
             )
         );
-
         PotThrottleLevelReal = map_f(potThrottleVoltage, 0.2, 3.2, 0, 100);
 
         if ((int)PotThrottleLevelReal == 0) {
@@ -565,7 +570,7 @@ void loop_core1 (void* pvParameters) {
                 timeRotorSleep = timer_u32();
             }
 
-            if (timer_delta_s(timer_u32() - timeRotorSleep) >= 8) {
+            if (timer_delta_s(timer_u32() - timeRotorSleep) >= 3) {
                 rotorCanPowerMotor = 0;
                 cutRotorPower = 1;
 
@@ -602,18 +607,24 @@ void loop_core1 (void* pvParameters) {
         
 
         if (batteryPercentageVoltageBased) {
-            batteryPercentage = map_f(batteryVoltage, 34, 41, 0, 100);
+            batteryPercentage = map_f(batteryVoltage, 30, 42, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
             batteryPercentage = 0;
         }
 
         // Execute every second that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEverySecond) >= 1000) {
-            timeExecEverySecond = timer_u32();
+        if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
+            timeExecEverySecondCore1 = timer_u32();
 
             // stuff to run
         }
+
+        // if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 100) {
+        //     timeExecEvery100millisecondsCore1 = timer_u32();
+
+        //     // stuff to run
+        // }
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -674,7 +685,6 @@ void app_main(void)
     {3.2415, -0.1295}, // 255
     {3.3, 0}
     };
-
     AuxCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
@@ -683,13 +693,12 @@ void app_main(void)
     BatVoltageMovingAverage.smoothingFactor = 0.05; //0.2
     AuxCurrentMovingAverage.smoothingFactor = 0.05; // 0.2
     VESCCurrentMovingAverage.smoothingFactor = 0.05; // 0.5
+    BatWattMovingAverage.smoothingFactor = 0.1;
 
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
-    BatWattMovingAverage.smoothingFactor = 0.1;
     Throttle.smoothingFactor = 0.1;
 
     speedometer.init(630, 71.26*1000.0f); // with 71.26ms the limit is 100km/h with the 630mm wheel diameter
-
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
@@ -708,7 +717,6 @@ void app_main(void)
     pinMode(pinButton3, INPUT_PULLDOWN);
     pinMode(pinButton4, INPUT_PULLDOWN);
     pinMode(pinWheelSpeed, INPUT_PULLDOWN);
-
     attachInterrupt(pinButton1, button1Callback, GPIO_INTR_POSEDGE);
     attachInterrupt(pinButton2, button2Callback, GPIO_INTR_POSEDGE);
     attachInterrupt(pinButton3, button3Callback, GPIO_INTR_POSEDGE);

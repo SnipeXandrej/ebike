@@ -2,7 +2,7 @@
 
 ### Rotor
 - [x] Menenie prúdu/napätia cez rotor pomocou PWM (zatiaľ statické, neregulované PWM)
-  - [ ] TODO: Zbastliť obvod na riadenie MOSFETa
+  - [x] TODO: Zbastliť obvod na riadenie MOSFETa
 - [x] Manuálne nastavovanie elektronickej prevodovky, ako manuál na motorke)
 - [ ] Automatické nastavovanie elektronickej prevodovky (automat basically)
   1. možno sa bude lineárne/postupne znižovať napätie na rotori keď sa pôjde rýchlejšie a rýchlejšie
@@ -13,7 +13,7 @@
 - [ ] Teplota ESC
 
 ### Otáčky/trip distance
-- [ ] Rýchlosť (vypočítané z otáčok predného motora)
+- [x] Rýchlosť (vypočítané z otáčok predného kolesa)
 - [ ] Rýchlosť (vypočítané z otáčok motora)
 - [ ] Trip distance (celodobý)
 - [ ] Trip distance (vyresetovaný po nejakej dobe neaktivity, dajme tomu že po 6 hodín)
@@ -37,7 +37,7 @@
 - [x] Zobraziť napätie, prúd, výkon
 - [x] Zobraziť okamžitú spotrebu
 - [ ] Zobraziť dlhodobú spotrebu
-- [ ] Zobraziť indikátor či je rotor napájaný
+- [x] Zobraziť indikátor či je rotor napájaný (treba spraviť lepší indikátor)
 - [x] Zobraziť rýchlosť
 - [x] Zobraziť aktuálny stupeň výkonu a "stupeň" e-prevodovky
 - [x] Zobraziť "core execution time"
