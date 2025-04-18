@@ -66,6 +66,7 @@ uint32_t timeCore1 = 0;         uint32_t timeCore0 = 0;         uint32_t timeDis
 uint32_t timeExecEverySecond = 0;
 uint32_t timeExecEverySecondCore0 = 0;
 uint32_t timeButton1 = 0, timeButton2 = 0, timeButton3 = 0, timeButton4 = 0;
+uint32_t timeRotorSleep = 0;
 
 // settings
 bool drawDebug = 0;
@@ -74,6 +75,11 @@ bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
 bool batteryPercentageVoltageBased = 1;
 bool cutMotorPower = 0;
+bool cutRotorPower = 1;
+
+bool rotorCanPowerMotor = 1;
+bool rotorCutOff_temp = 1;
+// bool throttleAtZero_temp = 1;
 
 // uptime
 float totalSecondsSinceBoot;
@@ -128,6 +134,7 @@ Preferences preferences;
 Speedometer speedometer;
 
 double PotThrottleAdjustment;
+double PotThrottleLevelReal;
 double PotThrottleLevel;
 double PotThrottleLevelPowerLimited;
 
@@ -198,7 +205,7 @@ void setPowerLevel(int level) {
 // 200 = 2W
 int GearLevel0DutyCycle = 255; // 0W
 int GearLevel1DutyCycle = 255 - 255; // 65W??
-int GearLevel2DutyCycle = 255 - 155; // 12W
+int GearLevel2DutyCycle = 255 - 120; // 12W
 int GearLevel3DutyCycle = 255 - 55; // 3W??
 int GearDutyCycle;
 
@@ -411,6 +418,7 @@ void printDisplay() {
     tft.setCursor(3, 104); tft.printf("A: %5.2f  ", vescCurrent);
     tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
     tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
+    tft.setCursor(3, 161); tft.printf("CutRo: %d ", cutRotorPower);
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
@@ -519,10 +527,10 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
-        auxCurrent = (_auxCurrent - (float)2.546) / (float)0.185;
+        auxCurrent = (_auxCurrent - (float)2.544) / (float)0.185;
 
         // PRESNÉ!! 12.4.2025 17:45
-        // AUX CURRENT
+        // VESC CURRENT
         _vescCurrent = (
             VESCCurrentCorrection.correctInput(
                 VESCCurrentMovingAverage.moveAverage(
@@ -531,7 +539,7 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _vescCurrent = ((((float)965+(float)560)/(float)965) * _vescCurrent);
-        vescCurrent = (_vescCurrent - (float)2.527) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
+        vescCurrent = (_vescCurrent - (float)2.529) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
                                                                                   // previous max A reading was 20A, not it should be at least 155.6A
 
 
@@ -549,13 +557,43 @@ void loop_core1 (void* pvParameters) {
             )
         );
 
+        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.2, 3.2, 0, 100);
+
+        if ((int)PotThrottleLevelReal == 0) {
+            if (rotorCutOff_temp == true) {
+                rotorCutOff_temp = false;
+                timeRotorSleep = timer_u32();
+            }
+
+            if (timer_delta_s(timer_u32() - timeRotorSleep) >= 8) {
+                rotorCanPowerMotor = 0;
+                cutRotorPower = 1;
+
+                ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevel0DutyCycle);
+                ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+            }
+        } else {
+            cutRotorPower = 0;
+            ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearDutyCycle);
+            ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+
+            if (rotorCutOff_temp == false) {
+                rotorCutOff_temp = true;
+                timeRotorSleep = timer_u32();
+            }
+
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 300) {
+                rotorCanPowerMotor = 1;
+            }
+        }
+
         // for now, directly map voltage from the throttle to the pot input pin of VESC
-        if (cutMotorPower || selectedGear == 0) {
+        if (cutMotorPower || selectedGear == 0 || rotorCanPowerMotor == 0) {
             PotThrottleLevel = 0;
             PotThrottleLevelPowerLimited = 0;
             dacWrite(pinOutToVESC, 0); //no power
         } else {
-            PotThrottleLevel = map_f(potThrottleVoltage, 0, 3.2, 0, 100);
+            PotThrottleLevel = PotThrottleLevelReal;
             PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
@@ -702,7 +740,7 @@ void app_main(void)
     ledc_channel_config(&channel_conf);
 
 
-    delay(1500);
+    delay(500);
 
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
