@@ -232,18 +232,18 @@ void setGearLevel(int level) {
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
 }
 
-int buttonWait(int buttonPressCounter, uint32_t timeKeeper, int msToWaitBetweenInterrupts) {
+int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetweenInterrupts) {
     int ret = 1;
-    if (timer_delta_ms(timer_u32() - timeKeeper) >= msToWaitBetweenInterrupts) {
-        timeKeeper = timer_u32();
+    if (timer_delta_ms(timer_u32() - *timeKeeper) >= msToWaitBetweenInterrupts) {
+        *timeKeeper = timer_u32();
 
         // the button sends two interrupts... once when pressed, and once when released
         // so run this function once every 2 interrupts
-        if (buttonPressCounter >= 2) {
-            buttonPressCounter = 1;
+        if (*buttonPressCounter >= 2) {
+            *buttonPressCounter = 1;
             ret = 0;
         } else {
-            buttonPressCounter++;
+            *buttonPressCounter = *buttonPressCounter + 1;
             ret = 1;
         }
     }
@@ -255,7 +255,7 @@ uint32_t timeButton[5] = {0};
 
 int buttonsDebounceMs = 20;
 void IRAM_ATTR button1Callback() { // Switch Gears
-    if (buttonWait(buttonPressCount[0], timeButton[0], buttonsDebounceMs) == 1) {
+    if (buttonWait(&buttonPressCount[0], &timeButton[0], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -275,7 +275,7 @@ void IRAM_ATTR button1Callback() { // Switch Gears
 }
 
 void IRAM_ATTR button2Callback() { // Switch Gears
-    if (buttonWait(buttonPressCount[1], timeButton[1], buttonsDebounceMs) == 1) {
+    if (buttonWait(&buttonPressCount[1], &timeButton[1], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -295,7 +295,7 @@ void IRAM_ATTR button2Callback() { // Switch Gears
 }
 
 void IRAM_ATTR button3Callback() {
-    if (buttonWait(buttonPressCount[2], timeButton[2], buttonsDebounceMs) == 1) {
+    if (buttonWait(&buttonPressCount[2], &timeButton[2], buttonsDebounceMs) == 1) {
         return;
     }
     // nothing right now
@@ -303,14 +303,14 @@ void IRAM_ATTR button3Callback() {
 
 
 void IRAM_ATTR button4Callback() {
-    if (buttonWait(buttonPressCount[3], timeButton[3], buttonsDebounceMs) == 1) {
+    if (buttonWait(&buttonPressCount[3], &timeButton[3], buttonsDebounceMs) == 1) {
         return;
     }
     // nothing right now
 }
 
 void IRAM_ATTR buttonWheelSpeedCallback() {
-    if (buttonWait(buttonPressCount[4], timeButton[4], buttonsDebounceMs) == 1) {
+    if (buttonWait(&buttonPressCount[4], &timeButton[4], buttonsDebounceMs) == 1) {
         return;
     }
 
@@ -746,6 +746,11 @@ void app_main(void)
         .hpoint = 0
     };
     ledc_channel_config(&channel_conf);
+
+    for (int i = 0; i < 5; i++){
+        buttonPressCount[i] = 2;
+        timeButton[i] = 0;
+    }
 
 
     delay(500);
