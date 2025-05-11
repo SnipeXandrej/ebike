@@ -37,6 +37,9 @@ bool firsttime_draw = 1;
 float  _batteryVoltage;
 float batteryVoltage;
 
+float batteryVoltage_min = 60.0f;
+float batteryVoltage_max = 84.0f;
+
 float  _batteryCurrent;
 float batteryCurrent;
 
@@ -90,9 +93,9 @@ int clockDaysSinceBoot;
 // clock
 int clockYear = 2025;
 int clockMonth = 4;
-int clockDay = 11;
-int clockHours = 9;
-int clockMinutes = 54;
+int clockDay = 24;
+int clockHours = 15;
+int clockMinutes = 10;
 float clockSeconds = 15, DNU_clockSeconds;
 const int daysInJanuary = 31;
 const int daysInFebruary = 28;
@@ -192,19 +195,15 @@ void setPowerLevel(int level) {
 }
 
 // rotor electromagnet DC resistance is around 3,05 ohms
-// All values down below are not to be taken as accurate at all
-// 0 = 70W
-// 10 = 78W
-// 25 = 75W
-// 50 = 48W
-// 75 = 35W
-// 100 = 28W
-// 150 = 10W
-// 200 = 2W
+// 255 = 15V
+// 120 = 6.86V
+// 187
+
 int GearLevel0DutyCycle = 255; // 0W
-int GearLevel1DutyCycle = 255 - 255; // 65W??
-int GearLevel2DutyCycle = 255 - 120; // 12W
-int GearLevel3DutyCycle = 255 - 55; // 3W??
+int GearLevel1DutyCycle = 255 - 255; // 15V = 73.7W
+int GearLevel2DutyCycle = 255 - 187; // 10.88V = 38.8W
+int GearLevel3DutyCycle = 255 - 120; // 6.86V = 15.4W
+int GearLevelIdleDutyCycle = 255 - 120; // cca 3.53V = 4.1W // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
 void setGearLevel(int level) {
@@ -314,6 +313,8 @@ void IRAM_ATTR buttonWheelSpeedCallback() {
         return;
     }
 
+    Serial.printf("Speed pin is low!");
+
     speedometer.ISR();
 }
 
@@ -398,14 +399,15 @@ void redrawScreen() {
 void printDisplay() {
     // TODO: only update the variables, not the whole text, as it takes longer to draw
 
-    // Clock
-    tft.setTextSize(2);
-    if (firsttime_draw || ((int)DNU_clockSeconds != (int)clockSeconds)) {
-        DNU_clockSeconds = clockSeconds;
-        tft.setCursor(3, 3); tft.printf("%02d:%02d:%02.0f", clockHours, clockMinutes, clockSeconds);
-        tft.setTextSize(1);
-        tft.setCursor(100, 10); tft.printf("%1d.%1d.%4d  ", clockDay, clockMonth, clockYear);
-    }
+    // TODO: Disable clock until time synchronization is implemented
+    // // Clock
+    // tft.setTextSize(2);
+    // if (firsttime_draw || ((int)DNU_clockSeconds != (int)clockSeconds)) {
+    //     DNU_clockSeconds = clockSeconds;
+    //     tft.setCursor(3, 3); tft.printf("%02d:%02d:%02.0f", clockHours, clockMinutes, clockSeconds);
+    //     tft.setTextSize(1);
+    //     tft.setCursor(100, 10); tft.printf("%1d.%1d.%4d  ", clockDay, clockMonth, clockYear);
+    // } 
     tft.setTextSize(2);
 
     // Battery
@@ -515,7 +517,7 @@ void loop_core1 (void* pvParameters) {
         _vescCurrent = _vescCurrent / 15;
 
         // BATTERY VOLTAGE
-        batteryVoltage = (29.963f *
+        batteryVoltage = (29.258f * 
             BatVoltageCorrection.correctInput(
                 BatVoltageMovingAverage.moveAverage(
                     ((float)3.3/(float)4095) * _batteryVoltage
@@ -533,7 +535,7 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
-        auxCurrent = (_auxCurrent - (float)2.544) / (float)0.185;
+        auxCurrent = (_auxCurrent - (float)2.604) / (float)0.185;
 
         // PRESNÉ!! 12.4.2025 17:45
         // VESC CURRENT
@@ -545,7 +547,7 @@ void loop_core1 (void* pvParameters) {
             )
         );
         _vescCurrent = ((((float)965+(float)560)/(float)965) * _vescCurrent);
-        vescCurrent = (_vescCurrent - (float)2.529) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
+        vescCurrent = (_vescCurrent - (float)2.565) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
                                                                                   // previous max A reading was 20A, not it should be at least 155.6A
 
 
@@ -570,12 +572,17 @@ void loop_core1 (void* pvParameters) {
                 timeRotorSleep = timer_u32();
             }
 
-            if (timer_delta_s(timer_u32() - timeRotorSleep) >= 3) {
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 500) {
                 rotorCanPowerMotor = 0;
                 cutRotorPower = 1;
 
-                ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevel0DutyCycle);
-                ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                if (GearDutyCycle == GearLevel0DutyCycle) {
+                    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevel0DutyCycle);
+                    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                } else {
+                    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevelIdleDutyCycle);
+                    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                }
             }
         } else {
             cutRotorPower = 0;
@@ -587,7 +594,7 @@ void loop_core1 (void* pvParameters) {
                 timeRotorSleep = timer_u32();
             }
 
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 300) {
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 0) { // can be 0 when there's always power going to the rotor
                 rotorCanPowerMotor = 1;
             }
         }
@@ -607,7 +614,7 @@ void loop_core1 (void* pvParameters) {
         
 
         if (batteryPercentageVoltageBased) {
-            batteryPercentage = map_f(batteryVoltage, 30, 42, 0, 100);
+            batteryPercentage = map_f(batteryVoltage, batteryVoltage_min, batteryVoltage_max, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
             batteryPercentage = 0;
@@ -690,9 +697,9 @@ void app_main(void)
     VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
     // Battery
-    BatVoltageMovingAverage.smoothingFactor = 0.05; //0.2
-    AuxCurrentMovingAverage.smoothingFactor = 0.05; // 0.2
-    VESCCurrentMovingAverage.smoothingFactor = 0.05; // 0.5
+    BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
+    AuxCurrentMovingAverage.smoothingFactor = 0.1; // 0.2
+    VESCCurrentMovingAverage.smoothingFactor = 0.1; // 0.5
     BatWattMovingAverage.smoothingFactor = 0.1;
 
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
@@ -726,11 +733,13 @@ void app_main(void)
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
 
+    setCpuFrequencyMhz(240);
+
     ledc_timer_config_t timer_conf = {
         .speed_mode = LEDC_HIGH_SPEED_MODE,
         .duty_resolution = static_cast<ledc_timer_bit_t>(8),
         .timer_num = LEDC_TIMER_0,
-        .freq_hz = 1000,
+        .freq_hz = 20000, //1000
         .clk_cfg = LEDC_USE_APB_CLK,
     };
     ledc_timer_config(&timer_conf);
