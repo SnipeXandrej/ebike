@@ -6,10 +6,12 @@
 // Arduino Libraries
 #include "Arduino.h"
 #include <SPI.h>
+#include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_ST7789.h>
 #include "HardwareSerial.h"
 #include "Preferences.h"
+#include <Adafruit_ADS1X15.h>
 
 #include "esp32-hal-dac.h"
 #include "esp32-hal-ledc.h"
@@ -32,6 +34,8 @@
 // Adafruit_ST7789 tft = Adafruit_ST7789(&tftVSPI, TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 
+Adafruit_ADS1115 dedicatedADC;
+
 bool firsttime_draw = 1;
 
 float  _batteryVoltage;
@@ -42,6 +46,7 @@ float batteryVoltage_max = 84.0f;
 
 float  _batteryCurrent;
 float batteryCurrent;
+float batteryAmpHours;
 
 float batteryWattConsumption;
 float batteryVESCWatts;
@@ -49,9 +54,11 @@ float batteryAuxWatts;
 
 float  _vescCurrent;
 float vescCurrent;
+float vescAmpHours, _vescCurrentUsedInElapsedTime;
 
 float  _auxCurrent;
 float auxCurrent;
+float auxAmpHours, _auxCurrentUsedInElapsedTime;
 
 float  _potThrottleVoltage;
 float potThrottleVoltage;
@@ -124,9 +131,7 @@ char text[128];
 std::string readString;
 
 InputOffset BatVoltageCorrection;
-InputOffset AuxCurrentCorrection;
 InputOffset PotThrottleCorrection;
-InputOffset VESCCurrentCorrection;
 
 MovingAverage BatVoltageMovingAverage;
 MovingAverage AuxCurrentMovingAverage;
@@ -142,24 +147,78 @@ Speedometer speedometer;
 double kP = 0.2, kI = 0.1, kD = 2; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
 
-#define pinRotor          13                // D13
+#define pinRotor          25                // D25
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
-#define pinAuxCurrent     ADC1_CHANNEL_3    // D39
-#define pinPotThrottle    ADC1_CHANNEL_6    // D34
-#define pinVESCCurrent    ADC1_CHANNEL_7    // D35
-#define pinOutToVESC      25                // D25
+#define pinPotThrottle    ADC1_CHANNEL_3    // D39 // VN
+#define pinOutToVESC      26                // D13
 #define pinTFTbacklight   2                 // D2
 #define pinButton1  4  // D4
 #define pinButton2  16 // RX2
-#define pinButton3  17 // TX2
-#define pinButton4  21 // D21
+#define pinButton3  -1 // TX2
+#define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
 #define pinWheelSpeed  12 // D12
+#define pinAdcRdyAlert 33 // D33
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
 
 // Enabling C++ compile
 extern "C" { void app_main(); }
+
+bool dedicatedADC_current_channel = 0;
+volatile bool dedicatedADC_new_data = false;
+void IRAM_ATTR ADCNewDataReadyISR() {
+  dedicatedADC_new_data = true;
+}
+
+uint32_t timerDedicatedADC = 0;
+void dedicatedADCDiff() {
+    // If we don't have new data, skip this iteration.
+    if (!dedicatedADC_new_data) {
+        while(!dedicatedADC_new_data);
+        // return;
+    }
+    // uint32_t timeItTook = timer_u32();
+
+    int16_t results = dedicatedADC.getLastConversionResults();
+
+    if (dedicatedADC_current_channel == 0) {
+        // AUX CURRENT
+        auxCurrent = (
+                // AuxCurrentMovingAverage.moveAverage(
+                    (results/912.8453796f) - 0.0025f // presné na 1mA
+                // )
+        );
+        _auxCurrentUsedInElapsedTime = auxCurrent / (1.0f / timer_delta_s(timeCore1)) * 2; // times 2 because of the if/else
+        auxAmpHours += _auxCurrentUsedInElapsedTime / 3600.0f;
+        dedicatedADC_current_channel = 1;
+        // dedicatedADC.writeRegister(0x7000, ADS1X15_REG_CONFIG_MUX_DIFF_2_3);
+        dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_2_3, /*continuous=*/true);
+    } else {
+        // VESC CURRENT
+        vescCurrent = (
+                // VESCCurrentMovingAverage.moveAverage(
+                    (results/262.0f)
+                // )
+        );
+
+        if (vescCurrent < 0.012f) {
+            vescCurrent = 0.0f;
+        }
+
+        _vescCurrentUsedInElapsedTime = vescCurrent / (1.0f / timer_delta_s(timeCore1)) * 2;
+        vescAmpHours += _vescCurrentUsedInElapsedTime / 3600.0f;
+
+        dedicatedADC_current_channel = 0;
+        // dedicatedADC.writeRegister(0x7000, ADS1X15_REG_CONFIG_MUX_DIFF_0_1);
+        dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_0_1, /*continuous=*/true);
+    }
+
+
+    dedicatedADC_new_data = false;
+
+    // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timeItTook));
+}
 
 int PowerLevelnegative1Watts = 1000000;
 int PowerLevel0Watts = 100;
@@ -199,11 +258,11 @@ void setPowerLevel(int level) {
 // 120 = 6.86V
 // 187
 
-int GearLevel0DutyCycle = 255; // 0W
-int GearLevel1DutyCycle = 255 - 255; // 15V = 73.7W
-int GearLevel2DutyCycle = 255 - 187; // 10.88V = 38.8W
-int GearLevel3DutyCycle = 255 - 120; // 6.86V = 15.4W
-int GearLevelIdleDutyCycle = 255 - 120; // cca 3.53V = 4.1W // There is some power so the VESC can track the speed
+int GearLevel0DutyCycle = 0; // 0W
+int GearLevel1DutyCycle = 255; // 15V = 73.7W
+int GearLevel2DutyCycle = 187; // 10.88V = 38.8W
+int GearLevel3DutyCycle = 120; // 6.86V = 15.4W
+int GearLevelIdleDutyCycle = GearLevel2DutyCycle; // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
 void setGearLevel(int level) {
@@ -411,7 +470,9 @@ void printDisplay() {
     tft.setTextSize(2);
 
     // Battery
-    tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
+    // tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
+    // Battery with amphours used
+    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", batteryAmpHours, batteryPercentage);
 
     // Upper Divider
     if (firsttime_draw) {
@@ -419,14 +480,14 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("Wmotor:%4.0f  ", batteryVESCWatts);
-    tft.setCursor(3, 47); tft.printf("Waux  :%3.0f  ", batteryAuxWatts);
-    tft.setCursor(3, 66); tft.printf("V: %5.2f  ", batteryVoltage);
-    tft.setCursor(3, 85); tft.printf("A: %5.2f  ", auxCurrent);
-    tft.setCursor(3, 104); tft.printf("A: %5.2f  ", vescCurrent);
+    tft.setCursor(3, 28); tft.printf("Wmotor:%6.1f  ", batteryVESCWatts);
+    tft.setCursor(3, 47); tft.printf("Waux  :%5.1f  ", batteryAuxWatts);
+    tft.setCursor(3, 66); tft.printf("V: %5.3f  ", batteryVoltage);
+    tft.setCursor(3, 85); tft.printf("A: %6.3f  Ah: %5.4f  ", vescCurrent, vescAmpHours);
+    tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
     tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
-    tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
-    tft.setCursor(3, 161); tft.printf("CutRo: %d ", cutRotorPower);
+    // tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
+    tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
@@ -494,6 +555,20 @@ void printDisplay() {
     }
 }
 
+// int readADCdiff0_1() {
+//     // If we don't have new data, skip this iteration.
+//     if (!dedicatedADC.conversionComplete()) {
+//         return;
+//     }
+
+//     int results = dedicatedADC.getLastConversionResults();
+
+//     // Start another conversion.
+//     ads.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_0_1, /*continuous=*/false);
+
+//     return results;
+// }
+
 // runs on core 1
 void loop_core1 (void* pvParameters) {
     while (1) {
@@ -501,56 +576,63 @@ void loop_core1 (void* pvParameters) {
 
         // Reset temporary values
         _batteryVoltage = 0;
-        _auxCurrent = 0;
         _potThrottleVoltage = 0;
-        _vescCurrent = 0;
 
         for (int i = 0; i < 15; i++) {
             _batteryVoltage += adc1_get_raw(pinBatteryVoltage); // PIN 36/VP
-            _auxCurrent += adc1_get_raw(pinAuxCurrent); // PIN 39/VN
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
-            _vescCurrent += adc1_get_raw(pinVESCCurrent); // PIN 35
+
         }
         _batteryVoltage = _batteryVoltage / 15;
-        _auxCurrent = _auxCurrent / 15;
         _potThrottleVoltage = _potThrottleVoltage / 15;
-        _vescCurrent = _vescCurrent / 15;
 
         // BATTERY VOLTAGE
-        batteryVoltage = (29.258f * 
-            BatVoltageCorrection.correctInput(
-                BatVoltageMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _batteryVoltage
-                )
-            )
-        ); //29.839
-
-        // PRESNÉ!! 12.4.2025 17:08
-        // AUX CURRENT
-        _auxCurrent = (
-            AuxCurrentCorrection.correctInput(
-                AuxCurrentMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _auxCurrent
-                )
+        batteryVoltage = (35.65f *
+            BatVoltageMovingAverage.moveAverage(
+                BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f))
             )
         );
-        _auxCurrent = ((((float)953+(float)560)/(float)953) * _auxCurrent);
-        auxCurrent = (_auxCurrent - (float)2.604) / (float)0.185;
-
-        // PRESNÉ!! 12.4.2025 17:45
-        // VESC CURRENT
-        _vescCurrent = (
-            VESCCurrentCorrection.correctInput(
-                VESCCurrentMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _vescCurrent
-                )
-            )
-        );
-        _vescCurrent = ((((float)965+(float)560)/(float)965) * _vescCurrent);
-        vescCurrent = (_vescCurrent - (float)2.565) / (float)0.116 * (float)7.78; // 116mV per A // adding a shunt lowered the shunt sensitivity by 7.78x
-                                                                                  // previous max A reading was 20A, not it should be at least 155.6A
 
 
+        dedicatedADCDiff();
+        // int16_t results = dedicatedADC.readADC_Differential_0_1();
+        // auxCurrent = (
+        //         // AuxCurrentMovingAverage.moveAverage(
+        //             (results/912.8453796f) - 0.0025f // presné na 1mA
+        //         // )
+        // );
+        // _auxCurrentUsedInElapsedTime = auxCurrent / (1.0f / timer_delta_s(timeCore1)); // times 2 because of the if/else
+        // auxAmpHours += _auxCurrentUsedInElapsedTime / 3600.0f;
+
+        // results = dedicatedADC.readADC_Differential_2_3();
+        // // VESC CURRENT
+        // vescCurrent = (
+        //         // VESCCurrentMovingAverage.moveAverage(
+        //             (results/262.0f)
+        //         // )
+        // );
+
+
+
+        // // AUX CURRENT
+        // auxCurrent = (
+        //         AuxCurrentMovingAverage.moveAverage(
+        //             (_auxCurrent/217.4348697394790f)
+        //         )
+        // );
+        // _auxCurrentUsedInElapsedTime = auxCurrent / (1.0f / timer_delta_s(timeCore1));
+        // auxAmpHours += _auxCurrentUsedInElapsedTime / 3600.0f;
+
+        // // VESC CURRENT
+        // vescCurrent = (
+        //         VESCCurrentMovingAverage.moveAverage(
+        //             (_vescCurrent/50.08488964346350f)
+        //         )
+        // );
+        // _vescCurrentUsedInElapsedTime = vescCurrent / (1.0f / timer_delta_s(timeCore1));
+        // vescAmpHours += _vescCurrentUsedInElapsedTime / 3600.0f;
+
+        batteryAmpHours = auxAmpHours + vescAmpHours;
         batteryCurrent = auxCurrent + vescCurrent;
 
         batteryWattConsumption = BatWattMovingAverage.moveAverage(batteryVoltage * batteryCurrent);
@@ -564,7 +646,7 @@ void loop_core1 (void* pvParameters) {
                 )
             )
         );
-        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.2, 3.2, 0, 100);
+        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.2, 3.05, 0, 100);
 
         if ((int)PotThrottleLevelReal == 0) {
             if (rotorCutOff_temp == true) {
@@ -609,7 +691,7 @@ void loop_core1 (void* pvParameters) {
             PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            dacWrite(pinOutToVESC, (int)map_f(PotThrottleLevelPowerLimited, 0, 100, 0, 255));
+            dacWrite(pinOutToVESC, (int)map_f(PotThrottleLevel, 0, 100, 0, 255)); //PotThrottleLevelPowerLimited
         }
         
 
@@ -641,7 +723,24 @@ void loop_core1 (void* pvParameters) {
 void app_main(void)
 {   
     initArduino();
-    Serial.begin(460800);
+    Serial.begin(115200);
+    Wire.begin(21, 22);
+    Wire.setClock(400000); // 400kHz
+
+    if (!dedicatedADC.begin()) {
+        Serial.println("Failed to initialize ADS.");
+        while (1);
+    }
+    dedicatedADC.setDataRate(RATE_ADS1115_128SPS);
+    dedicatedADC.setGain(GAIN_SIXTEEN);
+    pinMode(pinAdcRdyAlert, INPUT);
+    // We get a falling edge every time a new sample is ready.
+    attachInterrupt(pinAdcRdyAlert, ADCNewDataReadyISR, FALLING);
+    dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_0_1, /*continuous=*/true);
+
+
+
+
 
     // tftVSPI.begin(18, 19, 23, TFT_RST);
 
@@ -659,47 +758,47 @@ void app_main(void)
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset // 5/10/20 are the DAC values I used to use as an adjustable input to the ADC
     {0.0, 0},
-    {0.0046, 0.1234}, // 5
-    {0.0519, 0.1331}, // 10
-    {0.1629, 0.1401}, // 20
-    {0.2754, 0.1456}, // 30
-    {0.3595, 0.149}, // 37
-    {0.3918, 0.1512}, // 40
-    {0.5095, 0.152}, // 50
-    {0.5665, 0.1545}, // 55
-    {0.623, 0.156}, // 60
-    {0.677, 0.157}, // 65
-    {0.7365, 0.1485}, // 70
-    {0.7935, 0.1595}, // 75
-    {0.852, 0.159}, // 80
-    {0.9685, 0.1605}, // 90
-    {1.089, 0.165}, // 100
-    {1.204, 0.168}, // 110
-    {1.3195, 0.1685}, // 120
-    {1.465, 0.173}, // 130
-    {1.58, 0.178}, // 140
-    {1.6969, 0.1791}, // 150
-    {1.81, 0.1845}, // 160
-    {1.9257, 0.1903}, // 170
-    {2.036, 0.199}, // 180
-    {2.1585, 0.1945}, // 190
-    {2.2758, 0.1917}, // 200
-    {2.408, 0.178}, // 210
-    {2.563, 0.142}, // 220
-    {2.7408, 0.0872}, // 230
-    {2.93, 0.014}, // 240
-    {3.1352, -0.0772}, // 250
-    {3.2415, -0.1295}, // 255
-    {3.3, 0}
+    {0.150, 0.098},
+    {0.200, 0.095},
+    {0.500, 0.095},
+    {0.550, 0.09},
+    {0.600, 0.092},
+    {0.650, 0.092},
+    {0.700, 0.09},
+    {0.750, 0.09},
+    {0.800, 0.09},
+    {0.850, 0.09},
+    {0.900, 0.088},
+    {0.950, 0.085},
+    {1.000, 0.082},
+    {1.100, 0.08},
+    {1.200, 0.077},
+    {1.300, 0.071},
+    {1.400, 0.068},
+    {1.500, 0.068},
+    {1.600, 0.068},
+    {1.700, 0.066},
+    {1.800, 0.062},
+    {1.900, 0.062},
+    {2.000, 0.059},
+    {2.100, 0.06},
+    {2.200, 0.055},
+    {2.300, 0.053},
+    {2.400, 0.045},
+    {2.500, 0.038},
+    {2.600, 0.02},
+    {2.700, -0.005},
+    {2.800, -0.048},
+    {2.900, -0.105},
+    {3.000, -0.183},
+    {3.050, -0.225}
     };
-    AuxCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
-    VESCCurrentCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
     // Battery
     BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
-    AuxCurrentMovingAverage.smoothingFactor = 0.1; // 0.2
-    VESCCurrentMovingAverage.smoothingFactor = 0.1; // 0.5
+    AuxCurrentMovingAverage.smoothingFactor = 0.05; // 0.2
+    VESCCurrentMovingAverage.smoothingFactor = 0.05; // 0.5
     BatWattMovingAverage.smoothingFactor = 0.1;
 
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
@@ -711,9 +810,7 @@ void app_main(void)
     adc1_config_width(ADC_WIDTH);
     // Configure ADC channel and attenuation
     adc1_config_channel_atten(pinBatteryVoltage, ADC_ATTEN); // PIN 36/VP
-    adc1_config_channel_atten(pinAuxCurrent,     ADC_ATTEN); // PIN 39/VN
     adc1_config_channel_atten(pinPotThrottle,    ADC_ATTEN); // PIN 34
-    adc1_config_channel_atten(pinVESCCurrent,    ADC_ATTEN); // PIN 35
 
     pinMode( pinOutToVESC, OUTPUT);
     dacWrite(pinOutToVESC, 0);
@@ -746,7 +843,7 @@ void app_main(void)
 
     // Channel Configuration
     ledc_channel_config_t channel_conf = {
-        .gpio_num = 13,
+        .gpio_num = pinRotor,
         .speed_mode = LEDC_HIGH_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .intr_type = LEDC_INTR_DISABLE,
@@ -767,7 +864,7 @@ void app_main(void)
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
-    setGearLevel(0);
+    setGearLevel(2);
 
 
     // setup ebike namespace
@@ -800,6 +897,8 @@ void app_main(void)
         }
 
         if (!readString.empty()) {
+            // TODO: make these "contains" into some kind of function, so the code doesn't need to be repeated
+
             // Serial.printf("text %s\n", readString.c_str());
 
             if (readString.contains("displayRefresh\n"))
@@ -878,11 +977,20 @@ void app_main(void)
 
         printDisplay();
 
+
+
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore0) >= 1000) {
             timeExecEverySecondCore0 = timer_u32();
 
             speedometer.resetSpeedAfterTimeout();
+
+            // int results = dedicatedADC.readADC_Differential_2_3();
+            // Serial.printf("ADC3: %d\n", results);
+            // Serial.printf("ADC3 (A): %f\n", (results/50.08488964346350f));
+            // int results2 = dedicatedADC.readADC_Differential_0_1();
+            // Serial.printf("ADC3: %d\n", results2);
+            // Serial.printf("ADC3 (A): %f\n", (results2/217.4348697394790f));
 
             // stuff to run
             if (printCoreExecutionTime) {
