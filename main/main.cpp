@@ -12,6 +12,7 @@
 #include "HardwareSerial.h"
 #include "Preferences.h"
 #include <Adafruit_ADS1X15.h>
+#include <VescUart.h>
 
 #include "esp32-hal-dac.h"
 #include "esp32-hal-ledc.h"
@@ -33,8 +34,11 @@
 // SPIClass tftVSPI = SPIClass(VSPI);
 // Adafruit_ST7789 tft = Adafruit_ST7789(&tftVSPI, TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
-
 Adafruit_ADS1115 dedicatedADC;
+VescUart VESC;
+
+// VESC Settings
+float VESC_maxCurrent = 10; //A
 
 bool firsttime_draw = 1;
 
@@ -150,10 +154,9 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinRotor          25                // D25
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
 #define pinPotThrottle    ADC1_CHANNEL_3    // D39 // VN
-#define pinOutToVESC      26                // D13
 #define pinTFTbacklight   2                 // D2
-#define pinButton1  4  // D4
-#define pinButton2  16 // RX2
+#define pinButton1  -1  // D4
+#define pinButton2  -1 // RX2
 #define pinButton3  -1 // TX2
 #define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
 #define pinWheelSpeed  12 // D12
@@ -175,8 +178,8 @@ uint32_t timerDedicatedADC = 0;
 void dedicatedADCDiff() {
     // If we don't have new data, skip this iteration.
     if (!dedicatedADC_new_data) {
-        while(!dedicatedADC_new_data);
-        // return;
+        // while(!dedicatedADC_new_data);
+        return;
     }
     // uint32_t timeItTook = timer_u32();
 
@@ -261,8 +264,8 @@ void setPowerLevel(int level) {
 int GearLevel0DutyCycle = 0; // 0W
 int GearLevel1DutyCycle = 255; // 15V = 73.7W
 int GearLevel2DutyCycle = 187; // 10.88V = 38.8W
-int GearLevel3DutyCycle = 120; // 6.86V = 15.4W
-int GearLevelIdleDutyCycle = GearLevel2DutyCycle; // There is some power so the VESC can track the speed
+int GearLevel3DutyCycle = 100; // 6.86V = 15.4W
+int GearLevelIdleDutyCycle = GearLevel3DutyCycle; // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
 void setGearLevel(int level) {
@@ -685,13 +688,13 @@ void loop_core1 (void* pvParameters) {
         if (cutMotorPower || selectedGear == 0 || rotorCanPowerMotor == 0) {
             PotThrottleLevel = 0;
             PotThrottleLevelPowerLimited = 0;
-            dacWrite(pinOutToVESC, 0); //no power
+            VESC.setCurrent(0.0f);
         } else {
             PotThrottleLevel = PotThrottleLevelReal;
             PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            dacWrite(pinOutToVESC, (int)map_f(PotThrottleLevel, 0, 100, 0, 255)); //PotThrottleLevelPowerLimited
+            VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, VESC_maxCurrent)); //PotThrottleLevelPowerLimited
         }
         
 
@@ -724,6 +727,10 @@ void app_main(void)
 {   
     initArduino();
     Serial.begin(115200);
+
+    Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX/TX
+    VESC.setSerialPort(&Serial2);
+
     Wire.begin(21, 22);
     Wire.setClock(400000); // 400kHz
 
@@ -812,9 +819,6 @@ void app_main(void)
     adc1_config_channel_atten(pinBatteryVoltage, ADC_ATTEN); // PIN 36/VP
     adc1_config_channel_atten(pinPotThrottle,    ADC_ATTEN); // PIN 34
 
-    pinMode( pinOutToVESC, OUTPUT);
-    dacWrite(pinOutToVESC, 0);
-
     // Configure buttons
     pinMode(pinButton1, INPUT_PULLDOWN);
     pinMode(pinButton2, INPUT_PULLDOWN);
@@ -864,7 +868,7 @@ void app_main(void)
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
-    setGearLevel(2);
+    setGearLevel(3);
 
 
     // setup ebike namespace
@@ -958,6 +962,12 @@ void app_main(void)
                 redrawScreen();
             }
 
+            if (readString.contains("motorCurrent="))
+            {
+                float VESC_setCurrent = getValueFromString("motorCurrent", readString);
+                VESC.setCurrent(VESC_setCurrent);
+            }
+
             // if (readString.contains("save"))
             // {
             //     clockMinutes = getValueFromString("clockMinutes", readString);
@@ -984,6 +994,7 @@ void app_main(void)
             timeExecEverySecondCore0 = timer_u32();
 
             speedometer.resetSpeedAfterTimeout();
+            // VESC.setCurrent(1.0f);
 
             // int results = dedicatedADC.readADC_Differential_2_3();
             // Serial.printf("ADC3: %d\n", results);
