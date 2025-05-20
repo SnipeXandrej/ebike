@@ -37,16 +37,49 @@ Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
 Adafruit_ADS1115 dedicatedADC;
 VescUart VESC;
 
-// VESC Settings
-float VESC_maxCurrent = 10; //A
+// Values From VESC
+struct {
+    float erpm;
+    float tempMosfet;
+    float avgMotorCurrent;
+    float avgInputCurrent;
+    float ampHours;
+    float inputVoltage;
+    float tachometer;
+    float watts, watts_smoothed;
+    float wattHours;
+} VESCdata;
+
+struct {
+    float diameter;
+    float gear_ratio;
+} wheel;
+
+struct {
+    double tachometer_abs_now;
+    double tachometer_abs_diff;
+    double distance; // in km
+    double DNU_refresh;
+} trip;
+
+struct {
+    double distance_on_boot; // in km
+    double trip_distance;    // in km
+    double distance;         // in km
+    double distance_tmp;
+    double DNU_refresh;
+} odometer;
+
+int motorPoles = 36;
+int motorMagnetPairs = 6;
 
 bool firsttime_draw = 1;
 
 float  _batteryVoltage;
 float batteryVoltage;
 
-float batteryVoltage_min = 60.0f;
-float batteryVoltage_max = 84.0f;
+float batteryVoltage_min = 64.0f;
+float batteryVoltage_max = 82.0f;
 
 float  _batteryCurrent;
 float batteryCurrent;
@@ -69,10 +102,10 @@ float potThrottleVoltage;
 
 float batteryPercentage;
 
-float odometer, DNU_odometer_refresh; 
-float trip, DNU_trip_refresh;
-
-float wh_over_km = 0;
+float wh_over_km = 0; // immediate
+float wh_over_km_smoothed = 0;
+float wh_over_km_average = 0; // over time
+float speed_kmh = 0;
 
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
 uint32_t timeStartCore0 = 0, timeCore0 = 0;    
@@ -81,6 +114,7 @@ uint32_t timeExecEverySecondCore0 = 0;
 uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
+unsigned long timeSavePreferencesStart = millis();
 
 // settings
 bool drawDebug = 0;
@@ -143,6 +177,10 @@ MovingAverage PotThrottleMovingAverage;
 MovingAverage VESCCurrentMovingAverage;
 MovingAverage BatWattMovingAverage;
 MovingAverage Throttle;
+MovingAverage WhOverKmMovingAverage;
+MovingAverage MovingAverageGeneric0_25;
+MovingAverage MovingAverageGeneric0_05;
+
 
 Preferences preferences;
 
@@ -159,7 +197,7 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinButton2  -1 // RX2
 #define pinButton3  -1 // TX2
 #define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
-#define pinWheelSpeed  12 // D12
+#define pinWheelSpeed  -1 // D12
 #define pinAdcRdyAlert 33 // D33
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
@@ -167,6 +205,44 @@ MiniPID powerLimiterPID(kP, kI, kD);
 
 // Enabling C++ compile
 extern "C" { void app_main(); }
+
+void preferencesSave() {
+    preferences.putFloat("odometer", (float)odometer.distance);
+    // preferences.putFloat("trip", (float)trip.distance);
+}
+
+float maxCurrentAtERPM(int erpm) {
+    float ERPM_current_10 = 430.0f;
+    float ERPM_current_100 = 1000.0f;
+    float ERPM_current_180 = 3500.0f;
+
+    if (erpm <= ERPM_current_10) {
+        return 10.0f;
+    } else if (erpm <= ERPM_current_100) {
+        // Linear interpolation between 10A at 430 ERPM and 100A at 1000 ERPM
+        float slope = (100.0f - 10.0f) / (ERPM_current_100 - ERPM_current_10);
+        return slope * (erpm - ERPM_current_10);
+    } else if (erpm < ERPM_current_180) {
+        // Linear interpolation between 100A at 1000 ERPM and 180A at 3500 ERPM
+        float slope = (180.0f - 100.0f) / (ERPM_current_180 - ERPM_current_100);
+        return 100.0f + slope * (erpm - ERPM_current_100);
+    } else {
+        return 180.0f;
+    }
+}
+
+void printVescMcConfTempValues() {
+    Serial.printf("l_current_min_scale: %f\n", VESC.data_mcconf.l_current_min_scale);
+    Serial.printf("l_current_max_scale: %f\n", VESC.data_mcconf.l_current_max_scale);
+    Serial.printf("l_min_erpm: %f\n", VESC.data_mcconf.l_min_erpm);
+    Serial.printf("l_max_erpm: %f\n", VESC.data_mcconf.l_max_erpm);
+    Serial.printf("l_min_duty: %f\n", VESC.data_mcconf.l_min_duty);
+    Serial.printf("l_max_duty: %f\n", VESC.data_mcconf.l_max_duty);
+    Serial.printf("l_watt_min: %f\n", VESC.data_mcconf.l_watt_min);
+    Serial.printf("l_watt_max: %f\n", VESC.data_mcconf.l_watt_max);
+    Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
+    Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
+}
 
 bool dedicatedADC_current_channel = 0;
 volatile bool dedicatedADC_new_data = false;
@@ -475,7 +551,7 @@ void printDisplay() {
     // Battery
     // tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
     // Battery with amphours used
-    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", batteryAmpHours, batteryPercentage);
+    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", VESCdata.ampHours, batteryPercentage); //batteryAmpHours
 
     // Upper Divider
     if (firsttime_draw) {
@@ -483,23 +559,26 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("Wmotor:%6.1f  ", batteryVESCWatts);
-    tft.setCursor(3, 47); tft.printf("Waux  :%5.1f  ", batteryAuxWatts);
+    tft.setCursor(3, 28); tft.printf("Wmotor:%6.1f  ", VESCdata.watts_smoothed); //batteryVESCWatts
+    tft.setCursor(3, 47); tft.printf("Waux  :%6.1f  ", batteryAuxWatts);
     tft.setCursor(3, 66); tft.printf("V: %5.3f  ", batteryVoltage);
-    tft.setCursor(3, 85); tft.printf("A: %6.3f  Ah: %5.4f  ", vescCurrent, vescAmpHours);
-    tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
+    tft.setCursor(3, 85); tft.printf("Ab:%6.2f Ap: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
+    // tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
+    // tft.setCursor(3, 85); tft.printf("A: %6.3f  ", vescCurrent);
+    tft.setCursor(3, 104); tft.printf("Ab: %6.3f", auxCurrent);
     tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
     // tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
     tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
-    tft.setCursor(207, 28); tft.printf("%3.1f Wh/km", wh_over_km);
+    tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", wh_over_km_smoothed);
+    tft.setCursor(207-20, 28+19); tft.printf("%5.1f Wh/km", wh_over_km_average);
 
     // Speed
     tft.setTextSize(5);
-    tft.setCursor(125, 106); tft.printf("%2.0f", speedometer.speed_in_kmh);
-    tft.setCursor(185, 127); tft.setTextSize(2);
+    tft.setCursor(125, 106); tft.printf("%4.1f", speed_kmh);
+    tft.setCursor(248, 127); tft.setTextSize(2);
     if (firsttime_draw) {
         tft.println("km/h");
     }
@@ -529,18 +608,19 @@ void printDisplay() {
     }
 
     // Odometer
-    if (firsttime_draw || DNU_odometer_refresh != odometer) {
-        DNU_odometer_refresh = odometer;
+    if (firsttime_draw || odometer.DNU_refresh != odometer.distance) {
+        odometer.DNU_refresh = odometer.distance;
         tft.setTextSize(2);
         tft.setCursor(3, 220);
-        tft.printf("O: %.1f", odometer);
+        tft.printf("O: %.2f", odometer.distance);
     }
 
     // Trip
-    if (firsttime_draw || DNU_trip_refresh != trip) {
-        DNU_trip_refresh = trip;
+    if (firsttime_draw || trip.DNU_refresh != trip.distance) {
+        trip.DNU_refresh = trip.distance;
+        tft.setTextSize(2);
         tft.setCursor(220, 220);
-        tft.printf("T: %.1f", trip);
+        tft.printf("T: %.2f", trip.distance);
     }
 
     if (drawDebug) {
@@ -590,14 +670,15 @@ void loop_core1 (void* pvParameters) {
         _potThrottleVoltage = _potThrottleVoltage / 15;
 
         // BATTERY VOLTAGE
-        batteryVoltage = (35.65f *
+        batteryVoltage = (36.11344125582536f *
             BatVoltageMovingAverage.moveAverage(
                 BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f))
             )
         );
 
 
-        dedicatedADCDiff();
+        // dedicatedADCDiff();
+
         // int16_t results = dedicatedADC.readADC_Differential_0_1();
         // auxCurrent = (
         //         // AuxCurrentMovingAverage.moveAverage(
@@ -694,7 +775,8 @@ void loop_core1 (void* pvParameters) {
             PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWattConsumption);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, VESC_maxCurrent)); //PotThrottleLevelPowerLimited
+            VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
+            // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
         }
         
 
@@ -718,6 +800,43 @@ void loop_core1 (void* pvParameters) {
         //     // stuff to run
         // }
 
+        if (VESC.getVescValues()) {
+            VESCdata.erpm = VESC.data.rpm;
+            VESCdata.avgMotorCurrent = VESC.data.avgMotorCurrent;
+            VESCdata.tachometer = VESC.data.tachometerAbs;
+            VESCdata.avgInputCurrent = VESC.data.avgInputCurrent;
+            VESCdata.inputVoltage = VESC.data.inpVoltage;
+            VESCdata.wattHours = VESC.data.wattHours;
+            VESCdata.ampHours = VESC.data.ampHours;
+
+            VESCdata.watts = VESCdata.inputVoltage * VESCdata.avgInputCurrent;
+            VESCdata.watts_smoothed = MovingAverageGeneric0_25.moveAverage(VESCdata.watts);
+
+
+            if (trip.tachometer_abs_now != VESCdata.tachometer) {
+                trip.tachometer_abs_diff = VESCdata.tachometer - trip.tachometer_abs_now;
+
+                trip.distance += ((trip.tachometer_abs_diff / (double)motorPoles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+                // Serial.printf("Trip in km %.3f\n", trip.distance);
+
+                trip.tachometer_abs_now = VESCdata.tachometer;
+            }
+
+            speed_kmh = (((float)VESCdata.erpm / (float)motorMagnetPairs) / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+
+            if (VESCdata.watts == 0 || speed_kmh == 0) {
+                wh_over_km = 0;
+            } else {
+                wh_over_km = VESCdata.watts / speed_kmh;
+            }
+            wh_over_km_smoothed = WhOverKmMovingAverage.moveAverage(wh_over_km);
+            wh_over_km_average = VESCdata.wattHours / trip.distance;
+
+            // Serial.printf("Motor current %f\n", VESCdata.avgMotorCurrent);
+            // Serial.printf("Tachometer %f\n", VESCdata.tachometer);
+        }
+        odometer.distance = odometer.distance_on_boot + trip.distance;
+
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -728,7 +847,7 @@ void app_main(void)
     initArduino();
     Serial.begin(115200);
 
-    Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX/TX
+    Serial2.begin(38400, SERIAL_8N1, 16, 17); // RX/TX
     VESC.setSerialPort(&Serial2);
 
     Wire.begin(21, 22);
@@ -736,7 +855,7 @@ void app_main(void)
 
     if (!dedicatedADC.begin()) {
         Serial.println("Failed to initialize ADS.");
-        while (1);
+        // while (1);
     }
     dedicatedADC.setDataRate(RATE_ADS1115_128SPS);
     dedicatedADC.setGain(GAIN_SIXTEEN);
@@ -746,7 +865,36 @@ void app_main(void)
     dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_0_1, /*continuous=*/true);
 
 
+    // if (!VESC.getMcconfTempValues()) {
+        // Serial.printf("Failed to get Temp McConf values\n");
+    // }
+    // printVescMcConfTempValues();
 
+    // VESC.data_current_mcconf_temp.l_current_min_scale = 1.0;
+    // VESC.data_current_mcconf_temp.l_current_max_scale = 1.0;
+    // VESC.data_current_mcconf_temp.l_min_erpm = -100000.0;
+    // VESC.data_current_mcconf_temp.l_max_erpm = 27000;
+    // VESC.data_current_mcconf_temp.l_min_duty = 0.005;
+    // VESC.data_current_mcconf_temp.l_max_duty = 0.95;
+    // VESC.data_current_mcconf_temp.l_watt_min = -1000.0;
+    // VESC.data_current_mcconf_temp.l_watt_max = 250.0;
+
+    // VESC.setMcconfTempValues(VESC.data_current_mcconf_temp);
+    // Serial.printf("\n");
+    // delay(500);
+
+    // if (!VESC.getMcconfTempValues()) {
+    //     Serial.printf("Failed to get Temp McConf values\n");
+    // }
+    // printVescMcConfTempValues();
+    // Serial.printf("Current max erpm: %f\n", VESC.data_current_mcconf_temp.l_max_erpm);
+
+    // VESC.data_current_mcconf_temp.l_max_erpm = 3000.0;
+    // VESC.data_current_mcconf_temp.l_current_max_scale = 100;
+    // VESC.data_current_mcconf_temp.l_in_current_max = 10;
+    // Serial.printf("VESC.data_current_mcconf_temp.l_max_erpm was set to %f\n", VESC.data_current_mcconf_temp.l_max_erpm);
+    // VESC.setMcconfTempValues();
+    // Serial.printf("Applied Mcconf to VESC!\n");
 
 
     // tftVSPI.begin(18, 19, 23, TFT_RST);
@@ -810,8 +958,14 @@ void app_main(void)
 
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
     Throttle.smoothingFactor = 0.1;
+    WhOverKmMovingAverage.smoothingFactor = 0.25;
 
-    speedometer.init(630, 71.26*1000.0f); // with 71.26ms the limit is 100km/h with the 630mm wheel diameter
+    MovingAverageGeneric0_25.smoothingFactor = 0.25;
+    MovingAverageGeneric0_05.smoothingFactor = 0.05;
+
+    // speedometer.init(630, 71.26*1000.0f); // with 71.26ms the limit is 100km/h with the 630mm wheel diameter
+    wheel.diameter = 63.0f;
+    wheel.gear_ratio = 5.7f;
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
@@ -863,20 +1017,24 @@ void app_main(void)
     }
 
 
-    delay(500);
+    // delay(500);
 
-    powerLimiterPID.setOutputLimits(-100, 0);
+    // powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
-    setGearLevel(3);
-
+    setGearLevel(1);
 
     // setup ebike namespace
     preferences.begin("ebike", false);
+
+    // // store values
+    // preferencesSave();
+
     // retrieve values      
-    odometer = preferences.getFloat("odometer", -1);
-    trip     = preferences.getFloat("trip", -1);
-    // TODO: implement saving of preferences
+    odometer.distance_on_boot   = preferences.getFloat("odometer", -1);
+    // trip.distance       = preferences.getFloat("trip", -1);
+
+    odometer.distance_tmp = odometer.distance_on_boot;
 
 
     xTaskCreatePinnedToCore (
@@ -968,6 +1126,47 @@ void app_main(void)
                 VESC.setCurrent(VESC_setCurrent);
             }
 
+            if (readString.contains("save"))
+            {
+                preferencesSave();
+                Serial.printf("Preferences were saved\n");
+            }
+
+            if (readString.contains("odometer="))
+            {
+                odometer.distance_on_boot = (double)getValueFromString("odometer", readString);
+            }
+
+            if (readString.contains("trip="))
+            {
+                trip.distance = (double)getValueFromString("trip", readString);
+            }
+
+            if (readString.contains("printVescMcconf"))
+            {
+                if (!VESC.getMcconfTempValues()) {
+                    Serial.printf("Failed to get Temp McConf values\n");
+                } else {
+                    printVescMcConfTempValues();
+                }
+            }
+
+            if (readString.contains("power1"))
+            {
+                VESC.data_mcconf.l_current_min_scale = 1.0;
+                VESC.data_mcconf.l_current_max_scale = 1.0;
+                VESC.data_mcconf.l_min_erpm = -100000.0;
+                VESC.data_mcconf.l_max_erpm = 27000;
+                VESC.data_mcconf.l_min_duty = 0.005;
+                VESC.data_mcconf.l_max_duty = 0.95;
+                VESC.data_mcconf.l_watt_min = -1000.0;
+                VESC.data_mcconf.l_watt_max = 250.0;
+                VESC.data_mcconf.l_in_current_min = -12.0;
+                VESC.data_mcconf.l_in_current_max = -12.0;
+
+                VESC.setMcconfTempValues();
+            }
+
             // if (readString.contains("save"))
             // {
             //     clockMinutes = getValueFromString("clockMinutes", readString);
@@ -986,8 +1185,6 @@ void app_main(void)
         clock_date_and_time();
 
         printDisplay();
-
-
 
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore0) >= 1000) {
@@ -1013,10 +1210,17 @@ void app_main(void)
             }
         }
 
-        // Save values
-        // preferences.putFloat("odometer", odometer);
-        // preferences.putFloat("trip", trip);
-        // Serial.println("Preferences saved!\n");
+        unsigned long timeSavePreferencesNow = millis();
+        unsigned long timeSavePreferencesElapsed = timeSavePreferencesNow - timeSavePreferencesStart;
+        if (timeSavePreferencesElapsed >= (10 * 60 * 1000)) { //10 minutes
+            timeSavePreferencesStart = millis();
+            if (odometer.distance_tmp != odometer.distance) {
+                odometer.distance_tmp = odometer.distance;
+
+                preferencesSave();
+                Serial.printf("Preferences Saved\n");
+            }
+        }
         
         timeCore0 = (timer_u32() - timeStartCore0);
     }
