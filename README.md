@@ -13,10 +13,10 @@
 - [ ] Teplota ESC
 
 ### Otáčky/trip distance
-- [x] Rýchlosť (vypočítané z otáčok predného kolesa)
-- [ ] Rýchlosť (vypočítané z otáčok motora)
-- [ ] Trip distance (celodobý)
+- [x] Rýchlosť (vypočítané z otáčok motora)
+- [x] Odometer
 - [ ] Trip distance (vyresetovaný po nejakej dobe neaktivity, dajme tomu že po 6 hodín)
+	- [x] Zatiaľ sa resetuje po odpojení a pripojení baterky
 
 ### Baterka
 - [x] Meranie napätia
@@ -26,8 +26,8 @@
 - [ ] Baterka percentá (z využitia Ah za posledné nabitie)
 - [ ] Baterkový počet cyklov (softvérový, samozrejme)
 - [ ] kWh použitých za celú dobu
-- [ ] Okamžitá spotreba Wh/km
-- [ ] Dlhodobá spotreba Wh/km
+- [x] Okamžitá spotreba Wh/km
+- [x] Dlhodobá spotreba Wh/km
 - [ ] Výpočet zostavajúceho dosahu v kilometroch (z okamžitej spotreby Wh/1km)
 - [ ] Výpočet zostavajúceho dosahu v kilometroch (z dlhodobej spotreby Wh/1km)
 
@@ -36,7 +36,7 @@
 - [x] Zobraziť percento nabitia batérie
 - [x] Zobraziť napätie, prúd, výkon
 - [x] Zobraziť okamžitú spotrebu
-- [ ] Zobraziť dlhodobú spotrebu
+- [x] Zobraziť dlhodobú spotrebu
 - [x] Zobraziť indikátor či je rotor napájaný (treba spraviť lepší indikátor)
 - [x] Zobraziť rýchlosť
 - [x] Zobraziť aktuálny stupeň výkonu a "stupeň" e-prevodovky
@@ -58,5 +58,6 @@
 - [x] EC:  ESP32
 - [ ] Vodotesné
 - [ ] Výdrž baterky na 100km
+	- [x] Výdrž je zatiaľ 55km
 - [ ] Nabíjanie pomocou USB-C PD
 - [ ] Nabíjanie cez vlastný spínaný zdroj
