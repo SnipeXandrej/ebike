@@ -75,35 +75,29 @@ struct {
 
 bool firsttime_draw = 1;
 
+struct {
+    float voltage;
+    float voltage_min;
+    float voltage_max;
+    float current;
+    float amphours;
+    float watts;
+    float wattHours;
+    float percentage;
+    float amphours_fullcharge;
+    float amphours_fullcharge_min_voltage;
+    float amphours_fullcharge_max_voltage;
+} battery;
+
 float  _batteryVoltage;
-float batteryVoltage;
 
-float _wattHoursUsedInElapsedTime;
-float wattHours;
-
-float batteryVoltage_min = 64.0f;
-float batteryVoltage_max = 82.0f;
+float _batteryWattHoursUsedInElapsedTime;
 
 float  _batteryCurrent;
-float batteryCurrent;
-float batteryAmpHours;
-
-float batteryWatts;
-float batteryVESCWatts;
-float batteryAuxWatts;
-
-float  _vescCurrent;
-float vescCurrent;
-float vescAmpHours, _vescCurrentUsedInElapsedTime;
-
-float  _auxCurrent;
-float auxCurrent;
-float auxAmpHours, _auxCurrentUsedInElapsedTime;
+float _batteryCurrentUsedInElapsedTime;
 
 float  _potThrottleVoltage;
 float potThrottleVoltage;
-
-float batteryPercentage;
 
 float wh_over_km = 0; // immediate
 float wh_over_km_smoothed = 0;
@@ -175,9 +169,7 @@ InputOffset BatVoltageCorrection;
 InputOffset PotThrottleCorrection;
 
 MovingAverage BatVoltageMovingAverage;
-MovingAverage AuxCurrentMovingAverage;
 MovingAverage PotThrottleMovingAverage;
-MovingAverage VESCCurrentMovingAverage;
 MovingAverage BatWattMovingAverage;
 MovingAverage Throttle;
 MovingAverage WhOverKmMovingAverage;
@@ -259,16 +251,13 @@ void dedicatedADCDiff() {
     int16_t results = dedicatedADC.getLastConversionResults();
 
     // AUX CURRENT
-    auxCurrent = (
-            // AuxCurrentMovingAverage.moveAverage(
-                ((float)results-1) / 142.7272 //143.636
-            // )
-    );
-    _auxCurrentUsedInElapsedTime = auxCurrent / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    auxAmpHours += _auxCurrentUsedInElapsedTime / 3600.0;
+    battery.current = (((float)results-1) / 142.7272); //143.636
 
-    _wattHoursUsedInElapsedTime = (auxCurrent * batteryVoltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    wattHours += _wattHoursUsedInElapsedTime / 3600.0;
+    _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
+    battery.amphours += _batteryCurrentUsedInElapsedTime / 3600.0;
+
+    _batteryWattHoursUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
+    battery.wattHours += _batteryWattHoursUsedInElapsedTime / 3600.0;
 
     dedicatedADC_new_data = false;
     Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timerDedicatedADC));
@@ -515,7 +504,7 @@ void printDisplay() {
     // Battery
     // tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
     // Battery with amphours used
-    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", VESCdata.ampHours, batteryPercentage); //batteryAmpHours
+    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", VESCdata.ampHours, battery.percentage); //batteryAmpHours
 
     // Upper Divider
     if (firsttime_draw) {
@@ -523,11 +512,11 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("Waux  :%6.1f  ", batteryWattsMovingAverage.moveAverage(batteryWatts));
-    tft.setCursor(3, 47); tft.printf("V: %5.3f  ", batteryVoltage);
+    tft.setCursor(3, 28); tft.printf("Waux  :%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
+    tft.setCursor(3, 47); tft.printf("V: %5.3f  ", battery.voltage);
     tft.setCursor(3, 66); tft.printf("Ab:%6.2f Ap: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
-    tft.setCursor(3, 85); tft.printf("Aux: %5.3f", batteryAuxMovingAverage.moveAverage(auxCurrent));
-    tft.setCursor(3, 104); tft.printf("AAh: %5.3f", auxAmpHours);
+    tft.setCursor(3, 85); tft.printf("Aux: %5.3f", batteryAuxMovingAverage.moveAverage(battery.current));
+    tft.setCursor(3, 104); tft.printf("AAh: %5.3f", battery.amphours);
     tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
     tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
 
@@ -622,7 +611,7 @@ void loop_core1 (void* pvParameters) {
         _potThrottleVoltage = _potThrottleVoltage / 15;
 
         // BATTERY VOLTAGE
-        batteryVoltage = (36.11344125582536f *
+        battery.voltage = (36.11344125582536f *
             BatVoltageMovingAverage.moveAverage(
                 BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f))
             )
@@ -631,10 +620,7 @@ void loop_core1 (void* pvParameters) {
         // BATTERY CURRENT
         dedicatedADCDiff();
 
-        batteryAmpHours = auxAmpHours;
-        batteryCurrent = auxCurrent;
-
-        batteryWatts = batteryVoltage * batteryCurrent;
+        battery.watts = battery.voltage * battery.current;
 
         potThrottleVoltage = (
             PotThrottleCorrection.correctInput(
@@ -688,7 +674,7 @@ void loop_core1 (void* pvParameters) {
             VESC.setCurrent(0.0f);
         } else {
             PotThrottleLevel = PotThrottleLevelReal;
-            PotThrottleAdjustment = powerLimiterPID.getOutput(batteryWatts);
+            PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
             VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
@@ -697,10 +683,10 @@ void loop_core1 (void* pvParameters) {
         
 
         if (batteryPercentageVoltageBased) {
-            batteryPercentage = map_f(batteryVoltage, batteryVoltage_min, batteryVoltage_max, 0, 100);
+            battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
-            batteryPercentage = 0;
+            battery.percentage = 0;
         }
 
         // Execute every second that elapsed
@@ -738,7 +724,7 @@ void loop_core1 (void* pvParameters) {
         }
         odometer.distance = odometer.distance_on_boot + trip.distance;
 
-        float wh_over_km_tmp = batteryWatts / speed_kmh;
+        float wh_over_km_tmp = battery.watts / speed_kmh;
         if (wh_over_km_tmp > 199.9) {
             wh_over_km = 199.9;
         } else if (wh_over_km_tmp < 0.0) {
@@ -746,10 +732,10 @@ void loop_core1 (void* pvParameters) {
         } else if (wh_over_km_tmp != wh_over_km_tmp) {
             wh_over_km = 199.9;
         } else {
-            wh_over_km = batteryWatts / speed_kmh;
+            wh_over_km = battery.watts / speed_kmh;
         }
         wh_over_km_smoothed = WhOverKmMovingAverage.moveAverage(wh_over_km);
-        wh_over_km_average = wattHours / trip.distance;
+        wh_over_km_average = battery.wattHours / trip.distance;
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -760,9 +746,10 @@ void app_main(void)
 {
     motor.poles = 36;
     motor.magnetPairs = 6;
-
     wheel.diameter = 63.0f;
     wheel.gear_ratio = 5.7f;
+    battery.voltage_min = 62.0f;
+    battery.voltage_max = 82.0f;
 
     initArduino();
     Serial.begin(115200);
@@ -841,8 +828,6 @@ void app_main(void)
 
     // smoothing factors
     BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
-    AuxCurrentMovingAverage.smoothingFactor = 0.05; // 0.2
-    VESCCurrentMovingAverage.smoothingFactor = 0.05; // 0.5
     BatWattMovingAverage.smoothingFactor = 0.1;
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
     Throttle.smoothingFactor = 0.1;
