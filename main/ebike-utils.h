@@ -1,5 +1,5 @@
 float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
-    int temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+    float temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 
     if (temp < out_min)
         temp = out_min;
@@ -8,6 +8,10 @@ float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
         temp = out_max;
 
     return temp;
+}
+
+float map_f_nochecks(float x, float in_min, float in_max, float out_min, float out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 std::string removeStringWithEqualSignAtTheEnd(const std::string toRemove, std::string str) {
