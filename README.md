@@ -23,13 +23,11 @@
 - [x] Meranie prúdu
 - [x] Okamžitá spotreba vo Wattoch
 - [x] Baterka percentá (z napätia)
-- [ ] Baterka percentá (z využitia Ah za posledné nabitie)
+- [x] Baterka percentá (z využitia Ah za posledné nabitie)
 - [ ] Baterkový počet cyklov (softvérový, samozrejme)
-- [ ] kWh použitých za celú dobu
 - [x] Okamžitá spotreba Wh/km
 - [x] Dlhodobá spotreba Wh/km
-- [ ] Výpočet zostavajúceho dosahu v kilometroch (z okamžitej spotreby Wh/1km)
-- [ ] Výpočet zostavajúceho dosahu v kilometroch (z dlhodobej spotreby Wh/1km)
+- [x] Výpočet zostavajúceho dosahu v kilometroch (z dlhodobej spotreby Ah/1km)
 
 ### Displej
 - [x] Zobraziť dátum a čas
