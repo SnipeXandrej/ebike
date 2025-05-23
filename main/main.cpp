@@ -54,14 +54,14 @@ struct {
 } wheel;
 
 struct {
-    double tachometer_abs_now;
+    double tachometer_abs_previous;
     double tachometer_abs_diff;
     double distance; // in km
+    double distanceDiff;
     double DNU_refresh;
 } trip;
 
 struct {
-    double distance_on_boot; // in km
     double trip_distance;    // in km
     double distance;         // in km
     double distance_tmp;
@@ -81,13 +81,20 @@ struct {
     float voltage_max;
     float current;
     float ampHoursUsed;
+    float ampHoursUsedLifetime;
     float watts;
     float wattHoursUsed;
     float percentage;
-    float ampHoursFullyDischarged;
+    float ampHoursRated;
     float amphours_min_voltage;
     float amphours_max_voltage;
 } battery;
+
+struct {
+    float range;
+    float ampHoursUsedOnStart;
+    float tripOnStart;
+} estimatedRange;
 
 float  _batteryVoltage;
 
@@ -96,7 +103,6 @@ float _batteryWattHoursUsedUsedInElapsedTime;
 float  _batteryCurrent;
 float _batteryCurrentUsedInElapsedTime;
 
-float estimatedRangeLeft = 0;
 float batteryampHoursUsed_tmp;
 
 float  _potThrottleVoltage;
@@ -200,13 +206,24 @@ MiniPID powerLimiterPID(kP, kI, kD);
 // Enabling C++ compile
 extern "C" { void app_main(); }
 
+void estimatedRangeReset() {
+    estimatedRange.ampHoursUsedOnStart  = battery.ampHoursUsed;
+    estimatedRange.tripOnStart          = trip.distance;
+}
+
+void tripReset() {
+    trip.distance = 0;
+    estimatedRangeReset();
+}
+
 void preferencesSaveOdometer() {
     preferences.putFloat("odometer", (float)odometer.distance);
 }
 
 void preferencesSaveBattery() {
     preferences.putFloat("batAhUsed", battery.ampHoursUsed);
-    preferences.putFloat("batAhFulDis", battery.ampHoursFullyDischarged);
+    preferences.putFloat("batAhFulDis", battery.ampHoursRated);
+    preferences.putFloat("batAhUsedLife", battery.ampHoursUsedLifetime);
 }
 
 float maxCurrentAtERPM(int erpm) {
@@ -262,6 +279,7 @@ void dedicatedADCDiff() {
 
     _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
     battery.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
+    battery.ampHoursUsedLifetime += _batteryCurrentUsedInElapsedTime / 3600.0;
 
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
     battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
@@ -419,7 +437,7 @@ void IRAM_ATTR button4Callback() {
 
 int daysInCurrentMonth = 0;
 void clock_date_and_time() {
-    clockSeconds += ((float)timer_delta_us(timeCore0) / 1000000);
+    clockSeconds += ((float)timer_delta_us(timeCore0) / 1000000.0);
     if (clockSeconds >= 60) {
         // substract 60 seconds to "reset" the counter
         /* if we were to reset it to "0" we may lose some milliseconds
@@ -535,7 +553,7 @@ void printDisplay() {
     // consumption over last 1km
     tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", WhOverKmMovingAverage.moveAverage(wh_over_km));
     tft.setCursor(207-20, 28+19); tft.printf("%5.1f Wh/km", wh_over_km_average);
-    tft.setCursor(207-20-40, 28+19+19); tft.printf("Range: %4.1f", estimatedRangeLeft);
+    tft.setCursor(207-20-40, 28+19+19); tft.printf("Range: %7.1f", estimatedRange.range);
 
     // Speed
     tft.setTextSize(5);
@@ -609,9 +627,9 @@ void loop_core1 (void* pvParameters) {
         _batteryVoltage = 0;
         _potThrottleVoltage = 0;
 
-        // measure raw battery voltage from ADC
+        // measure raw battery and pot voltage from ADC
         for (int i = 0; i < 15; i++) {
-            _batteryVoltage += adc1_get_raw(pinBatteryVoltage); // PIN 36/VP
+            _batteryVoltage += adc1_get_raw(pinBatteryVoltage);
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
 
         }
@@ -690,16 +708,17 @@ void loop_core1 (void* pvParameters) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
-            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursFullyDischarged, 100.0, 0.0);
+            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursRated, 100.0, 0.0);
         }
 
         if (battery.voltage <= battery.amphours_min_voltage) {
-            battery.ampHoursFullyDischarged = battery.ampHoursUsed;
+            battery.ampHoursRated = battery.ampHoursUsed;
         }
 
         if (battery.voltage >= battery.amphours_max_voltage) {
             battery.ampHoursUsed = 0;
             battery.wattHoursUsed = 0;
+            estimatedRangeReset();
         }
 
         // Execute every second that elapsed
@@ -725,17 +744,28 @@ void loop_core1 (void* pvParameters) {
             VESCdata.wattHours = VESC.data.wattHours;
             VESCdata.ampHours = VESC.data.ampHours;
 
-            if (trip.tachometer_abs_now < VESCdata.tachometer) {
-                trip.tachometer_abs_diff = VESCdata.tachometer - trip.tachometer_abs_now;
+            // if the previous measurement is bigger than the current, that means
+            // that the VESC was probably powered off and on, so the stats got reset...
+            // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
+            // large number and therefore screw up our distance measurement
+            if (trip.tachometer_abs_previous > VESCdata.tachometer) {
+                trip.tachometer_abs_previous = VESCdata.tachometer;
+            }
 
-                trip.distance += ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+            if (trip.tachometer_abs_previous < VESCdata.tachometer) {
+                trip.tachometer_abs_diff = VESCdata.tachometer - trip.tachometer_abs_previous;
 
-                trip.tachometer_abs_now = VESCdata.tachometer;
+                trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+                
+                // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
+                trip.distance += trip.distanceDiff;
+                odometer.distance += trip.distanceDiff;
+
+                trip.tachometer_abs_previous = VESCdata.tachometer;
             }
 
             speed_kmh = (((float)VESCdata.erpm / (float)motor.magnetPairs) / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
         }
-        odometer.distance = odometer.distance_on_boot + trip.distance;
 
         float wh_over_km_tmp = battery.watts / speed_kmh;
         if (wh_over_km_tmp > 199.9) {
@@ -749,8 +779,14 @@ void loop_core1 (void* pvParameters) {
         }
         wh_over_km_average = battery.wattHoursUsed / trip.distance;
 
-
-        estimatedRangeLeft = (trip.distance / (battery.ampHoursUsed - batteryampHoursUsed_tmp)) * (battery.ampHoursFullyDischarged - batteryampHoursUsed_tmp);
+        // TODO: make the estimated range logic better in the future, it works, but it's kinda trash right now
+        // prevent showing negative range values
+        float tmp_range = ((trip.distance - estimatedRange.tripOnStart) / (battery.ampHoursUsed - estimatedRange.ampHoursUsedOnStart)) * (battery.ampHoursRated - estimatedRange.ampHoursUsedOnStart);
+        if (tmp_range >= 0) {
+            estimatedRange.range = tmp_range;
+        } else {
+            estimatedRangeReset();
+        }
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -768,40 +804,6 @@ void app_main(void)
 
     battery.amphours_min_voltage = 64.0f;
     battery.amphours_max_voltage = 83.0f;
-
-    initArduino();
-    Serial.begin(115200);
-
-    Serial2.begin(38400, SERIAL_8N1, 16, 17); // RX/TX
-    VESC.setSerialPort(&Serial2);
-
-    Wire.begin(21, 22);
-    Wire.setClock(400000); // 400kHz
-
-    if (!dedicatedADC.begin()) {
-        Serial.println("Failed to initialize ADS.");
-        // while (1);
-    }
-    // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noise af
-    dedicatedADC.setDataRate(RATE_ADS1115_64SPS);
-    dedicatedADC.setGain(GAIN_SIXTEEN);
-    pinMode(pinAdcRdyAlert, INPUT);
-    // We get a falling edge every time a new sample is ready.
-    attachInterrupt(pinAdcRdyAlert, ADCNewDataReadyISR, FALLING);
-    dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_2_3, /*continuous=*/true);
-
-    // tftVSPI.begin(18, 19, 23, TFT_RST);
-
-    tft.init(240, 320); // Init ST7789 320x240
-    tft.setRotation(3); // 270 degrees rotation
-    // SPI speed defaults to SPI_DEFAULT_FREQ defined in the library, you can override it here
-    // Note that speed allowable depends on chip and quality of wiring, if you go too fast, you
-    // may end up with a black screen some times, or all the time.
-    tft.setSPISpeed(40000000);
-    tft.invertDisplay(false);
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-    tft.setCursor(0, 0);
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset
@@ -853,6 +855,40 @@ void app_main(void)
     batteryAuxWattsMovingAverage.smoothingFactor = 0.2;
     batteryAuxMovingAverage.smoothingFactor = 0.2;
     batteryWattsMovingAverage.smoothingFactor = 0.2;
+
+    initArduino();
+    Serial.begin(115200);
+
+    Serial2.begin(38400, SERIAL_8N1, 16, 17); // RX/TX
+    VESC.setSerialPort(&Serial2);
+
+    Wire.begin(21, 22);
+    Wire.setClock(400000); // 400kHz
+
+    if (!dedicatedADC.begin()) {
+        Serial.println("Failed to initialize ADS.");
+        // while (1);
+    }
+    // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noise af
+    dedicatedADC.setDataRate(RATE_ADS1115_64SPS);
+    dedicatedADC.setGain(GAIN_SIXTEEN);
+    pinMode(pinAdcRdyAlert, INPUT);
+    // We get a falling edge every time a new sample is ready.
+    attachInterrupt(pinAdcRdyAlert, ADCNewDataReadyISR, FALLING);
+    dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_2_3, /*continuous=*/true);
+
+    // tftVSPI.begin(18, 19, 23, TFT_RST);
+
+    tft.init(240, 320); // Init ST7789 320x240
+    tft.setRotation(3); // 270 degrees rotation
+    // SPI speed defaults to SPI_DEFAULT_FREQ defined in the library, you can override it here
+    // Note that speed allowable depends on chip and quality of wiring, if you go too fast, you
+    // may end up with a black screen some times, or all the time.
+    tft.setSPISpeed(40000000);
+    tft.invertDisplay(false);
+    tft.fillScreen(ST77XX_BLACK);
+    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    tft.setCursor(0, 0);
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
@@ -914,13 +950,13 @@ void app_main(void)
     // preferencesSave();
 
     // retrieve values      
-    odometer.distance_on_boot       = preferences.getFloat("odometer", -1);
-    battery.ampHoursUsed            = preferences.getFloat("batAhUsed", -1);
-    battery.ampHoursFullyDischarged = preferences.getFloat("batAhFulDis", -1);
+    odometer.distance       = preferences.getFloat("odometer", -1);
+    battery.ampHoursUsed    = preferences.getFloat("batAhUsed", -1);
+    battery.ampHoursRated   = preferences.getFloat("batAhFulDis", -1);
+    battery.ampHoursUsedLifetime = preferences.getFloat("batAhUsedLife", 0);
 
-    batteryampHoursUsed_tmp = battery.ampHoursUsed;
-
-    odometer.distance_tmp = odometer.distance_on_boot;
+    estimatedRangeReset();
+    odometer.distance_tmp = odometer.distance;
 
     delay(2000);
 
@@ -1022,7 +1058,7 @@ void app_main(void)
 
             if (readString.contains("odometer="))
             {
-                odometer.distance_on_boot = (double)getValueFromString("odometer", readString);
+                odometer.distance = (double)getValueFromString("odometer", readString);
             }
 
             if (readString.contains("trip="))
@@ -1030,17 +1066,17 @@ void app_main(void)
                 trip.distance = (double)getValueFromString("trip", readString);
             }
 
-            if (readString.contains("ampHoursFullyDischarged="))
+            if (readString.contains("ampHoursRated="))
             {
-                battery.ampHoursFullyDischarged = getValueFromString("ampHoursFullyDischarged", readString);
-                Serial.printf("battery.ampHoursFullyDischarged=%f\n", battery.ampHoursFullyDischarged);
+                battery.ampHoursRated = getValueFromString("ampHoursRated", readString);
+                Serial.printf("battery.ampHoursRated=%f\n", battery.ampHoursRated);
             }
 
             if (readString.contains("getBatteryStats"))
             {
                 Serial.printf("battery.amphours_min_voltage=%f\n", battery.amphours_min_voltage);
                 Serial.printf("battery.amphours_max_voltage=%f\n", battery.amphours_max_voltage);
-                Serial.printf("battery.ampHoursFullyDischarged=%f\n", battery.ampHoursFullyDischarged);
+                Serial.printf("battery.ampHoursRated=%f\n", battery.ampHoursRated);
                 Serial.printf("battery.ampHoursUsed=%f\n", battery.ampHoursUsed);
                 Serial.printf("battery.current=%f\n", battery.current);
                 Serial.printf("battery.percentage=%f\n", battery.percentage);
