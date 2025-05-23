@@ -227,22 +227,33 @@ void preferencesSaveBattery() {
 }
 
 float maxCurrentAtERPM(int erpm) {
-    float ERPM_current_10 = 430.0f;
+    float ERPM_current_20 = 430.0f;
     float ERPM_current_100 = 1000.0f;
     float ERPM_current_180 = 3500.0f;
 
-    if (erpm <= ERPM_current_10) {
-        return 10.0f;
+    if (erpm <= ERPM_current_20) {
+        return 20.0f;
     } else if (erpm <= ERPM_current_100) {
         // Linear interpolation between 10A at 430 ERPM and 100A at 1000 ERPM
-        float slope = (100.0f - 10.0f) / (ERPM_current_100 - ERPM_current_10);
-        return slope * (erpm - ERPM_current_10);
+        float slope = (100.0f - 20.0f) / (ERPM_current_100 - ERPM_current_20);
+        return slope * (erpm - ERPM_current_20);
     } else if (erpm < ERPM_current_180) {
         // Linear interpolation between 100A at 1000 ERPM and 180A at 3500 ERPM
         float slope = (180.0f - 100.0f) / (ERPM_current_180 - ERPM_current_100);
         return 100.0f + slope * (erpm - ERPM_current_100);
     } else {
         return 180.0f;
+    }
+}
+
+void setVescThrottleBrake(float inputThrottle) {
+    if (inputThrottle < 40) {
+        float current = map_f_nochecks(inputThrottle, 0, 40, 100, 0);
+        VESC.setBrakeCurrent(current);
+    }
+
+    if (inputThrottle >= 40) {
+        VESC.setCurrent(map_f(inputThrottle, 40, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
     }
 }
 
@@ -328,8 +339,8 @@ int GearLevel0DutyCycle = 0; // 0W
 int GearLevel1DutyCycle = 255; // 15V = 73.7W
 int GearLevel2DutyCycle = 187; // 10.88V = 38.8W
 int GearLevel3DutyCycle = 100; // 6.86V = 15.4W
-int GearLevelIdleDutyCycle = GearLevel3DutyCycle; // There is some power so the VESC can track the speed
-int GearLevelIdleLittleCurrentDutyCycle = 10; // There is some power so the VESC can track the speed
+int GearLevelIdleDutyCycle = GearLevel1DutyCycle; // There is some power so the VESC can track the speed
+int GearLevelIdleLittleCurrentDutyCycle = 10; //10 // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
 void setGearLevel(int level) {
@@ -699,7 +710,8 @@ void loop_core1 (void* pvParameters) {
             PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
+            // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
+            setVescThrottleBrake(PotThrottleLevel);
             // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
         }
         
@@ -1064,6 +1076,12 @@ void app_main(void)
             if (readString.contains("trip="))
             {
                 trip.distance = (double)getValueFromString("trip", readString);
+            }
+
+            if (readString.contains("ampHoursUsed="))
+            {
+                battery.ampHoursUsed = getValueFromString("ampHoursUsed", readString);
+                Serial.printf("battery.ampHoursUsed=%f\n", battery.ampHoursUsed);
             }
 
             if (readString.contains("ampHoursRated="))
