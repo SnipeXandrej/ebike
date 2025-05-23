@@ -80,27 +80,29 @@ struct {
     float voltage_min;
     float voltage_max;
     float current;
-    float amphours;
+    float ampHoursUsed;
     float watts;
-    float wattHours;
+    float wattHoursUsed;
     float percentage;
-    float amphours_fullcharge;
-    float amphours_fullcharge_min_voltage;
-    float amphours_fullcharge_max_voltage;
+    float ampHoursFullyDischarged;
+    float amphours_min_voltage;
+    float amphours_max_voltage;
 } battery;
 
 float  _batteryVoltage;
 
-float _batteryWattHoursUsedInElapsedTime;
+float _batteryWattHoursUsedUsedInElapsedTime;
 
 float  _batteryCurrent;
 float _batteryCurrentUsedInElapsedTime;
+
+float estimatedRangeLeft = 0;
+float batteryampHoursUsed_tmp;
 
 float  _potThrottleVoltage;
 float potThrottleVoltage;
 
 float wh_over_km = 0; // immediate
-float wh_over_km_smoothed = 0;
 float wh_over_km_average = 0; // over time
 float speed_kmh = 0;
 
@@ -118,7 +120,7 @@ bool drawDebug = 0;
 bool drawUptime = 1;
 bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
-bool batteryPercentageVoltageBased = 1;
+bool batteryPercentageVoltageBased = 0;
 bool cutMotorPower = 0;
 bool cutRotorPower = 1;
 
@@ -198,8 +200,13 @@ MiniPID powerLimiterPID(kP, kI, kD);
 // Enabling C++ compile
 extern "C" { void app_main(); }
 
-void preferencesSave() {
+void preferencesSaveOdometer() {
     preferences.putFloat("odometer", (float)odometer.distance);
+}
+
+void preferencesSaveBattery() {
+    preferences.putFloat("batAhUsed", battery.ampHoursUsed);
+    preferences.putFloat("batAhFulDis", battery.ampHoursFullyDischarged);
 }
 
 float maxCurrentAtERPM(int erpm) {
@@ -251,16 +258,16 @@ void dedicatedADCDiff() {
     int16_t results = dedicatedADC.getLastConversionResults();
 
     // AUX CURRENT
-    battery.current = (((float)results-1) / 142.7272); //143.636
+    battery.current = (((float)results) / 143.636); //143.636
 
     _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    battery.amphours += _batteryCurrentUsedInElapsedTime / 3600.0;
+    battery.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
 
-    _batteryWattHoursUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    battery.wattHours += _batteryWattHoursUsedInElapsedTime / 3600.0;
+    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
+    battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
 
     dedicatedADC_new_data = false;
-    Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timerDedicatedADC));
+    // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timerDedicatedADC));
 
     timerDedicatedADC = timer_u32();
 }
@@ -504,7 +511,7 @@ void printDisplay() {
     // Battery
     // tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
     // Battery with amphours used
-    tft.setCursor(158, 3); tft.printf("%5.3fAh %3.0f%%", VESCdata.ampHours, battery.percentage); //batteryAmpHours
+    tft.setCursor(150, 3); tft.printf("%5.3fAh %4.1f%%", battery.ampHoursUsed, battery.percentage); //batteryAmpHours
 
     // Upper Divider
     if (firsttime_draw) {
@@ -512,13 +519,13 @@ void printDisplay() {
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("Waux  :%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
-    tft.setCursor(3, 47); tft.printf("V: %5.3f  ", battery.voltage);
-    tft.setCursor(3, 66); tft.printf("Ab:%6.2f Ap: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
-    tft.setCursor(3, 85); tft.printf("Aux: %5.3f", batteryAuxMovingAverage.moveAverage(battery.current));
-    tft.setCursor(3, 104); tft.printf("AAh: %5.3f", battery.amphours);
-    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
-    tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
+    tft.setCursor(3, 28); tft.printf("W:%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
+    tft.setCursor(3, 47); tft.printf("V:  %4.1f ", battery.voltage);
+    tft.setCursor(3, 66); tft.printf("A:  %6.3f ", batteryAuxMovingAverage.moveAverage(battery.current));
+    tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
+    tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
+    // tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
+    // tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
 
     // tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
     // tft.setCursor(3, 85); tft.printf("A: %6.3f  ", vescCurrent);
@@ -526,8 +533,9 @@ void printDisplay() {
     // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
 
     // consumption over last 1km
-    tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", wh_over_km_smoothed);
+    tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", WhOverKmMovingAverage.moveAverage(wh_over_km));
     tft.setCursor(207-20, 28+19); tft.printf("%5.1f Wh/km", wh_over_km_average);
+    tft.setCursor(207-20-40, 28+19+19); tft.printf("Range: %4.1f", estimatedRangeLeft);
 
     // Speed
     tft.setTextSize(5);
@@ -611,11 +619,7 @@ void loop_core1 (void* pvParameters) {
         _potThrottleVoltage = _potThrottleVoltage / 15;
 
         // BATTERY VOLTAGE
-        battery.voltage = (36.11344125582536f *
-            BatVoltageMovingAverage.moveAverage(
-                BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f))
-            )
-        );
+        battery.voltage = (36.11344125582536f * BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f)));
 
         // BATTERY CURRENT
         dedicatedADCDiff();
@@ -681,12 +685,21 @@ void loop_core1 (void* pvParameters) {
             // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
         }
         
-
+        // Battery charge tracking stuff
         if (batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
             // TODO: implement amphour based battery percentage
-            battery.percentage = 0;
+            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursFullyDischarged, 100.0, 0.0);
+        }
+
+        if (battery.voltage <= battery.amphours_min_voltage) {
+            battery.ampHoursFullyDischarged = battery.ampHoursUsed;
+        }
+
+        if (battery.voltage >= battery.amphours_max_voltage) {
+            battery.ampHoursUsed = 0;
+            battery.wattHoursUsed = 0;
         }
 
         // Execute every second that elapsed
@@ -734,8 +747,10 @@ void loop_core1 (void* pvParameters) {
         } else {
             wh_over_km = battery.watts / speed_kmh;
         }
-        wh_over_km_smoothed = WhOverKmMovingAverage.moveAverage(wh_over_km);
-        wh_over_km_average = battery.wattHours / trip.distance;
+        wh_over_km_average = battery.wattHoursUsed / trip.distance;
+
+
+        estimatedRangeLeft = (trip.distance / (battery.ampHoursUsed - batteryampHoursUsed_tmp)) * (battery.ampHoursFullyDischarged - batteryampHoursUsed_tmp);
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -751,6 +766,9 @@ void app_main(void)
     battery.voltage_min = 62.0f;
     battery.voltage_max = 82.0f;
 
+    battery.amphours_min_voltage = 64.0f;
+    battery.amphours_max_voltage = 83.0f;
+
     initArduino();
     Serial.begin(115200);
 
@@ -765,7 +783,7 @@ void app_main(void)
         // while (1);
     }
     // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noise af
-    dedicatedADC.setDataRate(RATE_ADS1115_128SPS);
+    dedicatedADC.setDataRate(RATE_ADS1115_64SPS);
     dedicatedADC.setGain(GAIN_SIXTEEN);
     pinMode(pinAdcRdyAlert, INPUT);
     // We get a falling edge every time a new sample is ready.
@@ -896,10 +914,15 @@ void app_main(void)
     // preferencesSave();
 
     // retrieve values      
-    odometer.distance_on_boot   = preferences.getFloat("odometer", -1);
+    odometer.distance_on_boot       = preferences.getFloat("odometer", -1);
+    battery.ampHoursUsed            = preferences.getFloat("batAhUsed", -1);
+    battery.ampHoursFullyDischarged = preferences.getFloat("batAhFulDis", -1);
+
+    batteryampHoursUsed_tmp = battery.ampHoursUsed;
 
     odometer.distance_tmp = odometer.distance_on_boot;
 
+    delay(2000);
 
     xTaskCreatePinnedToCore (
     loop_core1,     // Function to implement the task
@@ -992,7 +1015,8 @@ void app_main(void)
 
             if (readString.contains("save"))
             {
-                preferencesSave();
+                preferencesSaveOdometer();
+                preferencesSaveBattery();
                 Serial.printf("Preferences were saved\n");
             }
 
@@ -1004,6 +1028,27 @@ void app_main(void)
             if (readString.contains("trip="))
             {
                 trip.distance = (double)getValueFromString("trip", readString);
+            }
+
+            if (readString.contains("ampHoursFullyDischarged="))
+            {
+                battery.ampHoursFullyDischarged = getValueFromString("ampHoursFullyDischarged", readString);
+                Serial.printf("battery.ampHoursFullyDischarged=%f\n", battery.ampHoursFullyDischarged);
+            }
+
+            if (readString.contains("getBatteryStats"))
+            {
+                Serial.printf("battery.amphours_min_voltage=%f\n", battery.amphours_min_voltage);
+                Serial.printf("battery.amphours_max_voltage=%f\n", battery.amphours_max_voltage);
+                Serial.printf("battery.ampHoursFullyDischarged=%f\n", battery.ampHoursFullyDischarged);
+                Serial.printf("battery.ampHoursUsed=%f\n", battery.ampHoursUsed);
+                Serial.printf("battery.current=%f\n", battery.current);
+                Serial.printf("battery.percentage=%f\n", battery.percentage);
+                Serial.printf("battery.voltage=%f\n", battery.voltage);
+                Serial.printf("battery.voltage_min=%f\n", battery.voltage_min);
+                Serial.printf("battery.voltage_max=%f\n", battery.voltage_max);
+                Serial.printf("battery.wattHoursUsed=%f\n", battery.wattHoursUsed);
+                Serial.printf("battery.watts=%f\n", battery.watts);
             }
 
             if (readString.contains("printVescMcconf"))
@@ -1063,12 +1108,15 @@ void app_main(void)
         unsigned long timeSavePreferencesElapsed = timeSavePreferencesNow - timeSavePreferencesStart;
         if (timeSavePreferencesElapsed >= (10 * 60 * 1000)) { //10 minutes
             timeSavePreferencesStart = millis();
+
+            preferencesSaveBattery();
+
             if (odometer.distance_tmp != odometer.distance) {
                 odometer.distance_tmp = odometer.distance;
 
-                preferencesSave();
-                Serial.printf("Preferences Saved\n");
+                preferencesSaveOdometer();
             }
+            Serial.printf("Preferences Saved\n");
         }
         
         timeCore0 = (timer_u32() - timeStartCore0);
