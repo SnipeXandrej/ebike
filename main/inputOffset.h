@@ -2,6 +2,7 @@ class MovingAverage {
 private:
     float previousInput;
     float Input;
+    bool done = 0;
 
     float smoothValue(float newValue, float previousValue, float smoothingFactor) {
         return previousValue + smoothingFactor * (newValue - previousValue);
@@ -9,10 +10,20 @@ private:
 
 public:
     float smoothingFactor = 1;
+    float output;
+
+    void initInput(float input) {
+        if (!done) {
+            previousInput = input;
+            done = 1;
+        }
+    }
 
     float moveAverage(float input) {
         Input = smoothValue(input, previousInput, smoothingFactor);
         previousInput = Input;
+
+        output = Input;
 
         return Input;
     }

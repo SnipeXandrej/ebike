@@ -94,6 +94,9 @@ struct {
     float range;
     float ampHoursUsedOnStart;
     float tripOnStart;
+    float distance;
+    float ampHoursUsed;
+    float AhPerKm;
 } estimatedRange;
 
 float  _batteryVoltage;
@@ -208,7 +211,8 @@ extern "C" { void app_main(); }
 
 void estimatedRangeReset() {
     estimatedRange.ampHoursUsedOnStart  = battery.ampHoursUsed;
-    estimatedRange.tripOnStart          = trip.distance;
+    estimatedRange.distance             = 0;
+    estimatedRange.ampHoursUsed         = 0;
 }
 
 void tripReset() {
@@ -244,6 +248,20 @@ float maxCurrentAtERPM(int erpm) {
     } else {
         return 180.0f;
     }
+}
+
+float clampValue(float input, float clampTo) {
+    float output = 0.0;
+
+    if (input < clampTo) {
+        output = input;
+    }
+
+    if (input >= clampTo) {
+        output = clampTo;
+    }
+
+    return output;
 }
 
 void setVescThrottleBrake(float inputThrottle) {
@@ -291,6 +309,7 @@ void dedicatedADCDiff() {
     _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
     battery.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
     battery.ampHoursUsedLifetime += _batteryCurrentUsedInElapsedTime / 3600.0;
+    estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
 
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
     battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
@@ -649,6 +668,7 @@ void loop_core1 (void* pvParameters) {
 
         // BATTERY VOLTAGE
         battery.voltage = (36.11344125582536f * BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f)));
+        BatVoltageMovingAverage.initInput(battery.voltage);
 
         // BATTERY CURRENT
         dedicatedADCDiff();
@@ -677,7 +697,7 @@ void loop_core1 (void* pvParameters) {
                 if (GearDutyCycle == GearLevel0DutyCycle) {
                     ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevel0DutyCycle);
                     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
-                } else if (VESCdata.erpm == 0) {
+                } else if (VESCdata.erpm < 50) {
                     ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
                     ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
                 } else {
@@ -701,7 +721,7 @@ void loop_core1 (void* pvParameters) {
         }
 
         // for now, directly map voltage from the throttle to the pot input pin of VESC
-        if (cutMotorPower || selectedGear == 0 || rotorCanPowerMotor == 0) {
+        if (cutMotorPower || selectedGear == 0 ) { //|| rotorCanPowerMotor == 0
             PotThrottleLevel = 0;
             PotThrottleLevelPowerLimited = 0;
             VESC.setCurrent(0.0f);
@@ -710,8 +730,12 @@ void loop_core1 (void* pvParameters) {
             PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
             
             PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
-            setVescThrottleBrake(PotThrottleLevel);
+            VESC.setCurrent(
+                clampValue(
+                    map_f(PotThrottleLevel, 0, 100, 0, 180), maxCurrentAtERPM(VESC.data.rpm)
+                )
+            ); //PotThrottleLevelPowerLimited
+            // setVescThrottleBrake(PotThrottleLevel);
             // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
         }
         
@@ -719,18 +743,21 @@ void loop_core1 (void* pvParameters) {
         if (batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
-            // TODO: implement amphour based battery percentage
             battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursRated, 100.0, 0.0);
         }
 
-        if (battery.voltage <= battery.amphours_min_voltage) {
+        BatVoltageMovingAverage.moveAverage(battery.voltage);
+        if (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) {
             battery.ampHoursRated = battery.ampHoursUsed;
         }
 
-        if (battery.voltage >= battery.amphours_max_voltage) {
-            battery.ampHoursUsed = 0;
-            battery.wattHoursUsed = 0;
-            estimatedRangeReset();
+        if (BatVoltageMovingAverage.output >= battery.amphours_max_voltage) {
+            // TODO: use dedicated current sensing for charging
+            if (PotThrottleLevelReal == 0 && (battery.current < -0.05 && battery.current >= -0.5)) {
+                battery.ampHoursUsed = 0;
+                battery.wattHoursUsed = 0;
+                estimatedRangeReset();
+            }
         }
 
         // Execute every second that elapsed
@@ -764,14 +791,21 @@ void loop_core1 (void* pvParameters) {
                 trip.tachometer_abs_previous = VESCdata.tachometer;
             }
 
+            // prevent the diff to be something extremely big
+            if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
+                trip.tachometer_abs_previous = VESCdata.tachometer;
+            }
+
             if (trip.tachometer_abs_previous < VESCdata.tachometer) {
                 trip.tachometer_abs_diff = VESCdata.tachometer - trip.tachometer_abs_previous;
+                // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
 
                 trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
                 
                 // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
                 trip.distance += trip.distanceDiff;
                 odometer.distance += trip.distanceDiff;
+                estimatedRange.distance += trip.distanceDiff;
 
                 trip.tachometer_abs_previous = VESCdata.tachometer;
             }
@@ -791,14 +825,8 @@ void loop_core1 (void* pvParameters) {
         }
         wh_over_km_average = battery.wattHoursUsed / trip.distance;
 
-        // TODO: make the estimated range logic better in the future, it works, but it's kinda trash right now
-        // prevent showing negative range values
-        float tmp_range = ((trip.distance - estimatedRange.tripOnStart) / (battery.ampHoursUsed - estimatedRange.ampHoursUsedOnStart)) * (battery.ampHoursRated - estimatedRange.ampHoursUsedOnStart);
-        if (tmp_range >= 0) {
-            estimatedRange.range = tmp_range;
-        } else {
-            estimatedRangeReset();
-        }
+        estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
+        estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -815,7 +843,7 @@ void app_main(void)
     battery.voltage_max = 82.0f;
 
     battery.amphours_min_voltage = 64.0f;
-    battery.amphours_max_voltage = 83.0f;
+    battery.amphours_max_voltage = 82.0f;
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset
