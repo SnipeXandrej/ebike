@@ -8,11 +8,11 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#include <Adafruit_ST7789.h>
 #include "HardwareSerial.h"
 #include "Preferences.h"
 #include <Adafruit_ADS1X15.h>
 #include <VescUart.h>
+#include <TFT_eSPI.h>
 
 #include "esp32-hal-dac.h"
 #include "esp32-hal-ledc.h"
@@ -27,12 +27,7 @@
 #include "timer_u32.h"
 #include "MiniPID.h"
 
-#define TFT_CS         5
-#define TFT_RST        -1
-#define TFT_DC         32
-// SPIClass tftVSPI = SPIClass(VSPI);
-// Adafruit_ST7789 tft = Adafruit_ST7789(&tftVSPI, TFT_CS, TFT_DC, TFT_RST);
-Adafruit_ST7789 tft = Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
+TFT_eSPI tft = TFT_eSPI();
 Adafruit_ADS1115 dedicatedADC;
 VescUart VESC;
 
@@ -537,8 +532,55 @@ void clock_date_and_time() {
     }
 }
 
+class VerticalBar {
+private:
+    int previousValue = -1;
+
+public:
+    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char barName[10]) {
+    int lastValue = -1;
+    int value_map = map_f(value, value_min, value_max, 0, 100);
+
+    if (value == lastValue) return; // No need to redraw
+    lastValue = value_map;
+
+    int filledHeight = map(value_map, 0, 100, 0, height);
+    int greenEnd  = map(60, 0, 100, 0, height);
+    int yellowEnd = map(85, 0, 100, 0, height);
+
+    int baseY = y + height;
+
+    tft.setTextSize(2);
+    tft.setCursor(x+3, y-16);
+    tft.printf("%s", barName);
+    tft.setTextSize(1);
+    tft.setCursor(x+3, baseY+2);
+    tft.printf("%1.0f  ", value);
+
+    // Draw filled portion
+    tft.fillRect(x+1, y+1, width-2, height-2, TFT_DARKGREY);
+
+    // Red zone
+    if (filledHeight > yellowEnd)
+        tft.fillRect(x, baseY - filledHeight, width, filledHeight - yellowEnd, TFT_RED);
+
+    // Yellow zone
+    if (filledHeight > greenEnd)
+        tft.fillRect(x, baseY - min(filledHeight, yellowEnd), width, min(filledHeight, yellowEnd) - greenEnd, TFT_YELLOW);
+
+    // Green zone
+    if (filledHeight > 0)
+        tft.fillRect(x, baseY - min(filledHeight, greenEnd), width, min(filledHeight, greenEnd), TFT_GREEN);
+
+    // Border
+    tft.drawRect(x, y, width, height, TFT_WHITE);
+    }
+};
+VerticalBar barAp;
+VerticalBar barW;
+
 void redrawScreen() {
-    tft.fillScreen(ST77XX_BLACK);
+    tft.fillScreen(TFT_BLACK);
     firsttime_draw = 1;
 }
 
@@ -557,21 +599,24 @@ void printDisplay() {
     tft.setTextSize(2);
 
     // Battery
-    // tft.setCursor(268, 3); tft.printf("%3.0f%%", batteryPercentage);
+    tft.setCursor(236, 3); tft.printf("%6.1f%%", battery.percentage);
     // Battery with amphours used
-    tft.setCursor(150, 3); tft.printf("%5.3fAh %4.1f%%", battery.ampHoursUsed, battery.percentage); //batteryAmpHours
+    // tft.setCursor(150, 3); tft.printf("%5.3fAh %4.1f%%", battery.ampHoursUsed, battery.percentage); //batteryAmpHours
 
     // Upper Divider
     if (firsttime_draw) {
-        tft.drawLine(0, 20, 320, 20, ST77XX_WHITE);
+        tft.drawLine(0, 20, 320, 20, TFT_WHITE);
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
     tft.setCursor(3, 28); tft.printf("W:%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
     tft.setCursor(3, 47); tft.printf("V:  %4.1f ", battery.voltage);
     tft.setCursor(3, 66); tft.printf("A:  %6.3f ", batteryAuxMovingAverage.moveAverage(battery.current));
-    tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
-    tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
+    tft.setCursor(3, 85); tft.printf("Ah: %6.3f ", battery.ampHoursUsed);
+    // tft.setCursor(3, 104); tft.printf("R: %3.1fkm ", estimatedRange.range);
+    // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
+    // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESCdata.avgInputCurrent); //vescCurrent, vescAmpHours
+    // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
     // tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
     // tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
 
@@ -583,15 +628,15 @@ void printDisplay() {
     // consumption over last 1km
     tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", WhOverKmMovingAverage.moveAverage(wh_over_km));
     tft.setCursor(207-20, 28+19); tft.printf("%5.1f Wh/km", wh_over_km_average);
-    tft.setCursor(207-20-40, 28+19+19); tft.printf("Range: %7.1f", estimatedRange.range);
+    tft.setCursor(207-20, 28+19+19); tft.printf("%5.1f km", estimatedRange.range);
 
     // Speed
     tft.setTextSize(5);
-    tft.setCursor(125, 106); tft.printf("%4.1f", speed_kmh);
+    tft.setCursor(100, 106); tft.printf("%4.1f", speed_kmh);
     tft.setCursor(248, 127); tft.setTextSize(2);
-    if (firsttime_draw) {
-        tft.println("km/h");
-    }
+    // if (firsttime_draw) {
+    //     tft.println("km/h");
+    // }
 
     // Gear // Power Level
     if (firsttime_draw || (DNU_selectedGear != selectedGear) || (DNU_selectedPowerMode != selectedPowerMode)) {
@@ -614,7 +659,7 @@ void printDisplay() {
 
     if (firsttime_draw) {
         // Bottom Divider
-        tft.drawLine(0, 215, 320, 215, ST77XX_WHITE);
+        tft.drawLine(0, 215, 320, 215, TFT_WHITE);
     }
 
     // Odometer
@@ -642,6 +687,9 @@ void printDisplay() {
         tft.setCursor(160, 150);
         tft.println(text);
     }
+
+    barAp.drawVerticalBar(280, 104, 30, 92, VESCdata.avgMotorCurrent, 0, 180, "Ap");
+    barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
 
     if (firsttime_draw) {
         firsttime_draw = disableOptimizedDrawing; // should be 0
@@ -839,10 +887,10 @@ void app_main(void)
     motor.magnetPairs = 6;
     wheel.diameter = 63.0f;
     wheel.gear_ratio = 5.7f;
-    battery.voltage_min = 62.0f;
+    battery.voltage_min = 66.0f;
     battery.voltage_max = 82.0f;
 
-    battery.amphours_min_voltage = 64.0f;
+    battery.amphours_min_voltage = 67.0f;
     battery.amphours_max_voltage = 82.0f;
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
@@ -891,7 +939,7 @@ void app_main(void)
     BatWattMovingAverage.smoothingFactor = 0.1;
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
     Throttle.smoothingFactor = 0.1;
-    WhOverKmMovingAverage.smoothingFactor = 0.25;
+    WhOverKmMovingAverage.smoothingFactor = 0.05;
     batteryAuxWattsMovingAverage.smoothingFactor = 0.2;
     batteryAuxMovingAverage.smoothingFactor = 0.2;
     batteryWattsMovingAverage.smoothingFactor = 0.2;
@@ -919,15 +967,14 @@ void app_main(void)
 
     // tftVSPI.begin(18, 19, 23, TFT_RST);
 
-    tft.init(240, 320); // Init ST7789 320x240
-    tft.setRotation(3); // 270 degrees rotation
+    tft.init(); // Init ST7789 320x240
+    tft.setRotation(1); // 270 degrees rotation
     // SPI speed defaults to SPI_DEFAULT_FREQ defined in the library, you can override it here
     // Note that speed allowable depends on chip and quality of wiring, if you go too fast, you
     // may end up with a black screen some times, or all the time.
-    tft.setSPISpeed(40000000);
-    tft.invertDisplay(false);
-    tft.fillScreen(ST77XX_BLACK);
-    tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
+    tft.setSwapBytes(true);
+    tft.fillScreen(TFT_BLACK);
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
     tft.setCursor(0, 0);
 
     // Configure ADC width (resolution)
