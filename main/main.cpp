@@ -136,8 +136,6 @@ bool drawUptime = 1;
 bool printCoreExecutionTime = 0;
 bool disableOptimizedDrawing = 0;
 bool batteryPercentageVoltageBased = 0;
-bool cutMotorPower = 0;
-bool cutRotorPower = 1;
 
 bool rotorCanPowerMotor = 1;
 bool rotorCutOff_temp = 1;
@@ -175,8 +173,6 @@ int selectedPowerMode, DNU_selectedPowerMode;
 
 float PotThrottleAdjustment;
 float PotThrottleLevelReal;
-float PotThrottleLevel;
-float PotThrottleLevelPowerLimited;
 
 char text[128];
 
@@ -304,7 +300,7 @@ void IRAM_ATTR ADCNewDataReadyISR() {
 }
 
 uint32_t timerDedicatedADC = timer_u32();
-void dedicatedADCDiff() {
+void getBatteryCurrent() {
     // If we don't have new data, skip this iteration.
     if (!dedicatedADC_new_data) {
         // while(!dedicatedADC_new_data);
@@ -368,7 +364,7 @@ int GearLevel0DutyCycle = 0; // 0W
 int GearLevel1DutyCycle = 255; // ~180W
 int GearLevel2DutyCycle = 180; // ~100W
 int GearLevel3DutyCycle = 110; // ~50W
-int GearLevelIdleDutyCycle = 110; // There is some power so the VESC can track the speed
+int GearLevelTrackSpeedDutyCycle = 70; // There is some power so the VESC can track the speed
 int GearLevelIdleLittleCurrentDutyCycle = 10; //10 // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
@@ -650,7 +646,7 @@ void printDisplay() {
     // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
     // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESCdata.avgInputCurrent); //vescCurrent, vescAmpHours
     // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
-    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
+    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevelReal);
     // tft.setCursor(3, 142); tft.printf("Dut:%3.0f%%", VESC.data.dutyCycleNow);
 
     // tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
@@ -752,89 +748,11 @@ void loop_core1 (void* pvParameters) {
         BatVoltageMovingAverage.initInput(battery.voltage);
 
         // BATTERY CURRENT
-        dedicatedADCDiff();
+        // Calculates wattHoursUsed, ampHoursUsed, ampHoursUsedLifetime
+        getBatteryCurrent();
 
         battery.watts = battery.voltage * battery.current;
 
-        potThrottleVoltage = (
-            PotThrottleCorrection.correctInput(
-                PotThrottleMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _potThrottleVoltage
-                )
-            )
-        );
-        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
-
-        // TODO: REDO this whole mess of a thing for gears and shit
-        if ((int)PotThrottleLevelReal == 0) {
-            if (rotorCutOff_temp == true) {
-                rotorCutOff_temp = false;
-                timeRotorSleep = timer_u32();
-            }
-
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 500) {
-                rotorCanPowerMotor = 0;
-                cutRotorPower = 1;
-
-                if (GearDutyCycle == GearLevel0DutyCycle) {
-                    setDuty(LEDC_CHANNEL_0, GearLevel0DutyCycle);
-                } else if (VESCdata.erpm < 50) {
-                    setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
-                } else {
-                    setDuty(LEDC_CHANNEL_0, GearLevelIdleDutyCycle);
-                }
-            }
-        } else {
-            cutRotorPower = 0;
-
-            if (settings.automaticGearChanging == 1) {
-                if (VESC.data.avgMotorCurrent >= 110.0) { // PotThrottleAmpsRequested
-                    setGearLevel(1);
-                } else if (VESC.data.avgMotorCurrent >= 45.0) { // PotThrottleAmpsRequested
-                    setGearLevel(2);
-                } else {
-                    setGearLevel(3);
-                }
-            }
-
-            setDuty(LEDC_CHANNEL_0, GearDutyCycle);
-
-            if (rotorCutOff_temp == false) {
-                rotorCutOff_temp = true;
-                timeRotorSleep = timer_u32();
-            }
-
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= 0) { // can be 0 when there's always power going to the rotor
-                rotorCanPowerMotor = 1;
-            }
-        }
-
-        // Throttle stuff
-        if (cutMotorPower || selectedGear == 0 ) { //|| rotorCanPowerMotor == 0
-            PotThrottleLevel = 0;
-            PotThrottleLevelPowerLimited = 0;
-            VESC.setCurrent(0.0f);
-        } else {
-            PotThrottleLevel = PotThrottleLevelReal;
-            // PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
-            PotThrottleAmpsRequested = map_f(PotThrottleLevel, 0, 100, 0, gear1.maxCurrent);
-            
-            // PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-
-            // if (PotThrottleLevelReal == 0) {
-                // VESC.setBrakeCurrent(100);
-            // } else {
-                VESC.setCurrent(
-                    clampValue(
-                        PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
-                    )
-                ); //PotThrottleLevelPowerLimited
-            // }
-            // VESC.setCurrent(PotThrottleAmpsRequested);
-            // setVescThrottleBrake(PotThrottleLevel);
-            // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
-        }
-        
         // Battery charge tracking stuff
         if (batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
@@ -861,6 +779,73 @@ void loop_core1 (void* pvParameters) {
 
                 estimatedRangeReset();
             }
+        }
+
+        // Map throttle
+        potThrottleVoltage = (
+            PotThrottleCorrection.correctInput(
+                PotThrottleMovingAverage.moveAverage(
+                    ((float)3.3/(float)4095) * _potThrottleVoltage
+                )
+            )
+        );
+        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
+
+        // Gears
+        int rotorTimeoutMs = 5000;
+        int rotorEnergiseTimeMs = 500;
+
+        if (PotThrottleLevelReal < 1) {
+            if (rotorCutOff_temp == true) {
+                rotorCutOff_temp = false;
+                timeRotorSleep = timer_u32();
+            }
+
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorTimeoutMs) {
+                rotorCanPowerMotor = 0;
+
+                // if the erpm is lower than 50 -> send little power to rotor (maybe 1 watt?)
+                // else send enough power to the rotor to track speed accurately
+                if (VESCdata.erpm < 50.0f) {
+                    setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
+                } else {
+                    setDuty(LEDC_CHANNEL_0, GearLevelTrackSpeedDutyCycle);
+                }
+            }
+        } else {
+            if (rotorCutOff_temp == false) {
+                rotorCutOff_temp = true;
+                timeRotorSleep = timer_u32();
+            }
+
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorEnergiseTimeMs) { // can be 0 when there's always power going to the rotor
+                rotorCanPowerMotor = 1;
+            }
+
+            if (settings.automaticGearChanging == 1) {
+                if (VESC.data.avgMotorCurrent >= 110.0) { // PotThrottleAmpsRequested
+                    setGearLevel(1);
+                } else if (VESC.data.avgMotorCurrent >= 45.0) { // PotThrottleAmpsRequested
+                    setGearLevel(2);
+                } else {
+                    setGearLevel(3);
+                }
+            }
+
+            setDuty(LEDC_CHANNEL_0, GearDutyCycle);
+        }
+
+        // Throttle
+        if (rotorCanPowerMotor == 0) {
+            VESC.setCurrent(0.0f);
+        } else {
+            PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
+            
+            VESC.setCurrent(
+                clampValue(
+                    PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
+                )
+            );
         }
 
         // Execute every second that elapsed
