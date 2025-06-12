@@ -31,6 +31,10 @@ TFT_eSPI tft = TFT_eSPI();
 Adafruit_ADS1115 dedicatedADC;
 VescUart VESC;
 
+struct {
+    bool automaticGearChanging;
+} settings;
+
 // Values From VESC
 struct {
     float erpm;
@@ -81,9 +85,15 @@ struct {
     float wattHoursUsed;
     float percentage;
     float ampHoursRated;
+    float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
 } battery;
+
+struct {
+    int level;
+    int maxCurrent;
+} gear1, gear2, gear3, gearCurrent;
 
 struct {
     float range;
@@ -105,6 +115,7 @@ float batteryampHoursUsed_tmp;
 
 float  _potThrottleVoltage;
 float potThrottleVoltage;
+float PotThrottleAmpsRequested;
 
 float wh_over_km = 0; // immediate
 float wh_over_km_average = 0; // over time
@@ -204,6 +215,15 @@ MiniPID powerLimiterPID(kP, kI, kD);
 // Enabling C++ compile
 extern "C" { void app_main(); }
 
+int setDuty_previousDuty;
+void setDuty(ledc_channel_t channel, int duty) {
+    if (setDuty_previousDuty != duty) { // set the new dutyCycle only if the value is different from the previous one
+        setDuty_previousDuty = duty;
+        ledc_set_duty(LEDC_HIGH_SPEED_MODE, channel, duty);
+        ledc_update_duty(LEDC_HIGH_SPEED_MODE, channel);
+    }
+}
+
 void estimatedRangeReset() {
     estimatedRange.ampHoursUsedOnStart  = battery.ampHoursUsed;
     estimatedRange.distance             = 0;
@@ -226,22 +246,17 @@ void preferencesSaveBattery() {
 }
 
 float maxCurrentAtERPM(int erpm) {
-    float ERPM_current_20 = 430.0f;
-    float ERPM_current_100 = 1000.0f;
-    float ERPM_current_180 = 3500.0f;
+    float ERPM_current1 = 1500.0f; // ((2400/6)/5.7) * 63 * 3.14 * 60 / 100000 = 8.32  km/h
+    float ERPM_current2 = 1700.0f; // ((3000/6)/5.7) * 63 * 3.14 * 60 / 100000 = 10.41 km/h
 
-    if (erpm <= ERPM_current_20) {
-        return 20.0f;
-    } else if (erpm <= ERPM_current_100) {
-        // Linear interpolation between 10A at 430 ERPM and 100A at 1000 ERPM
-        float slope = (100.0f - 20.0f) / (ERPM_current_100 - ERPM_current_20);
-        return slope * (erpm - ERPM_current_20);
-    } else if (erpm < ERPM_current_180) {
-        // Linear interpolation between 100A at 1000 ERPM and 180A at 3500 ERPM
-        float slope = (180.0f - 100.0f) / (ERPM_current_180 - ERPM_current_100);
-        return 100.0f + slope * (erpm - ERPM_current_100);
+    if (erpm <= ERPM_current1) {
+        return 120.0f;
+    } else if (erpm <= ERPM_current2) {
+        // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
+        float slope = (190.0f - 120.0f) / (ERPM_current2 - ERPM_current1);
+        return 120 + slope * (erpm - ERPM_current1);
     } else {
-        return 180.0f;
+        return 190.0f;
     }
 }
 
@@ -350,10 +365,10 @@ void setPowerLevel(int level) {
 
 // rotor electromagnet DC resistance is around 3,05 ohms
 int GearLevel0DutyCycle = 0; // 0W
-int GearLevel1DutyCycle = 255; // 15V = 73.7W
-int GearLevel2DutyCycle = 187; // 10.88V = 38.8W
-int GearLevel3DutyCycle = 100; // 6.86V = 15.4W
-int GearLevelIdleDutyCycle = GearLevel1DutyCycle; // There is some power so the VESC can track the speed
+int GearLevel1DutyCycle = 255; // ~180W
+int GearLevel2DutyCycle = 180; // ~100W
+int GearLevel3DutyCycle = 110; // ~50W
+int GearLevelIdleDutyCycle = 110; // There is some power so the VESC can track the speed
 int GearLevelIdleLittleCurrentDutyCycle = 10; //10 // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
@@ -361,25 +376,28 @@ void setGearLevel(int level) {
     if (level == 0) {
         selectedGear = 0;
         GearDutyCycle = GearLevel0DutyCycle;
+        // gearCurrent = gear1;
     }
 
     if (level == 1) {
         selectedGear = 1;
         GearDutyCycle = GearLevel1DutyCycle;
+        gearCurrent = gear1;
     }
 
     if (level == 2) {
         selectedGear = 2;
         GearDutyCycle = GearLevel2DutyCycle;
+        gearCurrent = gear2;
     }
 
     if (level == 3) {
         selectedGear = 3;
         GearDutyCycle = GearLevel3DutyCycle;
+        gearCurrent = gear3;
     }
 
-    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearDutyCycle);
-    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+    setDuty(LEDC_CHANNEL_0, GearDutyCycle);
 }
 
 int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetweenInterrupts) {
@@ -537,50 +555,64 @@ private:
     int previousValue = -1;
 
 public:
-    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char barName[10]) {
-    int lastValue = -1;
-    int value_map = map_f(value, value_min, value_max, 0, 100);
+    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char barName[10], bool drawInputValue) {
+        int lastValue = -1;
+        int value_map = map_f(value, value_min, value_max, 0.0, 100.0);
 
-    if (value == lastValue) return; // No need to redraw
-    lastValue = value_map;
+        if ((int)value == lastValue)
+            return; // No need to redraw
 
-    int filledHeight = map(value_map, 0, 100, 0, height);
-    int greenEnd  = map(60, 0, 100, 0, height);
-    int yellowEnd = map(85, 0, 100, 0, height);
+        lastValue = value_map;
 
-    int baseY = y + height;
+        int filledHeight = map(value_map, 0, 100, 0, height);
+        int greenEnd  = map(60, 0, 100, 0, height);
+        int yellowEnd = map(85, 0, 100, 0, height);
 
-    tft.setTextSize(2);
-    tft.setCursor(x+3, y-16);
-    tft.printf("%s", barName);
-    tft.setTextSize(1);
-    tft.setCursor(x+3, baseY+2);
-    tft.printf("%1.0f  ", value);
+        int baseY = y + height;
 
-    // Draw filled portion
-    tft.fillRect(x+1, y+1, width-2, height-2, TFT_DARKGREY);
+        tft.setTextSize(2);
+        tft.setCursor(x+3, y-16);
+        tft.printf("%s", barName);
+        tft.setTextSize(1);
+        tft.setCursor(x+3, baseY+2);
+        if (drawInputValue == true)
+            tft.printf("%1.0f  ", value);
+        else
+            tft.printf("%1d  ", value_map);
 
-    // Red zone
-    if (filledHeight > yellowEnd)
-        tft.fillRect(x, baseY - filledHeight, width, filledHeight - yellowEnd, TFT_RED);
+        // Draw filled portion
 
-    // Yellow zone
-    if (filledHeight > greenEnd)
-        tft.fillRect(x, baseY - min(filledHeight, yellowEnd), width, min(filledHeight, yellowEnd) - greenEnd, TFT_YELLOW);
+        // inside of border
+        // tft.fillRect(x+1, y+1, width-2, height-2, TFT_DARKGREY);
 
-    // Green zone
-    if (filledHeight > 0)
-        tft.fillRect(x, baseY - min(filledHeight, greenEnd), width, min(filledHeight, greenEnd), TFT_GREEN);
+        // only refill a part of the rectangle so that it doesn't flicker by clearing the whole rectangle and then again drawing over it
+        tft.fillRect(x+1, y+1, width-2, height - filledHeight, TFT_LIGHTGREY);
 
-    // Border
-    tft.drawRect(x, y, width, height, TFT_WHITE);
+        // // Red zone
+        // if (filledHeight > yellowEnd)
+        //     tft.fillRect(x, baseY - filledHeight, width, filledHeight - yellowEnd, TFT_RED);
+
+        // // Yellow zone
+        // if (filledHeight > greenEnd)
+        //     tft.fillRect(x, baseY - min(filledHeight, yellowEnd), width, min(filledHeight, yellowEnd) - greenEnd, TFT_YELLOW);
+
+        // // Green zone
+        // if (filledHeight > 0)
+        //     tft.fillRect(x, baseY - min(filledHeight, greenEnd), width, min(filledHeight, greenEnd), TFT_GREEN);
+
+        // Red zone all the way
+        if (filledHeight > 0)
+            tft.fillRect(x+1, baseY - filledHeight + 1, width-2, filledHeight -2, TFT_RED);
+
+        // Border
+        tft.drawRect(x, y, width, height, TFT_BLACK);
     }
 };
 VerticalBar barAp;
 VerticalBar barW;
 
 void redrawScreen() {
-    tft.fillScreen(TFT_BLACK);
+    tft.fillScreen(TFT_WHITE);
     firsttime_draw = 1;
 }
 
@@ -605,20 +637,21 @@ void printDisplay() {
 
     // Upper Divider
     if (firsttime_draw) {
-        tft.drawLine(0, 20, 320, 20, TFT_WHITE);
+        tft.drawLine(0, 20, 320, 20, TFT_BLACK);
     }
 
     // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf("W:%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
-    tft.setCursor(3, 47); tft.printf("V:  %4.1f ", battery.voltage);
-    tft.setCursor(3, 66); tft.printf("A:  %6.3f ", batteryAuxMovingAverage.moveAverage(battery.current));
-    tft.setCursor(3, 85); tft.printf("Ah: %6.3f ", battery.ampHoursUsed);
+    tft.setCursor(3, 28); tft.printf ("W:%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
+    tft.setCursor(3, 47); tft.printf ("V:  %4.1f ", battery.voltage);
+    tft.setCursor(3, 66); tft.printf ("A:  %6.3f ", batteryAuxMovingAverage.moveAverage(battery.current));
+    tft.setCursor(3, 85); tft.printf ("Ah: %6.3f ", battery.ampHoursUsed);
+    tft.setCursor(3, 104); tft.printf("T: %3.0f C ", VESC.data.tempMotor);
     // tft.setCursor(3, 104); tft.printf("R: %3.1fkm ", estimatedRange.range);
     // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
     // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESCdata.avgInputCurrent); //vescCurrent, vescAmpHours
     // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
-    // tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
-    // tft.setCursor(3, 142); tft.printf("CutRo: %d ", cutRotorPower);
+    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevel);
+    // tft.setCursor(3, 142); tft.printf("Dut:%3.0f%%", VESC.data.dutyCycleNow);
 
     // tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
     // tft.setCursor(3, 85); tft.printf("A: %6.3f  ", vescCurrent);
@@ -644,7 +677,7 @@ void printDisplay() {
         DNU_selectedPowerMode = selectedPowerMode;
 
         // tft.setTextColor(ST77XX_BLACK, ST77XX_WHITE);
-        tft.setCursor(125, 147); tft.printf("Gear:  %d", selectedGear);
+        tft.setCursor(125, 147); tft.printf("Gear:  %d", gearCurrent.level);
         tft.setCursor(125, 166); tft.printf("Power: %d", selectedPowerMode);
         // tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
     }
@@ -659,7 +692,7 @@ void printDisplay() {
 
     if (firsttime_draw) {
         // Bottom Divider
-        tft.drawLine(0, 215, 320, 215, TFT_WHITE);
+        tft.drawLine(0, 215, 320, 215, TFT_BLACK);
     }
 
     // Odometer
@@ -688,8 +721,9 @@ void printDisplay() {
         tft.println(text);
     }
 
-    barAp.drawVerticalBar(280, 104, 30, 92, VESCdata.avgMotorCurrent, 0, 180, "Ap");
-    barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
+    barAp.drawVerticalBar(280, 104, 30, 92, VESCdata.avgMotorCurrent, 0, gear1.maxCurrent, "Ap", true);
+    barW.drawVerticalBar(240, 104, 30, 92, VESC.data.dutyCycleNow, 0.0, 1.0, "Duty", false);
+    // barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
 
     if (firsttime_draw) {
         firsttime_draw = disableOptimizedDrawing; // should be 0
@@ -709,7 +743,6 @@ void loop_core1 (void* pvParameters) {
         for (int i = 0; i < 15; i++) {
             _batteryVoltage += adc1_get_raw(pinBatteryVoltage);
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
-
         }
         _batteryVoltage = _batteryVoltage / 15;
         _potThrottleVoltage = _potThrottleVoltage / 15;
@@ -730,8 +763,9 @@ void loop_core1 (void* pvParameters) {
                 )
             )
         );
-        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.2, 3.05, 0, 100);
+        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
 
+        // TODO: REDO this whole mess of a thing for gears and shit
         if ((int)PotThrottleLevelReal == 0) {
             if (rotorCutOff_temp == true) {
                 rotorCutOff_temp = false;
@@ -743,20 +777,27 @@ void loop_core1 (void* pvParameters) {
                 cutRotorPower = 1;
 
                 if (GearDutyCycle == GearLevel0DutyCycle) {
-                    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevel0DutyCycle);
-                    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                    setDuty(LEDC_CHANNEL_0, GearLevel0DutyCycle);
                 } else if (VESCdata.erpm < 50) {
-                    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
-                    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                    setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
                 } else {
-                    ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearLevelIdleDutyCycle);
-                    ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+                    setDuty(LEDC_CHANNEL_0, GearLevelIdleDutyCycle);
                 }
             }
         } else {
             cutRotorPower = 0;
-            ledc_set_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0, GearDutyCycle);
-            ledc_update_duty(LEDC_HIGH_SPEED_MODE, LEDC_CHANNEL_0);
+
+            if (settings.automaticGearChanging == 1) {
+                if (VESC.data.avgMotorCurrent >= 110.0) { // PotThrottleAmpsRequested
+                    setGearLevel(1);
+                } else if (VESC.data.avgMotorCurrent >= 45.0) { // PotThrottleAmpsRequested
+                    setGearLevel(2);
+                } else {
+                    setGearLevel(3);
+                }
+            }
+
+            setDuty(LEDC_CHANNEL_0, GearDutyCycle);
 
             if (rotorCutOff_temp == false) {
                 rotorCutOff_temp = true;
@@ -768,21 +809,28 @@ void loop_core1 (void* pvParameters) {
             }
         }
 
-        // for now, directly map voltage from the throttle to the pot input pin of VESC
+        // Throttle stuff
         if (cutMotorPower || selectedGear == 0 ) { //|| rotorCanPowerMotor == 0
             PotThrottleLevel = 0;
             PotThrottleLevelPowerLimited = 0;
             VESC.setCurrent(0.0f);
         } else {
             PotThrottleLevel = PotThrottleLevelReal;
-            PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
+            // PotThrottleAdjustment = powerLimiterPID.getOutput(battery.watts);
+            PotThrottleAmpsRequested = map_f(PotThrottleLevel, 0, 100, 0, gear1.maxCurrent);
             
-            PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
-            VESC.setCurrent(
-                clampValue(
-                    map_f(PotThrottleLevel, 0, 100, 0, 180), maxCurrentAtERPM(VESC.data.rpm)
-                )
-            ); //PotThrottleLevelPowerLimited
+            // PotThrottleLevelPowerLimited = Throttle.moveAverage(PotThrottleLevel + PotThrottleAdjustment);
+
+            // if (PotThrottleLevelReal == 0) {
+                // VESC.setBrakeCurrent(100);
+            // } else {
+                VESC.setCurrent(
+                    clampValue(
+                        PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
+                    )
+                ); //PotThrottleLevelPowerLimited
+            // }
+            // VESC.setCurrent(PotThrottleAmpsRequested);
             // setVescThrottleBrake(PotThrottleLevel);
             // VESC.setCurrent(map_f(PotThrottleLevel, 0, 100, 0, 180)); //PotThrottleLevelPowerLimited
         }
@@ -796,7 +844,10 @@ void loop_core1 (void* pvParameters) {
 
         BatVoltageMovingAverage.moveAverage(battery.voltage);
         if (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) {
-            battery.ampHoursRated = battery.ampHoursUsed;
+            battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
+                                                              // this temporary value will later get applied to the actual
+                                                              // ampHourRated variable when the battery is done charging so
+                                                              // the estimated range and other stuff doesn't suddenly get screwed
         }
 
         if (BatVoltageMovingAverage.output >= battery.amphours_max_voltage) {
@@ -804,6 +855,10 @@ void loop_core1 (void* pvParameters) {
             if (PotThrottleLevelReal == 0 && (battery.current < -0.05 && battery.current >= -0.5)) {
                 battery.ampHoursUsed = 0;
                 battery.wattHoursUsed = 0;
+                if (battery.ampHoursRated_tmp != 0.0) {
+                    battery.ampHoursRated = battery.ampHoursRated_tmp;
+                }
+
                 estimatedRangeReset();
             }
         }
@@ -876,6 +931,12 @@ void loop_core1 (void* pvParameters) {
         estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
         estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
 
+        // if (VESC.data.tempMotor >= 105) {
+        //     gear1.maxCurrent = 130;
+        // } else if (VESC.data.tempMotor < 105) {
+        //     gear1.maxCurrent = 190;
+        // }
+
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -892,6 +953,20 @@ void app_main(void)
 
     battery.amphours_min_voltage = 67.0f;
     battery.amphours_max_voltage = 82.0f;
+
+    battery.ampHoursRated_tmp = 0.0;
+
+    settings.automaticGearChanging = 1;
+
+    gear1.level = 1;
+    gear1.maxCurrent = 190;
+    gear2.level = 2;
+    gear2.maxCurrent = 120;
+    gear3.level = 3;
+    gear3.maxCurrent = 65;
+
+    gearCurrent = gear1;
+
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset
@@ -973,8 +1048,8 @@ void app_main(void)
     // Note that speed allowable depends on chip and quality of wiring, if you go too fast, you
     // may end up with a black screen some times, or all the time.
     tft.setSwapBytes(true);
-    tft.fillScreen(TFT_BLACK);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.fillScreen(TFT_WHITE);
+    tft.setTextColor(TFT_BLACK, TFT_WHITE);
     tft.setCursor(0, 0);
 
     // Configure ADC width (resolution)
@@ -1028,7 +1103,7 @@ void app_main(void)
     // powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
-    setGearLevel(1);
+    setGearLevel(2);
 
     // setup ebike namespace
     preferences.begin("ebike", false);
@@ -1045,7 +1120,7 @@ void app_main(void)
     estimatedRangeReset();
     odometer.distance_tmp = odometer.distance;
 
-    delay(2000);
+    delay(1000);
 
     xTaskCreatePinnedToCore (
     loop_core1,     // Function to implement the task
@@ -1128,6 +1203,11 @@ void app_main(void)
             {
                 drawUptime = getValueFromString("drawUptime", readString);
                 redrawScreen();
+            }
+
+            if (readString.contains("gearDutyCycle="))
+            {
+                GearLevel1DutyCycle = (int)getValueFromString("gearDutyCycle", readString);
             }
 
             if (readString.contains("motorCurrent="))
