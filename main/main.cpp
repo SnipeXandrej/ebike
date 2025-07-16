@@ -242,17 +242,17 @@ void preferencesSaveBattery() {
 }
 
 float maxCurrentAtERPM(int erpm) {
-    float ERPM_current1 = 1500.0f; // ((2400/6)/5.7) * 63 * 3.14 * 60 / 100000 = 8.32  km/h
-    float ERPM_current2 = 1700.0f; // ((3000/6)/5.7) * 63 * 3.14 * 60 / 100000 = 10.41 km/h
+    float ERPM_current1 = 1500.0f; // ((1500/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.21 km/h
+    float ERPM_current2 = 1700.0f; // ((1700/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.9  km/h
 
     if (erpm <= ERPM_current1) {
         return 120.0f;
     } else if (erpm <= ERPM_current2) {
         // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
-        float slope = (190.0f - 120.0f) / (ERPM_current2 - ERPM_current1);
+        float slope = (gear1.maxCurrent - 120.0f) / (ERPM_current2 - ERPM_current1);
         return 120 + slope * (erpm - ERPM_current1);
     } else {
-        return 190.0f;
+        return gear1.maxCurrent;
     }
 }
 
@@ -315,10 +315,14 @@ void getBatteryCurrent() {
     _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
     battery.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
     battery.ampHoursUsedLifetime += _batteryCurrentUsedInElapsedTime / 3600.0;
-    estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
+    if (_batteryCurrentUsedInElapsedTime >= 0.0) {
+        estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
+    }
 
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+    if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
+            battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+    }
 
     dedicatedADC_new_data = false;
     // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timerDedicatedADC));
@@ -361,7 +365,7 @@ void setPowerLevel(int level) {
 
 // rotor electromagnet DC resistance is around 3,05 ohms
 int GearLevel0DutyCycle = 0; // 0W
-int GearLevel1DutyCycle = 255; // ~180W
+int GearLevel1DutyCycle = 225; // ~180W
 int GearLevel2DutyCycle = 180; // ~100W
 int GearLevel3DutyCycle = 110; // ~50W
 int GearLevelTrackSpeedDutyCycle = 70; // There is some power so the VESC can track the speed
@@ -696,7 +700,7 @@ void printDisplay() {
         odometer.DNU_refresh = odometer.distance;
         tft.setTextSize(2);
         tft.setCursor(3, 220);
-        tft.printf("O: %.2f", odometer.distance);
+        tft.printf("O: %.0f", odometer.distance);
     }
 
     // Trip
@@ -718,7 +722,7 @@ void printDisplay() {
     }
 
     barAp.drawVerticalBar(280, 104, 30, 92, VESCdata.avgMotorCurrent, 0, gear1.maxCurrent, "Ap", true);
-    barW.drawVerticalBar(240, 104, 30, 92, VESC.data.dutyCycleNow, 0.0, 1.0, "Duty", false);
+    barW.drawVerticalBar(240, 104, 30, 92, VESC.data.dutyCycleNow, 0.0, 1.0, "D", false);
     // barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
 
     if (firsttime_draw) {
@@ -792,8 +796,8 @@ void loop_core1 (void* pvParameters) {
         PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
 
         // Gears
-        int rotorTimeoutMs = 5000;
-        int rotorEnergiseTimeMs = 500;
+        int rotorTimeoutMs = 10000;
+        int rotorEnergiseTimeMs = 150;
 
         if (PotThrottleLevelReal < 1) {
             if (rotorCutOff_temp == true) {
@@ -802,14 +806,17 @@ void loop_core1 (void* pvParameters) {
             }
 
             if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorTimeoutMs) {
-                rotorCanPowerMotor = 0;
-
                 // if the erpm is lower than 50 -> send little power to rotor (maybe 1 watt?)
                 // else send enough power to the rotor to track speed accurately
                 if (VESCdata.erpm < 50.0f) {
                     setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
+                    rotorCanPowerMotor = 0;
                 } else {
                     setDuty(LEDC_CHANNEL_0, GearLevelTrackSpeedDutyCycle);
+                }
+            } else {
+                if (settings.automaticGearChanging == 1) {
+                    setGearLevel(3);
                 }
             }
         } else {
@@ -818,7 +825,7 @@ void loop_core1 (void* pvParameters) {
                 timeRotorSleep = timer_u32();
             }
 
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorEnergiseTimeMs) { // can be 0 when there's always power going to the rotor
+            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorEnergiseTimeMs) {
                 rotorCanPowerMotor = 1;
             }
 
@@ -831,8 +838,6 @@ void loop_core1 (void* pvParameters) {
                     setGearLevel(3);
                 }
             }
-
-            setDuty(LEDC_CHANNEL_0, GearDutyCycle);
         }
 
         // Throttle
@@ -846,20 +851,6 @@ void loop_core1 (void* pvParameters) {
                     PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
                 )
             );
-        }
-
-        // Execute every second that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
-            timeExecEverySecondCore1 = timer_u32();
-
-            // stuff to run
-        }
-
-        // Execute every 100ms that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 100) {
-            timeExecEvery100millisecondsCore1 = timer_u32();
-
-            // stuff to run
         }
 
         if (VESC.getVescValues()) {
@@ -916,11 +907,19 @@ void loop_core1 (void* pvParameters) {
         estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
         estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
 
-        // if (VESC.data.tempMotor >= 105) {
-        //     gear1.maxCurrent = 130;
-        // } else if (VESC.data.tempMotor < 105) {
-        //     gear1.maxCurrent = 190;
-        // }
+        // Execute every second that elapsed
+        if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
+            timeExecEverySecondCore1 = timer_u32();
+
+            // stuff to run
+        }
+
+        // Execute every 100ms that elapsed
+        if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 100) {
+            timeExecEvery100millisecondsCore1 = timer_u32();
+
+            // stuff to run
+        }
 
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -938,19 +937,22 @@ void app_main(void)
 
     battery.amphours_min_voltage = 67.0f;
     battery.amphours_max_voltage = 82.0f;
-
     battery.ampHoursRated_tmp = 0.0;
 
     settings.automaticGearChanging = 1;
 
+    // GEARS
     gear1.level = 1;
-    gear1.maxCurrent = 190;
+    gear1.maxCurrent = 160;
+
     gear2.level = 2;
-    gear2.maxCurrent = 120;
+    gear2.maxCurrent = 100;
+
     gear3.level = 3;
     gear3.maxCurrent = 65;
 
     gearCurrent = gear1;
+
 
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
