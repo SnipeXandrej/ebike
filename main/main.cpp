@@ -128,6 +128,7 @@ uint32_t timeExecEverySecondCore0 = 0;
 uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
+uint32_t timeAmphoursMinVoltage = 0;
 unsigned long timeSavePreferencesStart = millis();
 
 // settings
@@ -766,10 +767,14 @@ void loop_core1 (void* pvParameters) {
 
         BatVoltageMovingAverage.moveAverage(battery.voltage);
         if (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) {
-            battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
-                                                              // this temporary value will later get applied to the actual
-                                                              // ampHourRated variable when the battery is done charging so
-                                                              // the estimated range and other stuff doesn't suddenly get screwed
+            if (timer_delta_ms(timer_u32() - timeAmphoursMinVoltage) >= 5000 && battery.current <= 5.0) {
+                battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
+                                                                // this temporary value will later get applied to the actual
+                                                                // ampHourRated variable when the battery is done charging so
+                                                                // the estimated range and other stuff doesn't suddenly get screwed
+            }
+        } else {
+            timeAmphoursMinVoltage = timer_u32();
         }
 
         if (BatVoltageMovingAverage.output >= battery.amphours_max_voltage) {
@@ -943,7 +948,7 @@ void app_main(void)
 
     // GEARS
     gear1.level = 1;
-    gear1.maxCurrent = 160;
+    gear1.maxCurrent = 200; // 160
 
     gear2.level = 2;
     gear2.maxCurrent = 100;
