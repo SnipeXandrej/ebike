@@ -2,6 +2,8 @@
 #include <iostream>
 #include <chrono>
 #include <mutex>
+#include <print>
+#include <utility>
 
 // Arduino Libraries
 #include "Arduino.h"
@@ -27,25 +29,82 @@
 #include "timer_u32.h"
 #include "MiniPID.h"
 
+std::vector<std::string> split(const std::string& input, char delimiter) {
+    std::vector<std::string> result;
+    std::stringstream ss(input);
+    std::string token;
+
+    while (std::getline(ss, token, delimiter)) {
+        result.push_back(token);
+    }
+
+    return result;
+}
+
+enum COMMAND_ID {
+    GET_BATTERY = 0,
+    ARE_YOU_ALIVE = 1,
+    GET_STATS = 2,
+    RESET_ESTIMATED_RANGE = 3,
+    RESET_TRIP = 4,
+    READY_FOR_MESSAGE = 5,
+    SET_ODOMETER = 6,
+    SAVE_PREFERENCES = 7,
+    READY_TO_WRITE = 8,
+    GET_FW = 9
+};
+
+void commAddValue(std::string* string, double value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+void commAddValue_uint64(std::string* string, uint64_t value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+float getValueFromPacket(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        return std::stof(token[index]);
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
+uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        std::stringstream stream(token[index]);
+        uint64_t result;
+        stream >> result;
+        return result;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
 TFT_eSPI tft = TFT_eSPI();
 Adafruit_ADS1115 dedicatedADC;
 VescUart VESC;
 
 struct {
-    bool automaticGearChanging;
+    bool automaticGearChanging = 1;
+    bool drawDebug = 0;
+    bool drawUptime = 1;
+    bool printCoreExecutionTime = 0;
+    bool disableOptimizedDrawing = 0;
+    bool batteryPercentageVoltageBased = 0;
 } settings;
-
-// Values From VESC
-struct {
-    float erpm;
-    float tempMosfet;
-    float avgMotorCurrent;
-    float avgInputCurrent;
-    float ampHours;
-    float inputVoltage;
-    float tachometer;
-    float wattHours;
-} VESCdata;
 
 struct {
     float diameter;
@@ -120,23 +179,18 @@ float PotThrottleAmpsRequested;
 float wh_over_km = 0; // immediate
 float wh_over_km_average = 0; // over time
 float speed_kmh = 0;
+float speed_kmh_previous = 0;
+float acceleration = 0;
 
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
 uint32_t timeStartCore0 = 0, timeCore0 = 0;    
 uint32_t timeStartDisplay = 0; //timeDisplay = 0;
-uint32_t timeExecEverySecondCore0 = 0;
+uint32_t timeStartExecEverySecondCore0 = 0, timeExecEverySecondCore0 = 0;
 uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 uint32_t timeAmphoursMinVoltage = 0;
 unsigned long timeSavePreferencesStart = millis();
-
-// settings
-bool drawDebug = 0;
-bool drawUptime = 1;
-bool printCoreExecutionTime = 0;
-bool disableOptimizedDrawing = 0;
-bool batteryPercentageVoltageBased = 0;
 
 bool rotorCanPowerMotor = 1;
 bool rotorCutOff_temp = 1;
@@ -147,6 +201,8 @@ int clockSecondsSinceBoot, DNU_clockSecondsSinceBoot;
 int clockMinutesSinceBoot;
 int clockHoursSinceBoot;
 int clockDaysSinceBoot;
+
+uint64_t totalSecondsSinceBoot_uint64;
 
 // clock
 int clockYear = 2025;
@@ -190,6 +246,7 @@ MovingAverage WhOverKmMovingAverage;
 MovingAverage batteryAuxWattsMovingAverage;
 MovingAverage batteryAuxMovingAverage;
 MovingAverage batteryWattsMovingAverage;
+MovingAverage speed_kmhMovingAverage;
 
 Preferences preferences;
 
@@ -223,13 +280,13 @@ void setDuty(ledc_channel_t channel, int duty) {
 
 void estimatedRangeReset() {
     estimatedRange.ampHoursUsedOnStart  = battery.ampHoursUsed;
-    estimatedRange.distance             = 0;
-    estimatedRange.ampHoursUsed         = 0;
+    estimatedRange.distance             = 0.0;
+    estimatedRange.ampHoursUsed         = 0.0;
 }
 
 void tripReset() {
     trip.distance = 0;
-    estimatedRangeReset();
+    // estimatedRangeReset();
 }
 
 void preferencesSaveOdometer() {
@@ -243,18 +300,41 @@ void preferencesSaveBattery() {
 }
 
 float maxCurrentAtERPM(int erpm) {
+    // 288 ERPM per km/h
+    // 48 RPM per km/h
     float ERPM_current1 = 1500.0f; // ((1500/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.21 km/h
     float ERPM_current2 = 1700.0f; // ((1700/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.9  km/h
+    float ERPM_current3 = 8644.0f; // ((8644/6)/5.7) * 63 * 3.14 * 60 / 100000 = 30km/h
 
     if (erpm <= ERPM_current1) {
-        return 120.0f;
-    } else if (erpm <= ERPM_current2) {
+        return 100.0f;
+    }
+
+    if (erpm <= ERPM_current2) {
         // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
         float slope = (gear1.maxCurrent - 120.0f) / (ERPM_current2 - ERPM_current1);
-        return 120 + slope * (erpm - ERPM_current1);
-    } else {
+        return 100.0f + slope * (erpm - ERPM_current1);
+    }
+
+    if (erpm <= ERPM_current3) {
         return gear1.maxCurrent;
     }
+
+    if (erpm > ERPM_current3) {
+        return 145.0f;
+    }
+
+    return 0.0;
+
+    // if (erpm <= ERPM_current1) {
+    //     return 120.0f;
+    // } else if (erpm <= ERPM_current2) {
+    //     // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
+    //     float slope = (gear1.maxCurrent - 120.0f) / (ERPM_current2 - ERPM_current1);
+    //     return 120 + slope * (erpm - ERPM_current1);
+    // } else {
+    //     return gear1.maxCurrent;
+    // }
 }
 
 float clampValue(float input, float clampTo) {
@@ -283,28 +363,30 @@ void setVescThrottleBrake(float inputThrottle) {
 }
 
 void printVescMcConfTempValues() {
-    Serial.printf("l_current_min_scale: %f\n", VESC.data_mcconf.l_current_min_scale);
-    Serial.printf("l_current_max_scale: %f\n", VESC.data_mcconf.l_current_max_scale);
-    Serial.printf("l_min_erpm: %f\n", VESC.data_mcconf.l_min_erpm);
-    Serial.printf("l_max_erpm: %f\n", VESC.data_mcconf.l_max_erpm);
-    Serial.printf("l_min_duty: %f\n", VESC.data_mcconf.l_min_duty);
-    Serial.printf("l_max_duty: %f\n", VESC.data_mcconf.l_max_duty);
-    Serial.printf("l_watt_min: %f\n", VESC.data_mcconf.l_watt_min);
-    Serial.printf("l_watt_max: %f\n", VESC.data_mcconf.l_watt_max);
-    Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
-    Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
+    if (VESC.getMcconfTempValues()) {
+        Serial.printf("l_current_min_scale: %f\n", VESC.data_mcconf.l_current_min_scale);
+        Serial.printf("l_current_max_scale: %f\n", VESC.data_mcconf.l_current_max_scale);
+        Serial.printf("l_min_erpm: %f\n", VESC.data_mcconf.l_min_erpm);
+        Serial.printf("l_max_erpm: %f\n", VESC.data_mcconf.l_max_erpm);
+        Serial.printf("l_min_duty: %f\n", VESC.data_mcconf.l_min_duty);
+        Serial.printf("l_max_duty: %f\n", VESC.data_mcconf.l_max_duty);
+        Serial.printf("l_watt_min: %f\n", VESC.data_mcconf.l_watt_min);
+        Serial.printf("l_watt_max: %f\n", VESC.data_mcconf.l_watt_max);
+        Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
+        Serial.printf("l_in_current_max: %f\n", VESC.data_mcconf.l_in_current_max);
+    }
 }
 
-volatile bool dedicatedADC_new_data = false;
+volatile bool getBatteryCurrent_newData = false;
 void IRAM_ATTR ADCNewDataReadyISR() {
-  dedicatedADC_new_data = true;
+  getBatteryCurrent_newData = true;
 }
 
-uint32_t timerDedicatedADC = timer_u32();
+uint32_t time_getBatteryCurrent = timer_u32();
 void getBatteryCurrent() {
     // If we don't have new data, skip this iteration.
-    if (!dedicatedADC_new_data) {
-        // while(!dedicatedADC_new_data);
+    if (!getBatteryCurrent_newData) {
+        // while(!getBatteryCurrent_newData);
         return;
     }
 
@@ -313,22 +395,22 @@ void getBatteryCurrent() {
     // AUX CURRENT
     battery.current = (((float)results) / 143.636); //143.636
 
-    _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
-    battery.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
-    battery.ampHoursUsedLifetime += _batteryCurrentUsedInElapsedTime / 3600.0;
+    _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
+    battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
+    battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
     if (_batteryCurrentUsedInElapsedTime >= 0.0) {
         estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
     }
 
-    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - timerDedicatedADC));
+    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
     if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
             battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
 
-    dedicatedADC_new_data = false;
-    // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - timerDedicatedADC));
+    getBatteryCurrent_newData = false;
+    // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - time_getBatteryCurrent));
 
-    timerDedicatedADC = timer_u32();
+    time_getBatteryCurrent = timer_u32();
 }
 
 int PowerLevelnegative1Watts = 1000000;
@@ -366,11 +448,11 @@ void setPowerLevel(int level) {
 
 // rotor electromagnet DC resistance is around 3,05 ohms
 int GearLevel0DutyCycle = 0; // 0W
-int GearLevel1DutyCycle = 225; // ~180W
-int GearLevel2DutyCycle = 180; // ~100W
-int GearLevel3DutyCycle = 110; // ~50W
+int GearLevel1DutyCycle = 255; // ~180W  // 225
+int GearLevel2DutyCycle = 255; // ~100W //180
+int GearLevel3DutyCycle = 110; // ~50W //110
 int GearLevelTrackSpeedDutyCycle = 70; // There is some power so the VESC can track the speed
-int GearLevelIdleLittleCurrentDutyCycle = 10; //10 // There is some power so the VESC can track the speed
+int GearLevelIdleLittleCurrentDutyCycle = 20; //10 // There is some power so the VESC can track the speed
 int GearDutyCycle;
 
 void setGearLevel(int level) {
@@ -556,7 +638,7 @@ private:
     int previousValue = -1;
 
 public:
-    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char barName[10], bool drawInputValue) {
+    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char *barName, bool drawInputValue) {
         int lastValue = -1;
         int value_map = map_f(value, value_min, value_max, 0.0, 100.0);
 
@@ -648,9 +730,9 @@ void printDisplay() {
     tft.setCursor(3, 85); tft.printf ("Ah: %6.3f ", battery.ampHoursUsed);
     tft.setCursor(3, 104); tft.printf("T: %3.0f C ", VESC.data.tempMotor);
     // tft.setCursor(3, 104); tft.printf("R: %3.1fkm ", estimatedRange.range);
-    // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESCdata.avgInputCurrent, VESCdata.avgMotorCurrent); //vescCurrent, vescAmpHours
-    // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESCdata.avgInputCurrent); //vescCurrent, vescAmpHours
-    // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESCdata.ampHours);
+    // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESC.data.avgInputCurrent, VESC.data.avgMotorCurrent); //vescCurrent, vescAmpHours
+    // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESC.data.avgInputCurrent); //vescCurrent, vescAmpHours
+    // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESC.data.ampHours);
     tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevelReal);
     // tft.setCursor(3, 142); tft.printf("Dut:%3.0f%%", VESC.data.dutyCycleNow);
 
@@ -685,7 +767,7 @@ void printDisplay() {
 
     // Uptime
     tft.setTextSize(1);
-    if (drawUptime && (firsttime_draw || DNU_clockSecondsSinceBoot != clockSecondsSinceBoot))  {
+    if (settings.drawUptime && (firsttime_draw || DNU_clockSecondsSinceBoot != clockSecondsSinceBoot))  {
         DNU_clockSecondsSinceBoot = clockSecondsSinceBoot;
         tft.setCursor(3, 205);
         tft.printf("Uptime: %2dd %2dh %2dm %2ds\n", clockDaysSinceBoot, clockHoursSinceBoot, clockMinutesSinceBoot, clockSecondsSinceBoot);
@@ -712,7 +794,7 @@ void printDisplay() {
         tft.printf("T: %.2f", trip.distance);
     }
 
-    if (drawDebug) {
+    if (settings.drawDebug) {
         tft.setTextSize(1);
         sprintf(text, "\nExecution time:"
                         "\n core0: %.1f us   "
@@ -722,12 +804,12 @@ void printDisplay() {
         tft.println(text);
     }
 
-    barAp.drawVerticalBar(280, 104, 30, 92, VESCdata.avgMotorCurrent, 0, gear1.maxCurrent, "Ap", true);
+    barAp.drawVerticalBar(280, 104, 30, 92, VESC.data.avgMotorCurrent, 0, gear1.maxCurrent, "Ap", true);
     barW.drawVerticalBar(240, 104, 30, 92, VESC.data.dutyCycleNow, 0.0, 1.0, "D", false);
     // barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
 
     if (firsttime_draw) {
-        firsttime_draw = disableOptimizedDrawing; // should be 0
+        firsttime_draw = settings.disableOptimizedDrawing; // should be 0
     }
 }
 
@@ -759,7 +841,7 @@ void loop_core1 (void* pvParameters) {
         battery.watts = battery.voltage * battery.current;
 
         // Battery charge tracking stuff
-        if (batteryPercentageVoltageBased) {
+        if (settings.batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
             battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursRated, 100.0, 0.0);
@@ -801,8 +883,8 @@ void loop_core1 (void* pvParameters) {
         PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
 
         // Gears
-        int rotorTimeoutMs = 10000;
-        int rotorEnergiseTimeMs = 150;
+        static int rotorTimeoutMs = 10000;
+        static int rotorEnergiseTimeMs = 0;
 
         if (PotThrottleLevelReal < 1) {
             if (rotorCutOff_temp == true) {
@@ -813,7 +895,18 @@ void loop_core1 (void* pvParameters) {
             if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorTimeoutMs) {
                 // if the erpm is lower than 50 -> send little power to rotor (maybe 1 watt?)
                 // else send enough power to the rotor to track speed accurately
-                if (VESCdata.erpm < 50.0f) {
+                if (VESC.data.rpm < 50.0f) {
+                    // // this logic is so that the little current for tracking doesnt run all the time
+                    // // it will power the rotor for 0.5s, then the next 4.5s there will be no power goind to the rotor, rinse and repeat
+                    // static uint32_t timeRotorLittleCurrent = 0;
+                    // if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) <= 500) {
+                    //     setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
+                    // } else if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) > 500) {
+                    //     setDuty(LEDC_CHANNEL_0, 0);
+                    //     if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) >= 5000) {
+                    //         timeRotorLittleCurrent = timer_u32();
+                    //     }
+                    // }
                     setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
                     rotorCanPowerMotor = 0;
                 } else {
@@ -850,38 +943,34 @@ void loop_core1 (void* pvParameters) {
             VESC.setCurrent(0.0f);
         } else {
             PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
+            // float throttleClampedValue = clampValue(PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm));
             
-            VESC.setCurrent(
-                clampValue(
-                    PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
-                )
-            );
+            VESC.setCurrent(PotThrottleAmpsRequested);
+
+            // VESC.setCurrent(
+            //     clampValue(
+            //         PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
+            //     )
+            // );
         }
 
+        static uint32_t timeAcceleration;
         if (VESC.getVescValues()) {
-            VESCdata.erpm = VESC.data.rpm;
-            VESCdata.avgMotorCurrent = VESC.data.avgMotorCurrent;
-            VESCdata.tachometer = VESC.data.tachometerAbs;
-            VESCdata.avgInputCurrent = VESC.data.avgInputCurrent;
-            VESCdata.inputVoltage = VESC.data.inpVoltage;
-            VESCdata.wattHours = VESC.data.wattHours;
-            VESCdata.ampHours = VESC.data.ampHours;
-
             // if the previous measurement is bigger than the current, that means
             // that the VESC was probably powered off and on, so the stats got reset...
             // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
             // large number and therefore screw up our distance measurement
-            if (trip.tachometer_abs_previous > VESCdata.tachometer) {
-                trip.tachometer_abs_previous = VESCdata.tachometer;
+            if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
             }
 
             // prevent the diff to be something extremely big
             if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
-                trip.tachometer_abs_previous = VESCdata.tachometer;
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
             }
 
-            if (trip.tachometer_abs_previous < VESCdata.tachometer) {
-                trip.tachometer_abs_diff = VESCdata.tachometer - trip.tachometer_abs_previous;
+            if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
+                trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
                 // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
 
                 trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
@@ -891,10 +980,18 @@ void loop_core1 (void* pvParameters) {
                 odometer.distance += trip.distanceDiff;
                 estimatedRange.distance += trip.distanceDiff;
 
-                trip.tachometer_abs_previous = VESCdata.tachometer;
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
             }
 
-            speed_kmh = (((float)VESCdata.erpm / (float)motor.magnetPairs) / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+            speed_kmh = (((float)VESC.data.rpm / (float)motor.magnetPairs) / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+            speed_kmhMovingAverage.moveAverage(speed_kmh);
+            // if (timer_delta_ms(timer_u32() - timeAcceleration) >= 100) {
+                acceleration = (speed_kmhMovingAverage.output - speed_kmh_previous) * (1.0 / timer_delta_s(timer_u32() - timeAcceleration));
+
+                timeAcceleration = timer_u32();
+                speed_kmh_previous = speed_kmhMovingAverage.output;
+            // }
+
         }
 
         float wh_over_km_tmp = battery.watts / speed_kmh;
@@ -912,20 +1009,45 @@ void loop_core1 (void* pvParameters) {
         estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
         estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
 
+        static bool run_once_mcconf = false;
+        static bool run_once_mcconf2 = false;
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
             timeExecEverySecondCore1 = timer_u32();
-
+            // if (!run_once_mcconf) {
+                // printVescMcConfTempValues();
+                // run_once_mcconf = true;
+            // }
+            
             // stuff to run
         }
 
         // Execute every 100ms that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 100) {
+        if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 10000) {
             timeExecEvery100millisecondsCore1 = timer_u32();
 
+            // if (!run_once_mcconf2) {
+
+                // VESC.setMcconfTempValues();
+                // run_once_mcconf2 = true;
+
+                // if (VESC.getMcconfTempValues()) {
+                //     VESC.data_mcconf.l_current_max_scale = 0.3;
+                //     VESC.data_mcconf.l_current_min_scale = 1.0;
+                //     VESC.data_mcconf.l_max_erpm = 3.0; // 3k
+                //     VESC.data_mcconf.l_min_erpm = -3.0; // -3k
+                //     VESC.data_mcconf.l_min_duty = 0.005;
+                //     VESC.data_mcconf.l_max_duty = 0.01;
+                //     VESC.data_mcconf.l_watt_min = -1500.0;
+                //     VESC.data_mcconf.l_watt_max = 200.0;
+
+                //     VESC.setMcconfTempValues();
+                //     delay(1000);
+                // }
+            // }
             // stuff to run
         }
-
+        // run_once_mcconf = true;
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -933,18 +1055,16 @@ void loop_core1 (void* pvParameters) {
 // runs on core 0
 void app_main(void)
 {
-    motor.poles = 36;
-    motor.magnetPairs = 6;
+    motor.poles = 18;
+    motor.magnetPairs = 3;
     wheel.diameter = 63.0f;
     wheel.gear_ratio = 5.7f;
     battery.voltage_min = 66.0f;
     battery.voltage_max = 82.0f;
 
-    battery.amphours_min_voltage = 67.0f;
+    battery.amphours_min_voltage = 68.0f;
     battery.amphours_max_voltage = 82.0f;
     battery.ampHoursRated_tmp = 0.0;
-
-    settings.automaticGearChanging = 1;
 
     // GEARS
     gear1.level = 1;
@@ -1010,12 +1130,15 @@ void app_main(void)
     batteryAuxWattsMovingAverage.smoothingFactor = 0.2;
     batteryAuxMovingAverage.smoothingFactor = 0.2;
     batteryWattsMovingAverage.smoothingFactor = 0.2;
+    speed_kmhMovingAverage.smoothingFactor = 0.02;
 
     initArduino();
-    Serial.begin(115200);
+    Serial.begin(230400);
 
-    Serial2.begin(38400, SERIAL_8N1, 16, 17); // RX/TX
+    Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX/TX
+    // Serial2.
     VESC.setSerialPort(&Serial2);
+    // VESC.setDebugPort(&Serial);
 
     Wire.begin(21, 22);
     Wire.setClock(400000); // 400kHz
@@ -1062,7 +1185,7 @@ void app_main(void)
 
     // configure backlight of the TFT
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
-    digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
+    digitalWrite(pinTFTbacklight, LOW); // Turn on backlight
 
     setCpuFrequencyMhz(240);
 
@@ -1100,9 +1223,6 @@ void app_main(void)
     // setup ebike namespace
     preferences.begin("ebike", false);
 
-    // // store values
-    // preferencesSave();
-
     // retrieve values      
     odometer.distance       = preferences.getFloat("odometer", -1);
     battery.ampHoursUsed    = preferences.getFloat("batAhUsed", -1);
@@ -1115,172 +1235,120 @@ void app_main(void)
     delay(1000);
 
     xTaskCreatePinnedToCore (
-    loop_core1,     // Function to implement the task
-    "loop_core1",   // Name of the task
-    10000,      // Stack size in bytes
-    NULL,      // Task input parameter
-    0,         // Priority of the task
-    NULL,      // Task handle.
-    1          // Core where the task should run
+        loop_core1,     // Function to implement the task
+        "loop_core1",   // Name of the task
+        10000,      // Stack size in bytes
+        NULL,      // Task input parameter
+        0,         // Priority of the task
+        NULL,      // Task handle.
+        1          // Core where the task should run
     );
 
     while(1) {
         timeStartCore0 = timer_u32();
 
+        // Read and store all characters into a string
         while (Serial.available()) {
-          // delayMicroseconds(250); // B115200
-          // delayMicroseconds(30000); // B4800
-          delayMicroseconds(250);
           char c = Serial.read();
           readString += c;
         }
 
+        static std::string toSend;
         if (!readString.empty()) {
-            // TODO: make these "contains" into some kind of function, so the code doesn't need to be repeated
+            auto readStringPacket = split(readString, '\n');
+            for (int i = 0; i < readStringPacket.size(); i++) {
+                auto packet = split(readStringPacket[i], ';');
+                int packet_command_id = std::stoi(packet[0]);
 
-            // Serial.printf("text %s\n", readString.c_str());
+                toSend = "";
 
-            if (readString.contains("displayRefresh\n"))
-                redrawScreen();
+                switch(packet_command_id) {
+                    case COMMAND_ID::GET_BATTERY:
+                        commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
+                        commAddValue(&toSend, battery.voltage, 1);
+                        commAddValue(&toSend, battery.current, 4);
+                        commAddValue(&toSend, battery.watts, 1);
+                        commAddValue(&toSend, battery.wattHoursUsed, 1);
+                        commAddValue(&toSend, battery.ampHoursUsed, 6);
+                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 1);
+                        commAddValue(&toSend, battery.ampHoursRated, 2);
+                        commAddValue(&toSend, battery.percentage, 1);
+                        commAddValue(&toSend, battery.voltage_min, 1);
+                        commAddValue(&toSend, battery.voltage_max, 1);
+                        commAddValue(&toSend, battery.amphours_min_voltage, 1);
+                        commAddValue(&toSend, battery.amphours_max_voltage, 1);
 
-            if (readString.contains("clockHours="))
-                clockHours = getValueFromString("clockHours", readString);
+                        toSend.append("\n");
+                        Serial.printf(toSend.c_str());
+                        break;
 
-            if (readString.contains("clockMinutes="))
-                clockMinutes = getValueFromString("clockMinutes", readString);
+                    case COMMAND_ID::ARE_YOU_ALIVE:
+                        commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
 
-            if (readString.contains("printCoreExecutionTime="))
-                printCoreExecutionTime = getValueFromString("printCoreExecutionTime", readString);
+                        toSend.append("\n");
+                        Serial.printf(toSend.c_str());
+                        break;
 
-            if (readString.contains("disableOptimizedDrawing="))
-            {
-                disableOptimizedDrawing = getValueFromString("disableOptimizedDrawing", readString);
-                redrawScreen();
-            }
+                    case COMMAND_ID::GET_STATS:
+                        commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
+                        commAddValue(&toSend, speed_kmh, 1);
+                        commAddValue(&toSend, odometer.distance, 1);
+                        commAddValue(&toSend, trip.distance, 2);
+                        commAddValue(&toSend, gearCurrent.level, 0);
+                        commAddValue(&toSend, gearCurrent.maxCurrent, 0);
+                        commAddValue(&toSend, selectedPowerMode, 0);
+                        commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
+                        commAddValue(&toSend, wh_over_km_average, 1);
+                        commAddValue(&toSend, estimatedRange.AhPerKm, 1);
+                        commAddValue(&toSend, estimatedRange.range, 1);
+                        commAddValue(&toSend, VESC.data.tempMotor, 1);
+                        commAddValue(&toSend, totalSecondsSinceBoot, 0);
+                        commAddValue(&toSend, timer_delta_us(timeCore0), 1);
+                        commAddValue(&toSend, timer_delta_us(timeCore1), 1);
+                        commAddValue(&toSend, acceleration, 1);
+                   
+                        toSend.append("\n");
+                        Serial.printf(toSend.c_str());
+                        break;
 
-            if (readString.contains("gear="))
-                setGearLevel((int)getValueFromString("gear", readString));
+                    case COMMAND_ID::SET_ODOMETER:
+                        odometer.distance = (float)getValueFromPacket(packet, 1);
+                        break;
 
-            if (readString.contains("kP="))
-            {
-                kP = (double)getValueFromString("kP", readString);
-                // Serial.printf("kP: %0.3lf \n", kP);
-                powerLimiterPID.setPID(kP, kI, kD);
-            }
+                    case COMMAND_ID::SAVE_PREFERENCES:
+                        preferencesSaveBattery();
+                        preferencesSaveOdometer();
+                        break;
+                        
+                    case COMMAND_ID::RESET_TRIP:
+                        tripReset();
+                        break;
 
-            if (readString.contains("kI="))
-            {
-                kI = (double)getValueFromString("kI", readString);
-                // Serial.printf("kI: %0.3lf \n", kI);
-                powerLimiterPID.setPID(kP, kI, kD);
-            }
+                    case COMMAND_ID::RESET_ESTIMATED_RANGE:
+                        estimatedRangeReset();
+                        break;
 
-            if (readString.contains("kD="))
-            {
-                kD = (double)getValueFromString("kD", readString);
-                // Serial.printf("kD: %0.3lf \n", kI);
-                powerLimiterPID.setPID(kP, kI, kD);
-            }
+                    case COMMAND_ID::READY_TO_WRITE:
+                        commAddValue(&toSend, COMMAND_ID::READY_TO_WRITE, 0);
 
-            if (readString.contains("powerMode="))
-                setPowerLevel((int)getValueFromString("powerMode", readString));
-            
-            if (readString.contains("drawDebug="))
-            {
-                drawDebug = getValueFromString("drawDebug", readString);
-                redrawScreen();
-            }
+                        toSend.append("\n");
+                        Serial.printf(toSend.c_str());
+                        break;
 
-            if (readString.contains("drawUptime="))
-            {
-                drawUptime = getValueFromString("drawUptime", readString);
-                redrawScreen();
-            }
+                    case COMMAND_ID::GET_FW:
+                        commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
+                        toSend.append(std::format("{};{}; {} {};", "EBIKE", "0.0", __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
 
-            if (readString.contains("gearDutyCycle="))
-            {
-                GearLevel1DutyCycle = (int)getValueFromString("gearDutyCycle", readString);
-            }
-
-            if (readString.contains("motorCurrent="))
-            {
-                float VESC_setCurrent = getValueFromString("motorCurrent", readString);
-                VESC.setCurrent(VESC_setCurrent);
-            }
-
-            if (readString.contains("save"))
-            {
-                preferencesSaveOdometer();
-                preferencesSaveBattery();
-                Serial.printf("Preferences were saved\n");
-            }
-
-            if (readString.contains("odometer="))
-            {
-                odometer.distance = (double)getValueFromString("odometer", readString);
-            }
-
-            if (readString.contains("trip="))
-            {
-                trip.distance = (double)getValueFromString("trip", readString);
-            }
-
-            if (readString.contains("ampHoursUsed="))
-            {
-                battery.ampHoursUsed = getValueFromString("ampHoursUsed", readString);
-                Serial.printf("battery.ampHoursUsed=%f\n", battery.ampHoursUsed);
-            }
-
-            if (readString.contains("ampHoursRated="))
-            {
-                battery.ampHoursRated = getValueFromString("ampHoursRated", readString);
-                Serial.printf("battery.ampHoursRated=%f\n", battery.ampHoursRated);
-            }
-
-            if (readString.contains("getBatteryStats"))
-            {
-                Serial.printf("battery.amphours_min_voltage=%f\n", battery.amphours_min_voltage);
-                Serial.printf("battery.amphours_max_voltage=%f\n", battery.amphours_max_voltage);
-                Serial.printf("battery.ampHoursRated=%f\n", battery.ampHoursRated);
-                Serial.printf("battery.ampHoursUsed=%f\n", battery.ampHoursUsed);
-                Serial.printf("battery.current=%f\n", battery.current);
-                Serial.printf("battery.percentage=%f\n", battery.percentage);
-                Serial.printf("battery.voltage=%f\n", battery.voltage);
-                Serial.printf("battery.voltage_min=%f\n", battery.voltage_min);
-                Serial.printf("battery.voltage_max=%f\n", battery.voltage_max);
-                Serial.printf("battery.wattHoursUsed=%f\n", battery.wattHoursUsed);
-                Serial.printf("battery.watts=%f\n", battery.watts);
-            }
-
-            if (readString.contains("printVescMcconf"))
-            {
-                if (!VESC.getMcconfTempValues()) {
-                    Serial.printf("Failed to get Temp McConf values\n");
-                } else {
-                    printVescMcConfTempValues();
+                        toSend.append("\n");
+                        Serial.printf(toSend.c_str());
+                        break;
                 }
-            }
-
-            if (readString.contains("power1"))
-            {
-                VESC.data_mcconf.l_current_min_scale = 1.0;
-                VESC.data_mcconf.l_current_max_scale = 1.0;
-                VESC.data_mcconf.l_min_erpm = -100000.0;
-                VESC.data_mcconf.l_max_erpm = 27000;
-                VESC.data_mcconf.l_min_duty = 0.005;
-                VESC.data_mcconf.l_max_duty = 0.95;
-                VESC.data_mcconf.l_watt_min = -1000.0;
-                VESC.data_mcconf.l_watt_max = 250.0;
-                VESC.data_mcconf.l_in_current_min = -12.0;
-                VESC.data_mcconf.l_in_current_max = -12.0;
-
-                VESC.setMcconfTempValues();
             }
 
             readString="";
         }
 
-        totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
+        // totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
         clockSecondsSinceBoot = (int)(totalSecondsSinceBoot) % 60;
         clockMinutesSinceBoot = (int)(totalSecondsSinceBoot / 60) % 60;
         clockHoursSinceBoot   = (int)(totalSecondsSinceBoot / 60 / 60) % 24;
@@ -1289,20 +1357,25 @@ void app_main(void)
         // function for counting the current time and date
         clock_date_and_time();
 
-        printDisplay();
+        // printDisplay();
 
         // Execute every second that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEverySecondCore0) >= 1000) {
-            timeExecEverySecondCore0 = timer_u32();
+        timeStartExecEverySecondCore0 = timer_u32();
+        // float millisecondsInTicks = (1000.0/*ms*/ / (0.001 * _TICKS_PER_US));
+        if (timer_delta_ms(timeStartExecEverySecondCore0 - timeExecEverySecondCore0) >= 1000.0) {
 
-            // stuff to run
-            if (printCoreExecutionTime) {
+            // totalSecondsSinceBoot_uint64++;
+            totalSecondsSinceBoot += timer_delta_s(timeStartExecEverySecondCore0 - timeExecEverySecondCore0);
+
+            if (settings.printCoreExecutionTime) {
                 Serial.printf("\n\rExecution time:"
                             "\n\r core0: %.1f us   "
                             "\n\r core1: %.1f us   "
                             "\n\r timer_u32(): %llu ns                      \n\r",
                             timer_delta_us(timeCore0), timer_delta_us(timeCore1), timer_u32());
             }
+
+            timeExecEverySecondCore0 = timeStartExecEverySecondCore0;
         }
 
         unsigned long timeSavePreferencesNow = millis();
