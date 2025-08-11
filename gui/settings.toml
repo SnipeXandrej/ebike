@@ -1,0 +1,11 @@
+[eq]
+bass_freq = 50.0
+bass_gain = 2.2999999523162842
+highs_gain = 0.20000000298023224
+mids_gain = 0.20000000298023224
+
+[settings]
+OSC_PORT = '22752'
+framerate = 90.0
+limit_framerate = 1.0
+serialPortName = '/dev/ttyUSB0'

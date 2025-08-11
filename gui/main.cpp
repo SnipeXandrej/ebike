@@ -1,0 +1,1069 @@
+// Dear ImGui: standalone example application for SDL3 + OpenGL
+// (SDL is a cross-platform general purpose library for handling windows, inputs, OpenGL/Vulkan/Metal graphics context creation, etc.)
+
+// Learn about Dear ImGui:
+// - FAQ                  https://dearimgui.com/faq
+// - Getting Started      https://dearimgui.com/getting-started
+// - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
+// - Introduction, links and more at the top of imgui.cpp
+
+
+#include "imgui.h"
+#include "imgui_impl_sdl3.h"
+#include "imgui_impl_opengl3.h"
+#include <stdio.h>
+#include <SDL3/SDL.h>
+#if defined(IMGUI_IMPL_OPENGL_ES2)
+#include <SDL3/SDL_opengles2.h>
+#else
+#include <SDL3/SDL_opengl.h>
+#endif
+
+#include <iostream>
+#include <cstring>
+#include <thread>
+#include <chrono>
+#include "toml.hpp"
+#include <functional>
+#include <print>
+#include <format>
+
+// float scale;
+float MAX_WATTAGE = 7000.0;
+
+enum COMMAND_ID {
+    GET_BATTERY = 0,
+    ARE_YOU_ALIVE = 1,
+    GET_STATS = 2,
+    RESET_ESTIMATED_RANGE = 3,
+    RESET_TRIP = 4,
+    READY_FOR_MESSAGE = 5,
+    SET_ODOMETER = 6,
+    SAVE_PREFERENCES = 7,
+    READY_TO_WRITE = 8,
+    GET_FW = 9
+};
+
+float voltage;
+float current;
+float wattage;
+
+float amp_out_voltage1;
+float amp_out_voltage2;
+
+bool done = false;
+bool first_run = false;
+bool can_run_these = false;
+bool ready_to_write = true;
+
+// TODO: do not hardcode filepaths :trol:
+const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
+char hostname[1024];
+
+auto timeDrawStart = std::chrono::steady_clock::now();
+auto timeDrawEnd = std::chrono::steady_clock::now();
+auto timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - timeDrawStart).count();
+
+auto timeRenderStart = std::chrono::steady_clock::now();
+auto timeRenderEnd = std::chrono::steady_clock::now();
+auto timeRenderDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
+
+float voltage_last_values_array[140];
+float current_last_values_array[140];
+float wattage_last_values_array[2000];
+float temperature_last_values_array[2000];
+
+struct {
+    float totalSecondsSinceBoot = 0;
+    uint64_t clockSecondsSinceBoot = 0;
+    uint64_t clockMinutesSinceBoot = 0;
+    uint64_t clockHoursSinceBoot = 0;
+    uint64_t clockDaysSinceBoot = 0;
+
+    float speed_kmh;
+    float odometer_distance;
+    float trip_distance;
+    float gear_level;
+    float gear_maxCurrent;
+    float power_level;
+    float phase_current;
+    float wh_over_km_average;
+    float ah_per_km;
+    float range_left;
+    float temperature_motor;
+    float timeCore0_us;
+    float timeCore1_us;
+    float acceleration;
+
+    std::string fw_name;
+    std::string fw_version;
+    std::string fw_compile_date_time;
+} esp32;
+
+// Limit FPS
+struct {
+    float TARGET_FPS;
+    bool LIMIT_FRAMERATE;
+    std::string serialPortName;
+    std::string OSC_PORT;
+    int serialWriteWaitMs;
+} settings;
+
+struct {
+    float voltage;
+    float voltage_min;
+    float voltage_max;
+    float current;
+    float ampHoursUsed;
+    float ampHoursUsedLifetime;
+    float watts;
+    float wattHoursUsed;
+    float percentage;
+    float ampHoursRated;
+    float ampHoursRated_tmp;
+    float amphours_min_voltage;
+    float amphours_max_voltage;
+} battery;
+
+#include "other.hpp"
+MovingAverage current_MovingAverage;
+MovingAverage amp_out_voltage1_MovingAverage;
+MovingAverage amp_out_voltage2_MovingAverage;
+MovingAverage acceleration_MovingAverage;
+MovingAverage wattage_MovingAverage;
+MovingAverage wattageMoreSmooth_MovingAverage;
+
+CPUUsage cpuUsage_ImGui;
+CPUUsage cpuUsage_SerialThread;
+CPUUsage cpuUsage_Everything;
+SerialProcessor SerialP;
+
+std::string to_send = "";
+std::string to_send_extra = "";
+
+void commAddValue(std::string* string, double value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+void TextCenteredOnLine(const char* label, float alignment = 0.5f, bool contentRegionFromWindow = false) {
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    float size = ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+    float avail = contentRegionFromWindow ? ImGui::GetWindowContentRegionMax().x : ImGui::GetContentRegionAvail().x;
+    // if (contentRegionFromWindow)
+    //     avail = ImGui::GetContentRegionMax().x;
+    // else
+    //     avail = ImGui::GetContentRegionAvail().x;
+
+    float off = (avail - size) * alignment;
+    if (off > 0.0f)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
+
+    ImGui::Text(label);
+}
+
+void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness = 1.0f) {
+    float angle_rad = angle_deg * M_PI / 180.0f;
+    float cos_a = cosf(angle_rad);
+    float sin_a = sinf(angle_rad);
+
+    // Half extents
+    float hx = size.x * 0.5f;
+    float hy = size.y * 0.5f;
+
+    // Corners relative to center
+    ImVec2 corners[4] = {
+        ImVec2(-hx, -hy),
+        ImVec2(hx, -hy),
+        ImVec2(hx, hy),
+        ImVec2(-hx, hy)
+    };
+
+    // Rotate and translate
+    for (int i = 0; i < 4; ++i) {
+        float x = corners[i].x;
+        float y = corners[i].y;
+        corners[i].x = center.x + x * cos_a - y * sin_a;
+        corners[i].y = center.y + x * sin_a + y * cos_a;
+    }
+
+    // Draw the rotated rectangle
+    // draw_list->AddPolyline(corners, 4, color, true, thickness);
+    // draw_list->AddQuadFilled(corners, 4, color, true, thickness);
+    draw_list->AddConvexPolyFilled(corners, 4, color);
+}
+
+void powerVerticalDiagonalHorizontal(float input) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
+    // ImVec2 pos = ImVec2(ImGui::GetWindowSize().x/2.0, ImGui::GetWindowSize().y/2.0);
+    ImU32 color = IM_COL32(0, 255, 0, 255); // Green
+    ImVec2 size = ImVec2(100, 10); // Width x Height
+
+    ImU32 greenDark     = IM_COL32(0, 45, 0, 255); // Green
+    ImU32 greenBright   = IM_COL32(0, 255, 0, 255); // Green
+
+    float mapped = map_f(input, 0.0, MAX_WATTAGE, 0.0, 75.0);
+
+    int BAR_COUNT_DIAGONAL = 25;
+    int BAR_COUNT_HORIZONTAL = BAR_COUNT_DIAGONAL + 50;
+
+    // ImGui::BeginGroup();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    for (float i = 1; i <= BAR_COUNT_DIAGONAL; i += 1) {
+        pos.y -= 13.0f;
+        pos.x += 5.0f;
+        ImVec2 center = ImVec2(pos.x + 100, pos.y + 100);
+
+        if (mapped < i) {
+            color = greenDark;
+        } else {
+            if ((mapped - i) < 1.0) {
+                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
+                color = IM_COL32(0, color_brightness, 0 , 255);
+            } else {
+                color = greenBright;
+            }
+        }
+
+        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+    }
+
+    size = ImVec2(80, 10); // Width x Height
+    for (int i = BAR_COUNT_DIAGONAL+1; i < BAR_COUNT_HORIZONTAL; i++) {
+        // pos.y -= 8.0f;
+        pos.x += 11.0f;
+
+        ImVec2 center = ImVec2(pos.x + 95, pos.y + 90.0);
+
+        if (mapped < i) {
+            color = greenDark;
+        } else {
+            if ((mapped - i) < 1.0) {
+                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
+                color = IM_COL32(0, color_brightness, 0 , 255);
+            } else {
+                color = greenBright;
+            }
+        }
+
+        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+    }
+    // ImGui::EndGroup();
+}
+
+float getValueFromPacket(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        float ret = std::stof(token[*index]);
+        *index = *index+1;
+
+        return ret;
+        // std::cout << "index: " << *index << "\n";
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
+std::string getValueFromPacket_string(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        std::string ret = token[*index];
+        *index = *index+1;
+
+        return ret;
+        // std::cout << "index: " << *index << "\n";
+    }
+
+    std::println("Index out of bounds");
+    return "Error";
+}
+
+uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        std::stringstream stream(token[*index]);
+        uint64_t result;
+        stream >> result;
+        return result;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
+void processSerialRead(std::string line) {
+        if (!line.empty()) {
+            // std::cout << "Received: " << line << "\n";
+            int index = 1;
+            int command_id;
+            auto packet = split(line, ';');
+            try {
+                command_id = std::stoi(packet[0]);
+            } catch(...) {
+                std::println("Failed to convert command_id stoi()");
+                command_id = -1;
+            }
+
+            if (command_id == COMMAND_ID::ARE_YOU_ALIVE) {
+                    std::cout << "[SERIAL] Succesful communication with Atmega8!" << "\n";
+                    SerialP.succesfulCommunication = true;
+            }
+
+            if (SerialP.succesfulCommunication) {
+                switch (command_id) {
+                    case COMMAND_ID::GET_BATTERY:
+                        battery.voltage = getValueFromPacket(packet, &index);
+                        battery.current = getValueFromPacket(packet, &index);
+                        battery.watts = getValueFromPacket(packet, &index);
+                        battery.wattHoursUsed = getValueFromPacket(packet, &index);
+                        battery.ampHoursUsed = getValueFromPacket(packet, &index);
+                        battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
+                        battery.ampHoursRated = getValueFromPacket(packet, &index);
+                        battery.percentage = getValueFromPacket(packet, &index);
+                        battery.voltage_min = getValueFromPacket(packet, &index);
+                        battery.voltage_max = getValueFromPacket(packet, &index);
+                        battery.amphours_min_voltage = getValueFromPacket(packet, &index);
+                        battery.amphours_max_voltage = getValueFromPacket(packet, &index);
+
+                        addValueToArray(2000, wattage_last_values_array, battery.watts);
+                        break;
+
+                    case COMMAND_ID::GET_STATS:
+                        esp32.speed_kmh = getValueFromPacket(packet, &index);
+                        esp32.odometer_distance = getValueFromPacket(packet, &index);
+                        esp32.trip_distance = getValueFromPacket(packet, &index);
+                        esp32.gear_level = getValueFromPacket(packet, &index);
+                        esp32.gear_maxCurrent = getValueFromPacket(packet, &index);
+                        esp32.power_level = getValueFromPacket(packet, &index);
+                        esp32.phase_current = getValueFromPacket(packet, &index);
+                        esp32.wh_over_km_average = getValueFromPacket(packet, &index);
+                        esp32.ah_per_km = getValueFromPacket(packet, &index);
+                        esp32.range_left = getValueFromPacket(packet, &index);
+                        esp32.temperature_motor = getValueFromPacket(packet, &index);
+                        esp32.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
+                        esp32.timeCore0_us = getValueFromPacket(packet, &index);
+                        esp32.timeCore1_us = getValueFromPacket(packet, &index);
+                        esp32.acceleration = getValueFromPacket(packet, &index);
+
+                        esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
+                        esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
+                        esp32.clockHoursSinceBoot   = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
+                        esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
+
+                        addValueToArray(2000, temperature_last_values_array, esp32.temperature_motor);
+                        break;
+
+                    case COMMAND_ID::GET_FW:
+                        esp32.fw_name = getValueFromPacket_string(packet, &index);
+                        esp32.fw_version = getValueFromPacket_string(packet, &index);
+                        esp32.fw_compile_date_time = getValueFromPacket_string(packet, &index);
+                        break;
+
+                    case COMMAND_ID::READY_TO_WRITE:
+                        ready_to_write = true;
+                        break;
+                }
+
+                // if (line.rfind("UPTIME_IN_SECONDS", 0) == 0) {
+                //     esp32.totalSecondsSinceBoot = getValueFromString("UPTIME_IN_SECONDS", line);
+
+                //     esp32.clockSecondsSinceBoot = (u_int64_t)(esp32.totalSecondsSinceBoot) % 60;
+                //     esp32.clockMinutesSinceBoot = (u_int64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
+                //     esp32.clockHoursSinceBoot   = (u_int64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
+                //     esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
+                // }
+            }
+        }
+}
+
+// Main code
+int main(int, char**)
+{
+    setenv("SDL_VIDEODRIVER", "wayland", 1);
+
+    // ##########################
+    // ##### Hostname stuff #####
+    // ##########################
+    gethostname(hostname, sizeof(hostname));
+    printf("Hostname = %s\n", hostname);
+
+    if (strcmp(hostname, "audiophool") == 0) {
+        printf("Enabling FIRST_RUN/CAN_RUN_THESE functions\n");
+        first_run = 1;
+        can_run_these = 1;
+
+    } else {
+        printf("Disabling FIRST_RUN/CAN_RUN_THESE functions\n");
+        first_run = 0;
+        can_run_these = 0;
+    }
+
+    // ####################
+    // ##### Settings #####
+    // ####################
+    current_MovingAverage.smoothingFactor = 0.7f;
+    amp_out_voltage1_MovingAverage.smoothingFactor = 0.5f;
+    amp_out_voltage2_MovingAverage.smoothingFactor = 0.5f;
+    acceleration_MovingAverage.smoothingFactor = 0.5f;
+    wattage_MovingAverage.smoothingFactor = 0.6f;
+    wattageMoreSmooth_MovingAverage.smoothingFactor = 0.1f;
+
+    settings.TARGET_FPS = 60;
+    settings.LIMIT_FRAMERATE = true;
+
+    // ########################
+    // ######### TOML #########
+    // ########################
+
+    // TODO: if settings.toml doesnt exist, create it
+    toml::table tbl;
+    tbl = toml::parse_file(SETTINGS_FILEPATH);
+
+    // values
+    settings.TARGET_FPS      = tbl["settings"]["framerate"].value_or(60);
+    settings.LIMIT_FRAMERATE = tbl["settings"]["limit_framerate"].value_or(0);
+    settings.serialWriteWaitMs = tbl["settings"]["serialWriteWaitMs"].value_or(50);
+
+    // strings
+    if (auto val = tbl.at_path("settings.serialPortName").value<std::string>()) {
+        settings.serialPortName = *val;
+    }
+    if (auto val = tbl.at_path("settings.OSC_PORT").value<std::string>()) {
+        settings.OSC_PORT = *val;
+        std::cout << "OSC_PORT: " << settings.OSC_PORT << "\n";
+    }
+
+    if (first_run) {
+
+    }
+
+
+    // ########################
+    // ##### Serial Port ######
+    // ########################
+
+    std::thread backend([&]() -> int {
+        std::cout << "[SERIAL] Initializing" << "\n";
+        // auto startLastTransmitTime = std::chrono::steady_clock::now();
+        // auto endLastTransmitTime = std::chrono::steady_clock::now();
+
+        SerialP.init(settings.serialPortName.c_str());
+        // SerialP.timeout_ms = settings.serialWriteWaitMs;
+
+        std::cout << "[SERIAL] Entering main while loop\n";
+        while(!done) {
+            cpuUsage_SerialThread.measureStart(1);
+            SerialP.timeout_ms = settings.serialWriteWaitMs;
+
+            to_send = "";
+            if (!SerialP.succesfulCommunication) {
+                std::string to_send = std::to_string(COMMAND_ID::ARE_YOU_ALIVE);
+                SerialP.writeSerial(to_send.c_str());
+
+                // hol'up
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            if (SerialP.succesfulCommunication) { //  && ready_to_write
+                // startLastTransmitTime = std::chrono::steady_clock::now();
+
+                commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
+                to_send.append("\n");
+                commAddValue(&to_send, COMMAND_ID::GET_STATS, 0);
+                to_send.append("\n");
+
+                if (!SerialP.sent_once) {
+                    commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
+                    to_send.append("\n");
+
+                    SerialP.sent_once = true;
+                }
+
+                // commAddValue(&to_send, COMMAND_ID::READY_TO_WRITE ,0);
+                // to_send.append("\n");
+                to_send.append(to_send_extra);
+                to_send_extra = "";
+
+                SerialP.writeSerial(to_send.c_str());
+                // ready_to_write = false;
+
+                // hol'up
+                // std::this_thread::sleep_for(std::chrono::milliseconds(settings.serialWriteWaitMs)); // 15ms minimum at 115200b
+            }
+
+            // endLastTransmitTime = std::chrono::steady_clock::now();
+
+            // if (std::chrono::duration<double, std::milli>(endLastTransmitTime - startLastTransmitTime).count() >= 100) {
+            //     commAddValue(&to_send, COMMAND_ID::READY_TO_WRITE ,0);
+            //     to_send.append("\n");
+
+            //     SerialP.writeSerial(to_send.c_str());
+            //     ready_to_write = false;
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(settings.serialWriteWaitMs)); // 15ms minimum at 115200b
+            // }
+
+            SerialP.readSerial(processSerialRead);
+            cpuUsage_SerialThread.measureEnd(1);
+        }
+
+        close(SerialP.serialPort);
+
+        return 0;
+    });
+
+
+
+    // ###########################
+    // ##### SDL/ Dear ImGUI #####
+    // ###########################
+
+    // [If using SDL_MAIN_USE_CALLBACKS: all code below until the main loop starts would likely be your SDL_AppInit() function]
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    {
+        printf("Error: SDL_Init(): %s\n", SDL_GetError());
+        return -1;
+    }
+
+    // Decide GL+GLSL versions
+    #if defined(IMGUI_IMPL_OPENGL_ES2)
+        // GL ES 2.0 + GLSL 100 (WebGL 1.0)
+        const char* glsl_version = "#version 100";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #elif defined(IMGUI_IMPL_OPENGL_ES3)
+        // GL ES 3.0 + GLSL 300 es (WebGL 2.0)
+        const char* glsl_version = "#version 300 es";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #elif defined(__APPLE__)
+        // GL 3.2 Core + GLSL 150
+        const char* glsl_version = "#version 150";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG); // Always required on Mac
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    #else
+        // GL 3.0 + GLSL 130
+        const char* glsl_version = "#version 130";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #endif
+
+
+    // Create window with graphics context
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    // float main_scale = 0.66f;
+    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1520 * main_scale), (int)(720 * main_scale), window_flags);
+    if (window == nullptr)
+    {
+        printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
+        return -1;
+    }
+    SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+    if (gl_context == nullptr)
+    {
+        printf("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
+        return -1;
+    }
+
+    SDL_GL_MakeCurrent(window, gl_context);
+    SDL_GL_SetSwapInterval(1); // Enable vsync
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_ShowWindow(window);
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Viewports
+    io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
+    // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
+
+    // Setup Dear ImGui style
+    // ImGui::StyleColorsDark();
+    // ImGui::StyleColorsLight();
+    StyleColorsDarkBreeze();
+
+    // Setup scaling
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+    style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
+    ImGui_ImplOpenGL3_Init(glsl_version);
+
+    // Our state
+    bool show_demo_window = false;
+    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+    style.FontScaleDpi = 2.0f;
+    // scale = style.FontScaleDpi;
+
+    // Main loop
+    while (!done)
+    {
+        cpuUsage_ImGui.measureStart(1);
+        cpuUsage_Everything.measureStart(0);
+
+        // Poll and handle events (inputs, window resize, etc.)
+        // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+        // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
+        // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
+        // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_QUIT)
+                done = true;
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
+                done = true;
+        }
+
+        // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)
+        {
+            SDL_Delay(10);
+            continue;
+        }
+
+        // Start the Dear ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
+        if (show_demo_window) {
+            ImGui::ShowDemoWindow(&show_demo_window);
+        }
+
+        // ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
+        ImGui::SetNextWindowPos(ImGui::GetMainViewport()->Pos);
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        char text[1024];
+        if (true) {
+            timeDrawStart = std::chrono::steady_clock::now();
+            ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
+
+            ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_FittingPolicyScroll;
+            if (ImGui::BeginTabBar("Tabbar", tab_bar_flags)) {
+                if (ImGui::BeginTabItem("Main"))
+                {
+                    // Clock
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 55.0f, 7.0));
+                    ImGui::Text("12:34:56");
+
+                    ImGui::BeginGroup(); // Starts here
+                        ImGui::BeginGroup();
+                            static bool succesfulCommunication_avoidMutex;
+                            if (!SerialP.succesfulCommunication) {
+                                succesfulCommunication_avoidMutex = false;
+                                ImGui::BeginDisabled();
+                            } else {
+                                succesfulCommunication_avoidMutex = true;
+                            }
+                            ImGui::Text("Power");
+
+                            ImGui::PushID(0);
+                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(2 / 7.0f, 0.5f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(2 / 7.0f, 0.6f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(2 / 7.0f, 0.7f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
+                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.voltage, battery.amphours_min_voltage, battery.amphours_max_voltage, "%0.1fV");
+                            ImGui::PopStyleColor(4);
+                            ImGui::PopID();
+
+                            ImGui::PushID(1);
+                            ImGui::SameLine();
+                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(0 / 7.0f, 0.5f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(0 / 7.0f, 0.6f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(0 / 7.0f, 0.7f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(0 / 7.0f, 0.9f, 0.9f));
+                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.current, 0.0f, 100.0f, "%0.2fA");
+                            ImGui::PopStyleColor(4);
+                            ImGui::PopID();
+
+                            wattageMoreSmooth_MovingAverage.moveAverage(battery.watts);
+                            ImGui::PushID(2);
+                            ImGui::SameLine();
+                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(1 / 7.0f, 0.5f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(1 / 7.0f, 0.6f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(1 / 7.0f, 0.7f, 0.5f));
+                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(1 / 7.0f, 0.9f, 0.9f));
+                            char sliderFormat[100];
+                            sprintf(sliderFormat, "%0.0fW\n%0.0fW", battery.watts, wattageMoreSmooth_MovingAverage.output);
+                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.watts, 0.0f, MAX_WATTAGE, sliderFormat);
+                            ImGui::PopStyleColor(4);
+                            ImGui::PopID();
+                        ImGui::EndGroup();
+                        //
+                        ImGui::SameLine();
+                        ImGui::Dummy(ImVec2(20,0));
+                        // ImGui::SameLine();
+                        //
+                        ImGui::BeginGroup();
+                            ImGui::Text("Power history");
+
+                            ImGui::PushID(20);
+                            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
+                            ImGui::PlotHistogram("##", wattage_last_values_array, IM_ARRAYSIZE(wattage_last_values_array), 0, NULL, 0.0f, MAX_WATTAGE, ImVec2(250, 140.0f));
+                            ImGui::PopStyleColor(1);
+                            ImGui::PopID();
+
+                            // ImGui::Text("Temperature history");
+                            // ImGui::PushID(30);
+                            // ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
+                            // ImGui::PlotHistogram("##", temperature_last_values_array, IM_ARRAYSIZE(temperature_last_values_array), 0, NULL, 60.0f, 130.0f, ImVec2(250, 140.0f));
+                            // ImGui::PopStyleColor(1);
+                            // ImGui::PopID();
+
+                            // ImGui::SameLine();
+
+                            // ImGui::PushID(21);
+                            // ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(0 / 7.0f, 0.9f, 0.9f));
+                            // ImGui::PlotHistogram("##", current_last_values_array, IM_ARRAYSIZE(current_last_values_array), 0, NULL, 0.0f, 20.0f, ImVec2(250, 140.0f));
+                            // ImGui::PopStyleColor(1);
+                            // ImGui::PopID();
+                        ImGui::EndGroup();
+                    ImGui::EndGroup(); // Ends here
+
+                    // VU METERS
+                    // VU METERS
+                    ImGui::SameLine();
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 240.0f, 45.0f));
+                    ImGui::BeginGroup();
+                        // ImGui::Text("VU Meter");
+                        ImGui::Dummy(ImVec2(0, 3));
+                        ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
+                        ImGui::BeginGroup();
+                            addVUMeter(esp32.phase_current, 0.0f, 200.0f, "PhA", 0);
+                            ImGui::SameLine();
+                            ImGui::Dummy(ImVec2(2, 0));
+                            ImGui::SameLine();
+                            addVUMeter(esp32.temperature_motor, 30.0f, 130.0f, "T", 0);
+                            ImGui::SameLine();
+                            ImGui::Dummy(ImVec2(2, 0));
+                            ImGui::SameLine();
+                            addVUMeter(battery.percentage, 0.0f, 100.0f, "BAT", 1); //BAT
+                        ImGui::EndGroup();
+                        ImVec2 groupEnd = ImGui::GetItemRectMax();       // Bottom-right of the group
+                        ImDrawList* drawList = ImGui::GetWindowDrawList();
+                    ImGui::EndGroup();
+                    groupStart.x -= 4;
+                    groupStart.y -= 5;
+                    groupEnd.x += 4;
+                    groupEnd.y += 5;
+                    drawList->AddRect(
+                        groupStart,
+                        groupEnd,
+                        IM_COL32(90, 90, 90, 255), // Yellow color (RGBA)
+                        2.0f,                       // Rounding
+                        0,                          // Flags
+                        2.0f                        // Thickness
+                    );
+
+
+                    // Wh/km
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 6, io.DisplaySize.y / 1.7));
+                    ImGui::BeginGroup();
+                        wattage_MovingAverage.moveAverage(battery.watts);
+                        powerVerticalDiagonalHorizontal(wattage_MovingAverage.output);
+                        // ImGui::SameLine();
+                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 170.0));
+                        ImGui::BeginGroup();
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::Text("Wh/km: %0.1f\nWh/km: %0.1f NOW", esp32.wh_over_km_average, (battery.watts / esp32.speed_kmh));
+                            ImGui::PopFont();
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
+                            if (esp32.speed_kmh >= 50.0) {
+                                sprintf(text, "%0.1fkm/h >:(", esp32.speed_kmh);
+                            } else {
+                                sprintf(text, "%0.1fkm/h", esp32.speed_kmh);
+                            }
+                            ImGui::Text(text);
+                            // TextCenteredOnLine(text, -0.5f, false);
+                            ImGui::PopFont();
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                                ImGui::Text("Range: %0.1f", esp32.range_left);
+                                // acceleration_MovingAverage.moveAverage(esp32.acceleration);
+                                ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
+                            ImGui::PopFont();
+                        ImGui::EndGroup();
+
+                    ImGui::EndGroup();
+
+
+                    // ODOMETER / TRIP
+                    ImGui::BeginGroup();
+
+                        ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                        ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                            sprintf(text, "O: %0.0f", esp32.odometer_distance);
+                            TextCenteredOnLine(text, 0.0f, false);
+                            sprintf(text, "T:%5.1f", esp32.trip_distance);
+                        ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                            TextCenteredOnLine(text, 1.0f, false);
+                        ImGui::PopFont();
+
+                    ImGui::EndGroup();
+
+                    // // Battery Percentage
+                    // ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, 50.0f));
+                    // ImGui::BeginGroup();
+                    // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    //     memset(text, 0, sizeof(text));
+                    //     sprintf(text, "%0.1f", battery.percentage);
+                    //     // ImGui::Text(text);
+                    //     TextCenteredOnLine(text, 0.95f, false);
+                    // ImGui::PopFont();
+                    // ImGui::EndGroup();
+
+                    // ImGui::Dummy(ImVec2(0.0f, io.DisplaySize.y - 120.0f));
+                    ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
+                    ImGui::Separator();
+                    ImGui::Text("ESP32  Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
+
+                    if (!succesfulCommunication_avoidMutex) {
+                        ImGui::EndDisabled();
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (float)(SerialP.succesfulCommunication ? 140.0f : 180.0f), io.DisplaySize.y - 35.0f));
+                    ImVec4 color = SerialP.succesfulCommunication ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) // Green
+                                                                  : ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
+                    ImGui::TextColored(color, SerialP.succesfulCommunication ? "Connected" : "Disconnected");
+
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 35.0f));
+                    if (!SerialP.allDataReceived)
+                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Data corrupted");
+
+                    ImGui::EndTabItem();
+                }
+
+
+                if (ImGui::BeginTabItem("Settings"))
+                {
+                    ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("ImGui");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Checkbox("Demo Window", &show_demo_window);
+                    if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100);
+                    const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
+                    static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
+                    if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
+                        settings.TARGET_FPS = std::stof(items[item_current]);
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
+                    }
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("Serial");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Text("Serial write wait time ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::InputInt("ms", &settings.serialWriteWaitMs, 1, 100)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "serialWriteWaitMs", settings.serialWriteWaitMs);
+                    }
+
+                    // char text[100];
+                    // sprintf(text, "Serialport Buffer (%d bytes in buffer)", SerialP.bytesInBuffer);
+                    if (ImGui::CollapsingHeader("SerialPort Buffer")) {
+                        ImGui::Dummy(ImVec2(30, 0));
+                        ImGui::SameLine();
+                        ImGui::TextColored(ImVec4(1.0f, 0.89f, 0.32f, 1.0f), SerialP.receivedDataToRead.c_str());
+                    }
+
+                    ImGui::Text("Receive rate %0.1f ms / %0.1f Hz", SerialP.receiveRateMs, (1000.0 / SerialP.receiveRateMs));
+                    ImGui::Text("Buffer: %d (bytes)", SerialP.bytesInBuffer);
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("ESP32");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    // char newSerialPortPath[100] = { settings.serialPortName.c_str() };
+                    // ImGui::InputText("Serialport path:", &newSerialPortPath[0], IM_ARRAYSIZE(newSerialPortPath));
+
+                    ImGui::Text("Firmware");
+                    char text[50];
+                    sprintf(text, "   Name: %s", esp32.fw_name.c_str());
+                    ImGui::Text(text);
+
+                    sprintf(text, "   Version: %s", esp32.fw_version.c_str());
+                    ImGui::Text(text);
+
+                    sprintf(text, "   Compile Time: %s", esp32.fw_compile_date_time.c_str());
+                    ImGui::Text(text);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Core 0 loop exec time: %0.2f us", esp32.timeCore0_us);
+                    ImGui::Text("Core 1 loop exec time: %0.2f us", esp32.timeCore1_us);
+
+                    ImGui::Dummy(ImVec2(0, 20));
+
+                    float buttonWidth = 260.0;
+                    float buttonHeight = 80.0;
+
+                    static char newOdometerValue[30];
+                    ImGui::Text("Odometer = ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
+                    // ImGui::SameLine();
+                    if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
+                        to_send_extra.append(append);
+                    }
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    if (ImGui::Button("Save preferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
+                        to_send_extra.append(append);
+                    }
+
+                    if (ImGui::Button("Reset Trip", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP));
+                        to_send_extra.append(append);
+                    }
+
+                    if (ImGui::Button("Reset est. Range", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
+                        to_send_extra.append(append);
+                    }
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                          ImGui::SeparatorText("System/App Statistics");
+                        ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                    ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    // std::string text = "CPU Usage (100% = 1 core)";
+                    ImGui::Text("CPU Usage (100%% is 1 core)");
+                    ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
+                    ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
+                    ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
+                    // ImGui::Text("Memory Usage: %f", get_memory_usage());
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
+                    ImGui::Text("Rendertime: %0.1fms", timeRenderDiff);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Hostname: %s", hostname);
+                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
+
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("Serial Log"))
+                {
+                    // ImGui::Text(SerialP.log.c_str());
+                    ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
+                    ImGui::EndTabItem();
+                }
+
+                    ImGui::EndTabBar();
+            }
+            ImGui::SameLine();
+            ImGui::Dummy(ImVec2(40.0f, 0.0f));
+
+            ImGui::End();
+            timeDrawEnd = std::chrono::steady_clock::now();
+            timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - timeDrawStart).count();
+        }
+
+        // Rendering
+        timeRenderStart = std::chrono::steady_clock::now();
+        ImGui::Render();
+        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+        glClear(GL_COLOR_BUFFER_BIT);
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // Update and Render additional Platform Windows
+        // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
+        //  For this specific demo app we could also call SDL_GL_MakeCurrent(window, gl_context) directly)
+        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        {
+            SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
+            SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
+            ImGui::UpdatePlatformWindows();
+            ImGui::RenderPlatformWindowsDefault();
+            SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
+        }
+
+        SDL_GL_SwapWindow(window);
+
+        timeRenderEnd = std::chrono::steady_clock::now();
+        timeRenderDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
+
+        // limit framerate
+        static double lasttime = (float)(SDL_GetTicks() / 1000.0f);;
+        if (settings.LIMIT_FRAMERATE) {
+            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0/settings.TARGET_FPS) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            lasttime += 1.0/settings.TARGET_FPS;
+        }
+
+        if (first_run) first_run = 0;
+
+        cpuUsage_ImGui.measureEnd(1);
+        cpuUsage_Everything.measureEnd(0);
+    }
+
+    // Cleanup
+    // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppQuit() function]
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
+    ImGui::DestroyContext();
+
+    SDL_GL_DestroyContext(gl_context);
+    SDL_DestroyWindow(window);
+    SDL_Quit();
+
+    backend.join();
+
+    return 0;
+}
