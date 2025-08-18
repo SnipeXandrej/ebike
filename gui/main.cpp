@@ -911,7 +911,7 @@ int main(int, char**)
                     ImGui::Dummy(ImVec2(0, 20));
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("ESP32");
+                    ImGui::SeparatorText("ESP32 / EBIKE");
                     ImGui::PopStyleColor();
                     ImGui::PopFont();
 
@@ -954,16 +954,31 @@ int main(int, char**)
                         std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
                         to_send_extra.append(append);
                     }
-
+                    ImGui::SameLine();
                     if (ImGui::Button("Reset Trip", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                         std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP));
                         to_send_extra.append(append);
                     }
-
+                    ImGui::SameLine();
                     if (ImGui::Button("Reset est. Range", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                         std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
                         to_send_extra.append(append);
                     }
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::Text("Battery");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    // TODO: amphours when new is hardcoded
+                    ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
+                    ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::Text("Amphours when new: 32 Ah");
+                    ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
+                    ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
+
 
                     ImGui::Dummy(ImVec2(0, 20));
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
