@@ -1,3 +1,10 @@
+# Screenshoty
+<img src="https://raw.githubusercontent.com/SnipeXandrej/ebike/refs/heads/main/screenshots/MainTab.png" width="49.5%"/> <img src="https://raw.githubusercontent.com/SnipeXandrej/ebike/refs/heads/main/screenshots/MainTab2.png" width="49.5%"/>
+
+<img src="https://raw.githubusercontent.com/SnipeXandrej/ebike/refs/heads/main/screenshots/AppTab.png" width="49.5%"/> <img src="https://raw.githubusercontent.com/SnipeXandrej/ebike/refs/heads/main/screenshots/EBIKETab.png" width="49.5%"/>
+
+Ano, viem, tá terminológia okolo baterky je zlá... napríklad "Amphours Rated" neznamená koľko má ampérhodín od výroby, ale na koľko ampérhodín sa vie nabiť *teraz*. Niekedy opravím :)
+
 # Čo by som chcel naimplementovať:
 
 ### Teploty
