@@ -860,7 +860,7 @@ int main(int, char**)
                 }
 
 
-                if (ImGui::BeginTabItem("Settings"))
+                if (ImGui::BeginTabItem("App Menu"))
                 {
                     ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -909,6 +909,40 @@ int main(int, char**)
                     ImGui::Text("Buffer: %d (bytes)", SerialP.bytesInBuffer);
 
                     ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                          ImGui::SeparatorText("System/App Statistics");
+                        ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                    ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    // std::string text = "CPU Usage (100% = 1 core)";
+                    ImGui::Text("CPU Usage (100%% is 1 core)");
+                    ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
+                    ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
+                    ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
+                    // ImGui::Text("Memory Usage: %f", get_memory_usage());
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
+                    ImGui::Text("Rendertime: %0.1fms", timeRenderDiff);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Hostname: %s", hostname);
+                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
+
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("E-BIKE Menu"))
+                {
+                    ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("ESP32 / EBIKE");
@@ -967,7 +1001,7 @@ int main(int, char**)
 
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::Text("Battery");
+                    ImGui::SeparatorText("Battery");
                     ImGui::PopStyleColor();
                     ImGui::PopFont();
 
@@ -979,33 +1013,6 @@ int main(int, char**)
                     ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
                     ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
 
-
-                    ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                          ImGui::SeparatorText("System/App Statistics");
-                        ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-                    ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    // std::string text = "CPU Usage (100% = 1 core)";
-                    ImGui::Text("CPU Usage (100%% is 1 core)");
-                    ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
-                    ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
-                    ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
-                    // ImGui::Text("Memory Usage: %f", get_memory_usage());
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
-                    ImGui::Text("Rendertime: %0.1fms", timeRenderDiff);
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Hostname: %s", hostname);
-                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
 
                     ImGui::EndChild();
                     ImGui::EndTabItem();
