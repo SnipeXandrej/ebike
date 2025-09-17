@@ -604,7 +604,7 @@ int main(int, char**)
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     // float main_scale = 0.66f;
     SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1520 * main_scale), (int)(720 * main_scale), window_flags);
+    SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
     if (window == nullptr)
     {
         printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
@@ -712,7 +712,7 @@ int main(int, char**)
                         localTime = localtime( &currentTime );
 
                         char text[100];
-                        sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon, localTime->tm_year+1900);
+                        sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon+1, localTime->tm_year+1900);
                         ImVec2 textSize = ImGui::CalcTextSize(text);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
                         ImGui::Text(text);
@@ -907,174 +907,181 @@ int main(int, char**)
                     ImGui::EndTabItem();
                 }
 
-
-                if (ImGui::BeginTabItem("App Menu"))
+                if (ImGui::BeginTabItem("Settings"))
                 {
-                    ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("ImGui");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
+                    if (ImGui::BeginTabBar("TABBAR2", tab_bar_flags)) {
+                        if (ImGui::BeginTabItem("App Menu"))
+                        {
+                            ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("ImGui");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
 
-                    ImGui::Checkbox("Demo Window", &show_demo_window);
-                    if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
+                            ImGui::Checkbox("Demo Window", &show_demo_window);
+                            if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
+                            }
+
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(100);
+                            const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
+                            static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
+                            if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
+                                settings.TARGET_FPS = std::stof(items[item_current]);
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
+                            }
+
+                            ImGui::Dummy(ImVec2(0, 20));
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("Serial");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            ImGui::Text("Serial write wait time ");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(150.0f);
+                            if (ImGui::InputInt("ms", &settings.serialWriteWaitMs, 1, 100)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "serialWriteWaitMs", settings.serialWriteWaitMs);
+                            }
+
+                            // char text[100];
+                            // sprintf(text, "Serialport Buffer (%d bytes in buffer)", SerialP.bytesInBuffer);
+                            if (ImGui::CollapsingHeader("SerialPort Buffer")) {
+                                ImGui::Dummy(ImVec2(30, 0));
+                                ImGui::SameLine();
+                                ImGui::TextColored(ImVec4(1.0f, 0.89f, 0.32f, 1.0f), SerialP.receivedDataToRead.c_str());
+                            }
+
+                            ImGui::Text("Receive rate %0.1f ms / %0.1f Hz", SerialP.receiveRateMs, (1000.0 / SerialP.receiveRateMs));
+                            ImGui::Text("Buffer: %d (bytes)", SerialP.bytesInBuffer);
+
+                            ImGui::Dummy(ImVec2(0, 20));
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                                ImGui::SeparatorText("System/App Statistics");
+                                ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                            ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
+
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                            // std::string text = "CPU Usage (100% = 1 core)";
+                            ImGui::Text("CPU Usage (100%% is 1 core)");
+                            ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
+                            ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
+                            ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
+                            // ImGui::Text("Memory Usage: %f", get_memory_usage());
+
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                            ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
+                            ImGui::Text("Rendertime: %0.1fms", timeRenderDiff);
+
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                            ImGui::Text("Hostname: %s", hostname);
+                            ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
+
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+
+                        if (ImGui::BeginTabItem("E-BIKE Menu"))
+                        {
+                            ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("ESP32 / EBIKE");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            // char newSerialPortPath[100] = { settings.serialPortName.c_str() };
+                            // ImGui::InputText("Serialport path:", &newSerialPortPath[0], IM_ARRAYSIZE(newSerialPortPath));
+
+                            ImGui::Text("Firmware");
+                            char text[50];
+                            sprintf(text, "   Name: %s", esp32.fw_name.c_str());
+                            ImGui::Text(text);
+
+                            sprintf(text, "   Version: %s", esp32.fw_version.c_str());
+                            ImGui::Text(text);
+
+                            sprintf(text, "   Compile Time: %s", esp32.fw_compile_date_time.c_str());
+                            ImGui::Text(text);
+
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                            ImGui::Text("Core 0 loop exec time: %0.2f us", esp32.timeCore0_us);
+                            ImGui::Text("Core 1 loop exec time: %0.2f us", esp32.timeCore1_us);
+
+                            ImGui::Dummy(ImVec2(0, 20));
+
+                            float buttonWidth = 260.0;
+                            float buttonHeight = 80.0;
+
+                            static char newOdometerValue[30];
+                            ImGui::Text("Odometer = ");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(100.0);
+                            ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
+                            // ImGui::SameLine();
+                            if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
+                                to_send_extra.append(append);
+                            }
+
+                            ImGui::Dummy(ImVec2(0, 20));
+                            if (ImGui::Button("Save preferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
+                                to_send_extra.append(append);
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Reset Trip", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP));
+                                to_send_extra.append(append);
+                            }
+                            ImGui::SameLine();
+                            if (ImGui::Button("Reset est. Range", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
+                                to_send_extra.append(append);
+                            }
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("Battery");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            // TODO: amphours when new is hardcoded
+                            ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
+                            ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
+                            ImGui::Dummy(ImVec2(0, 20));
+                            ImGui::Text("Amphours when new: 32 Ah");
+                            ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
+                            ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
+
+
+                            ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+
+                        if (ImGui::BeginTabItem("Serial Log"))
+                        {
+                            // ImGui::Text(SerialP.log.c_str());
+                            ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
+                            ImGui::EndTabItem();
+                        }
+
+                    ImGui::EndTabBar(); //TABBAR2
                     }
-
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100);
-                    const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
-                    static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
-                    if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
-                        settings.TARGET_FPS = std::stof(items[item_current]);
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
-                    }
-
-                    ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("Serial");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    ImGui::Text("Serial write wait time ");
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(150.0f);
-                    if (ImGui::InputInt("ms", &settings.serialWriteWaitMs, 1, 100)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "serialWriteWaitMs", settings.serialWriteWaitMs);
-                    }
-
-                    // char text[100];
-                    // sprintf(text, "Serialport Buffer (%d bytes in buffer)", SerialP.bytesInBuffer);
-                    if (ImGui::CollapsingHeader("SerialPort Buffer")) {
-                        ImGui::Dummy(ImVec2(30, 0));
-                        ImGui::SameLine();
-                        ImGui::TextColored(ImVec4(1.0f, 0.89f, 0.32f, 1.0f), SerialP.receivedDataToRead.c_str());
-                    }
-
-                    ImGui::Text("Receive rate %0.1f ms / %0.1f Hz", SerialP.receiveRateMs, (1000.0 / SerialP.receiveRateMs));
-                    ImGui::Text("Buffer: %d (bytes)", SerialP.bytesInBuffer);
-
-                    ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                          ImGui::SeparatorText("System/App Statistics");
-                        ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-                    ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    // std::string text = "CPU Usage (100% = 1 core)";
-                    ImGui::Text("CPU Usage (100%% is 1 core)");
-                    ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
-                    ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
-                    ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
-                    // ImGui::Text("Memory Usage: %f", get_memory_usage());
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
-                    ImGui::Text("Rendertime: %0.1fms", timeRenderDiff);
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Hostname: %s", hostname);
-                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
-
-                    ImGui::EndChild();
-                    ImGui::EndTabItem();
+                ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
                 }
-
-                if (ImGui::BeginTabItem("E-BIKE Menu"))
-                {
-                    ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("ESP32 / EBIKE");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    // char newSerialPortPath[100] = { settings.serialPortName.c_str() };
-                    // ImGui::InputText("Serialport path:", &newSerialPortPath[0], IM_ARRAYSIZE(newSerialPortPath));
-
-                    ImGui::Text("Firmware");
-                    char text[50];
-                    sprintf(text, "   Name: %s", esp32.fw_name.c_str());
-                    ImGui::Text(text);
-
-                    sprintf(text, "   Version: %s", esp32.fw_version.c_str());
-                    ImGui::Text(text);
-
-                    sprintf(text, "   Compile Time: %s", esp32.fw_compile_date_time.c_str());
-                    ImGui::Text(text);
-
-                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Core 0 loop exec time: %0.2f us", esp32.timeCore0_us);
-                    ImGui::Text("Core 1 loop exec time: %0.2f us", esp32.timeCore1_us);
-
-                    ImGui::Dummy(ImVec2(0, 20));
-
-                    float buttonWidth = 260.0;
-                    float buttonHeight = 80.0;
-
-                    static char newOdometerValue[30];
-                    ImGui::Text("Odometer = ");
-                    ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100.0);
-                    ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
-                    // ImGui::SameLine();
-                    if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
-                        to_send_extra.append(append);
-                    }
-
-                    ImGui::Dummy(ImVec2(0, 20));
-                    if (ImGui::Button("Save preferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
-                        to_send_extra.append(append);
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Reset Trip", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP));
-                        to_send_extra.append(append);
-                    }
-                    ImGui::SameLine();
-                    if (ImGui::Button("Reset est. Range", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
-                        to_send_extra.append(append);
-                    }
-
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("Battery");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    // TODO: amphours when new is hardcoded
-                    ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
-                    ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
-                    ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::Text("Amphours when new: 32 Ah");
-                    ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
-                    ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
-
-
-                    ImGui::EndChild();
-                    ImGui::EndTabItem();
-                }
-
-                if (ImGui::BeginTabItem("Serial Log"))
-                {
-                    // ImGui::Text(SerialP.log.c_str());
-                    ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
-                    ImGui::EndTabItem();
-                }
-
-                    ImGui::EndTabBar();
+            ImGui::EndTabBar(); //TABBAR1
             }
+
             ImGui::SameLine();
             ImGui::Dummy(ImVec2(40.0f, 0.0f));
 
