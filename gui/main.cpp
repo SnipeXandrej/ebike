@@ -703,9 +703,20 @@ int main(int, char**)
             if (ImGui::BeginTabBar("Tabbar", tab_bar_flags)) {
                 if (ImGui::BeginTabItem("Main"))
                 {
-                    // Clock
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 55.0f, 7.0));
-                    ImGui::Text("12:34:56");
+                    {
+                        // Clock
+                        time_t currentTime;
+                        struct tm *localTime;
+
+                        time( &currentTime );
+                        localTime = localtime( &currentTime );
+
+                        char text[100];
+                        sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon, localTime->tm_year+1900);
+                        ImVec2 textSize = ImGui::CalcTextSize(text);
+                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
+                        ImGui::Text(text);
+                    }
 
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
