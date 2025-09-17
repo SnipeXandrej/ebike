@@ -28,6 +28,7 @@
 #include "ebike-utils.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
+#include "map.cpp"
 
 std::vector<std::string> split(const std::string& input, char delimiter) {
     std::vector<std::string> result;
@@ -237,16 +238,18 @@ std::string readString;
 
 InputOffset BatVoltageCorrection;
 InputOffset PotThrottleCorrection;
+InputOffset ThrottleCurveCorrection;
 
 MovingAverage BatVoltageMovingAverage;
 MovingAverage PotThrottleMovingAverage;
 MovingAverage BatWattMovingAverage;
-MovingAverage Throttle;
 MovingAverage WhOverKmMovingAverage;
 MovingAverage batteryAuxWattsMovingAverage;
 MovingAverage batteryAuxMovingAverage;
 MovingAverage batteryWattsMovingAverage;
 MovingAverage speed_kmhMovingAverage;
+
+ThrottleMap throttle;
 
 Preferences preferences;
 
@@ -262,6 +265,7 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinButton3  -1 // TX2
 #define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
 #define pinAdcRdyAlert 33 // D33
+#define pinPowerSwitch 27 // D27
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
@@ -942,10 +946,15 @@ void loop_core1 (void* pvParameters) {
         if (rotorCanPowerMotor == 0) {
             VESC.setCurrent(0.0f);
         } else {
-            PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
-            // float throttleClampedValue = clampValue(PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm));
-            
-            VESC.setCurrent(PotThrottleAmpsRequested);
+            // PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
+            // PotThrottleAmpsRequested = map_f(ThrottleCurveCorrection.correctInput(PotThrottleLevelReal), 0, 100, 0, gear1.maxCurrent);
+
+            // if (PotThrottleLevelReal < 1.0) {
+            //     VESC.setBrakeCurrent(20.0f);
+            // } else {
+                VESC.setCurrent(throttle.map(PotThrottleLevelReal));
+            // }
+            // VESC.setDuty(PotThrottleLevelReal / 100.0);
 
             // VESC.setCurrent(
             //     clampValue(
@@ -1018,7 +1027,7 @@ void loop_core1 (void* pvParameters) {
                 // printVescMcConfTempValues();
                 // run_once_mcconf = true;
             // }
-            
+
             // stuff to run
         }
 
@@ -1058,7 +1067,7 @@ void app_main(void)
     motor.poles = 18;
     motor.magnetPairs = 3;
     wheel.diameter = 63.0f;
-    wheel.gear_ratio = 5.7f;
+    wheel.gear_ratio = 14.9625f; // (42/10) * (57/16)
     battery.voltage_min = 66.0f;
     battery.voltage_max = 82.0f;
 
@@ -1078,7 +1087,18 @@ void app_main(void)
 
     gearCurrent = gear1;
 
-
+    std::vector<Point> customCurve = {
+        {0, 0},
+        {8, 8},
+        {15, 13},
+        {20, 18},
+        {30, 30},
+        {40, 40},
+        {50, 60},
+        {75, 120},
+        {100, 200}
+    };
+    throttle.setCurve(customCurve);
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset
@@ -1121,11 +1141,21 @@ void app_main(void)
     };
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
+    ThrottleCurveCorrection.offsetPoints = {
+    // input, offset
+    {0.0, 0},
+    {5.0, -2.0},
+    {10.0, -5.0},
+    {15.0, -8.0},
+    {20.0, -10.0},
+    {30.0, 0.0},
+    {100.0, 0.0}
+    };
+
     // smoothing factors
     BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
     BatWattMovingAverage.smoothingFactor = 0.1;
     PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
-    Throttle.smoothingFactor = 0.1;
     WhOverKmMovingAverage.smoothingFactor = 0.05;
     batteryAuxWattsMovingAverage.smoothingFactor = 0.2;
     batteryAuxMovingAverage.smoothingFactor = 0.2;
@@ -1186,6 +1216,9 @@ void app_main(void)
     // configure backlight of the TFT
     pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
     digitalWrite(pinTFTbacklight, LOW); // Turn on backlight
+
+    // Power Switch
+    pinMode(pinPowerSwitch, INPUT_PULLDOWN);
 
     setCpuFrequencyMhz(240);
 
