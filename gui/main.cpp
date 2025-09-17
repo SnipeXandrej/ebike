@@ -29,7 +29,7 @@
 #include <format>
 
 // float scale;
-float MAX_WATTAGE = 7000.0;
+float MAX_WATTAGE = 7500.0;
 
 enum COMMAND_ID {
     GET_BATTERY = 0,
@@ -207,13 +207,15 @@ void powerVerticalDiagonalHorizontal(float input) {
     ImU32 greenDark     = IM_COL32(0, 45, 0, 255); // Green
     ImU32 greenBright   = IM_COL32(0, 255, 0, 255); // Green
 
-    float mapped = map_f(input, 0.0, MAX_WATTAGE, 0.0, 75.0);
+    float mapped = map_f(input, 0.0, MAX_WATTAGE, 1.0, 75.0);
 
     int BAR_COUNT_DIAGONAL = 25;
     int BAR_COUNT_HORIZONTAL = BAR_COUNT_DIAGONAL + 50;
 
     // ImGui::BeginGroup();
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    int kw_point = 0;
 
     for (float i = 1; i <= BAR_COUNT_DIAGONAL; i += 1) {
         pos.y -= 13.0f;
@@ -232,6 +234,16 @@ void powerVerticalDiagonalHorizontal(float input) {
         }
 
         drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+        if (((int)i+1) % 10 == 1) {
+            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
+            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+
+            ImGui::BeginGroup();
+                ImGui::SetCursorPos(ImVec2(center.x - 35.0, center.y - 70.0));
+                kw_point++;
+                ImGui::Text("%d", kw_point);
+            ImGui::EndGroup();
+        }
     }
 
     size = ImVec2(80, 10); // Width x Height
@@ -253,6 +265,16 @@ void powerVerticalDiagonalHorizontal(float input) {
         }
 
         drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+        if (((int)i+1) % 10 == 1) {
+            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
+            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+
+            ImGui::BeginGroup();
+                ImGui::SetCursorPos(ImVec2(center.x - 30.0, center.y - 65.0));
+                kw_point++;
+                ImGui::Text("%d", kw_point);
+            ImGui::EndGroup();
+        }
     }
     // ImGui::EndGroup();
 }
@@ -786,7 +808,7 @@ int main(int, char**)
                         wattage_MovingAverage.moveAverage(battery.watts);
                         powerVerticalDiagonalHorizontal(wattage_MovingAverage.output);
                         // ImGui::SameLine();
-                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 170.0));
+                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
                         ImGui::BeginGroup();
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                             ImGui::Text("Wh/km: %0.1f\nWh/km: %0.1f NOW", esp32.wh_over_km_average, (battery.watts / esp32.speed_kmh));
