@@ -30,6 +30,26 @@
 #include "MiniPID.h"
 #include "map.cpp"
 
+class Display {
+private:
+    uint32_t timeStart;
+    uint32_t timeEnd;
+
+public:
+    void ping() {
+        timeStart = timer_u32();
+    }
+
+    bool isExternalDisplayConnected() {
+        timeEnd = timer_u32();
+        if (timer_delta_ms(timeEnd - timeStart) > 1000.0) {
+            return false;
+        } else {
+            return true;
+        }
+    }
+};
+
 std::vector<std::string> split(const std::string& input, char delimiter) {
     std::vector<std::string> result;
     std::stringstream ss(input);
@@ -52,7 +72,8 @@ enum COMMAND_ID {
     SET_ODOMETER = 6,
     SAVE_PREFERENCES = 7,
     READY_TO_WRITE = 8,
-    GET_FW = 9
+    GET_FW = 9,
+    PING = 10
 };
 
 void commAddValue(std::string* string, double value, int precision) {
@@ -250,6 +271,8 @@ MovingAverage batteryWattsMovingAverage;
 MovingAverage speed_kmhMovingAverage;
 
 ThrottleMap throttle;
+
+Display display;
 
 Preferences preferences;
 
@@ -1375,6 +1398,11 @@ void app_main(void)
                         toSend.append("\n");
                         Serial.printf(toSend.c_str());
                         break;
+
+
+                    case COMMAND_ID::PING:
+                        display.ping();
+                        break;
                 }
             }
 
@@ -1390,7 +1418,12 @@ void app_main(void)
         // function for counting the current time and date
         clock_date_and_time();
 
-        // printDisplay();
+        if (!display.isExternalDisplayConnected()) {
+            digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
+            printDisplay();
+        } else {
+            digitalWrite(pinTFTbacklight, LOW); // Turn off backlight
+        }
 
         // Execute every second that elapsed
         timeStartExecEverySecondCore0 = timer_u32();

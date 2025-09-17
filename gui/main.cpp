@@ -41,7 +41,8 @@ enum COMMAND_ID {
     SET_ODOMETER = 6,
     SAVE_PREFERENCES = 7,
     READY_TO_WRITE = 8,
-    GET_FW = 9
+    GET_FW = 9,
+    PING = 10
 };
 
 float voltage;
@@ -67,6 +68,10 @@ auto timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - time
 auto timeRenderStart = std::chrono::steady_clock::now();
 auto timeRenderEnd = std::chrono::steady_clock::now();
 auto timeRenderDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
+
+auto timePingStart = std::chrono::steady_clock::now();
+auto timePingEnd = std::chrono::steady_clock::now();
+auto timePingDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
 
 float voltage_last_values_array[140];
 float current_last_values_array[140];
@@ -492,6 +497,16 @@ int main(int, char**)
 
             if (SerialP.succesfulCommunication) { //  && ready_to_write
                 // startLastTransmitTime = std::chrono::steady_clock::now();
+
+                timePingEnd = std::chrono::steady_clock::now();
+                if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 500.0) {
+                    timePingStart = std::chrono::steady_clock::now();
+
+                    commAddValue(&to_send, COMMAND_ID::PING, 0);
+                    to_send.append("\n");
+
+                    std::printf("ping setn!\n");
+                }
 
                 commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
                 to_send.append("\n");
