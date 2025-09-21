@@ -42,7 +42,9 @@ enum COMMAND_ID {
     SAVE_PREFERENCES = 7,
     READY_TO_WRITE = 8,
     GET_FW = 9,
-    PING = 10
+    PING = 10,
+    TOGGLE_FRONT_LIGHT = 11,
+    ESP32_SERIAL_LENGTH = 12
 };
 
 float voltage;
@@ -99,6 +101,7 @@ struct {
     float timeCore0_us;
     float timeCore1_us;
     float acceleration;
+    bool power_on = false;
 
     std::string fw_name;
     std::string fw_version;
@@ -375,6 +378,7 @@ void processSerialRead(std::string line) {
                         esp32.timeCore0_us = getValueFromPacket(packet, &index);
                         esp32.timeCore1_us = getValueFromPacket(packet, &index);
                         esp32.acceleration = getValueFromPacket(packet, &index);
+                        esp32.power_on = (bool)getValueFromPacket(packet, &index);
 
                         esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
                         esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
@@ -487,6 +491,7 @@ int main(int, char**)
             SerialP.timeout_ms = settings.serialWriteWaitMs;
 
             to_send = "";
+
             if (!SerialP.succesfulCommunication) {
                 std::string to_send = std::to_string(COMMAND_ID::ARE_YOU_ALIVE);
                 SerialP.writeSerial(to_send.c_str());
@@ -505,7 +510,8 @@ int main(int, char**)
                     commAddValue(&to_send, COMMAND_ID::PING, 0);
                     to_send.append("\n");
 
-                    std::printf("ping setn!\n");
+                    commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
+                    to_send.append("\n");
                 }
 
                 commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
@@ -514,8 +520,6 @@ int main(int, char**)
                 to_send.append("\n");
 
                 if (!SerialP.sent_once) {
-                    commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
-                    to_send.append("\n");
 
                     SerialP.sent_once = true;
                 }
@@ -721,7 +725,7 @@ int main(int, char**)
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
                             static bool succesfulCommunication_avoidMutex;
-                            if (!SerialP.succesfulCommunication) {
+                            if (!SerialP.succesfulCommunication || !esp32.power_on) {
                                 succesfulCommunication_avoidMutex = false;
                                 ImGui::BeginDisabled();
                             } else {
@@ -756,7 +760,8 @@ int main(int, char**)
                             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(1 / 7.0f, 0.7f, 0.5f));
                             ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(1 / 7.0f, 0.9f, 0.9f));
                             char sliderFormat[100];
-                            sprintf(sliderFormat, "%0.0fW\n%0.0fW", battery.watts, wattageMoreSmooth_MovingAverage.output);
+                            // sprintf(sliderFormat, "%0.0fW\n%0.0fW\n%0.0f%%/h", battery.watts, wattageMoreSmooth_MovingAverage.output, 100.0 / ((battery.ampHoursRated*72.0) / wattageMoreSmooth_MovingAverage.output));
+                            sprintf(sliderFormat, "%0.0fW\n%0.0fW\n", battery.watts, wattageMoreSmooth_MovingAverage.output);
                             ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.watts, 0.0f, MAX_WATTAGE, sliderFormat);
                             ImGui::PopStyleColor(4);
                             ImGui::PopID();
@@ -789,6 +794,12 @@ int main(int, char**)
                             // ImGui::PlotHistogram("##", current_last_values_array, IM_ARRAYSIZE(current_last_values_array), 0, NULL, 0.0f, 20.0f, ImVec2(250, 140.0f));
                             // ImGui::PopStyleColor(1);
                             // ImGui::PopID();
+
+                            if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
+                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
+                                to_send_extra.append(append);
+                            }
+
                         ImGui::EndGroup();
                     ImGui::EndGroup(); // Ends here
 
@@ -1002,6 +1013,9 @@ int main(int, char**)
                             // char newSerialPortPath[100] = { settings.serialPortName.c_str() };
                             // ImGui::InputText("Serialport path:", &newSerialPortPath[0], IM_ARRAYSIZE(newSerialPortPath));
 
+                            ImGui::Text("Powered on: %s", esp32.power_on ? "True" : "False");
+                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
+
                             ImGui::Text("Firmware");
                             char text[50];
                             sprintf(text, "   Name: %s", esp32.fw_name.c_str());
@@ -1062,6 +1076,9 @@ int main(int, char**)
                             ImGui::Text("Amphours when new: 32 Ah");
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
                             ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
+                            ImGui::Dummy(ImVec2(0, 20));
+                            // Amphours used lifetime since 17.09.2025
+                            ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
 
 
                             ImGui::EndChild();
@@ -1074,16 +1091,12 @@ int main(int, char**)
                             ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
                             ImGui::EndTabItem();
                         }
-
                     ImGui::EndTabBar(); //TABBAR2
                     }
                 ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
                 }
             ImGui::EndTabBar(); //TABBAR1
             }
-
-            ImGui::SameLine();
-            ImGui::Dummy(ImVec2(40.0f, 0.0f));
 
             ImGui::End();
             timeDrawEnd = std::chrono::steady_clock::now();

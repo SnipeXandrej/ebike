@@ -73,7 +73,9 @@ enum COMMAND_ID {
     SAVE_PREFERENCES = 7,
     READY_TO_WRITE = 8,
     GET_FW = 9,
-    PING = 10
+    PING = 10,
+    TOGGLE_FRONT_LIGHT = 11,
+    ESP32_SERIAL_LENGTH = 12
 };
 
 void commAddValue(std::string* string, double value, int precision) {
@@ -139,6 +141,7 @@ struct {
     double distance; // in km
     double distanceDiff;
     double DNU_refresh;
+    double wattHoursUsed;
 } trip;
 
 struct {
@@ -269,6 +272,7 @@ MovingAverage batteryAuxWattsMovingAverage;
 MovingAverage batteryAuxMovingAverage;
 MovingAverage batteryWattsMovingAverage;
 MovingAverage speed_kmhMovingAverage;
+MovingAverage wattageMoreSmooth_MovingAverage;
 
 ThrottleMap throttle;
 
@@ -276,7 +280,7 @@ Display display;
 
 Preferences preferences;
 
-double kP = 0.2, kI = 0.1, kD = 2; //kP = 0.1, 0.3 is unstable
+double kP = 1, kI = 0.02, kD = 0.5; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
 
 #define pinRotor          25                // D25
@@ -313,6 +317,7 @@ void estimatedRangeReset() {
 
 void tripReset() {
     trip.distance = 0;
+    trip.wattHoursUsed = 0;
     // estimatedRangeReset();
 }
 
@@ -424,8 +429,8 @@ void getBatteryCurrent() {
 
     _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
     battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
-    battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
     if (_batteryCurrentUsedInElapsedTime >= 0.0) {
+        battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
         estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
     }
 
@@ -433,6 +438,7 @@ void getBatteryCurrent() {
     if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
             battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
+    trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
 
     getBatteryCurrent_newData = false;
     // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - time_getBatteryCurrent));
@@ -448,27 +454,27 @@ int PowerLevel3Watts = 1000;
 
 void setPowerLevel(int level) {
     if (level == -1) {
-        powerLimiterPID.setSetpoint(PowerLevelnegative1Watts);
+        // powerLimiterPID.setSetpoint(PowerLevelnegative1Watts);
         selectedPowerMode = -1;
     }
 
     if (level == 0) {
-        powerLimiterPID.setSetpoint(PowerLevel0Watts);
+        // powerLimiterPID.setSetpoint(PowerLevel0Watts);
         selectedPowerMode = 0;
     }
 
     if (level == 1) {
-        powerLimiterPID.setSetpoint(PowerLevel1Watts);
+        // powerLimiterPID.setSetpoint(PowerLevel1Watts);
         selectedPowerMode = 1;
     }
 
     if (level == 2) {
-        powerLimiterPID.setSetpoint(PowerLevel2Watts);
+        // powerLimiterPID.setSetpoint(PowerLevel2Watts);
         selectedPowerMode = 2;
     }
 
     if (level == 3) {
-        powerLimiterPID.setSetpoint(PowerLevel3Watts);
+        // powerLimiterPID.setSetpoint(PowerLevel3Watts);
         selectedPowerMode = 3;
     }
 }
@@ -526,6 +532,18 @@ int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetwee
         }
     }
     return ret;
+}
+
+bool POWER_ON = false;
+
+void powerSwitchCallback() {
+    if (digitalRead(pinPowerSwitch)) {
+        POWER_ON = true;
+        // setCpuFrequencyMhz(240);
+    } else {
+        POWER_ON = false;
+        // setCpuFrequencyMhz(80);
+    }
 }
 
 int buttonPressCount[4] = {2};
@@ -966,7 +984,7 @@ void loop_core1 (void* pvParameters) {
         }
 
         // Throttle
-        if (rotorCanPowerMotor == 0) {
+        if (rotorCanPowerMotor == 0 || !POWER_ON) {
             VESC.setCurrent(0.0f);
         } else {
             // PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
@@ -975,6 +993,9 @@ void loop_core1 (void* pvParameters) {
             // if (PotThrottleLevelReal < 1.0) {
             //     VESC.setBrakeCurrent(20.0f);
             // } else {
+                // wattageMoreSmooth_MovingAverage.moveAverage(battery.watts);
+                // float PotThrottleLevelAdjusted = PotThrottleLevelReal + powerLimiterPID.getOutput(wattageMoreSmooth_MovingAverage.output, 100);
+                // VESC.setCurrent(throttle.map(PotThrottleLevelAdjusted));
                 VESC.setCurrent(throttle.map(PotThrottleLevelReal));
             // }
             // VESC.setDuty(PotThrottleLevelReal / 100.0);
@@ -1036,7 +1057,7 @@ void loop_core1 (void* pvParameters) {
         } else {
             wh_over_km = battery.watts / speed_kmh;
         }
-        wh_over_km_average = battery.wattHoursUsed / trip.distance;
+        wh_over_km_average = trip.wattHoursUsed / trip.distance;
 
         estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
         estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
@@ -1184,6 +1205,7 @@ void app_main(void)
     batteryAuxMovingAverage.smoothingFactor = 0.2;
     batteryWattsMovingAverage.smoothingFactor = 0.2;
     speed_kmhMovingAverage.smoothingFactor = 0.02;
+    wattageMoreSmooth_MovingAverage.smoothingFactor = 0.4f;
 
     initArduino();
     Serial.begin(230400);
@@ -1242,8 +1264,9 @@ void app_main(void)
 
     // Power Switch
     pinMode(pinPowerSwitch, INPUT_PULLDOWN);
+    attachInterrupt(pinPowerSwitch, powerSwitchCallback, GPIO_INTR_ANYEDGE);
 
-    setCpuFrequencyMhz(240);
+    powerSwitchCallback();
 
     ledc_timer_config_t timer_conf = {
         .speed_mode = LEDC_HIGH_SPEED_MODE,
@@ -1271,7 +1294,7 @@ void app_main(void)
         timeButton[i] = 0;
     }
 
-    // powerLimiterPID.setOutputLimits(-100, 0);
+    powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
     setPowerLevel(-1);
     setGearLevel(2);
@@ -1312,12 +1335,12 @@ void app_main(void)
         static std::string toSend;
         if (!readString.empty()) {
             auto readStringPacket = split(readString, '\n');
+
             for (int i = 0; i < readStringPacket.size(); i++) {
                 auto packet = split(readStringPacket[i], ';');
                 int packet_command_id = std::stoi(packet[0]);
 
                 toSend = "";
-
                 switch(packet_command_id) {
                     case COMMAND_ID::GET_BATTERY:
                         commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
@@ -1362,6 +1385,7 @@ void app_main(void)
                         commAddValue(&toSend, timer_delta_us(timeCore0), 1);
                         commAddValue(&toSend, timer_delta_us(timeCore1), 1);
                         commAddValue(&toSend, acceleration, 1);
+                        commAddValue(&toSend, POWER_ON, 0);
                    
                         toSend.append("\n");
                         Serial.printf(toSend.c_str());
@@ -1399,9 +1423,12 @@ void app_main(void)
                         Serial.printf(toSend.c_str());
                         break;
 
-
                     case COMMAND_ID::PING:
                         display.ping();
+                        break;
+
+                    case COMMAND_ID::TOGGLE_FRONT_LIGHT:
+
                         break;
                 }
             }
@@ -1418,7 +1445,7 @@ void app_main(void)
         // function for counting the current time and date
         clock_date_and_time();
 
-        if (!display.isExternalDisplayConnected()) {
+        if (!display.isExternalDisplayConnected() && POWER_ON) {
             digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
             printDisplay();
         } else {
