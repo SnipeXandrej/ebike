@@ -134,12 +134,13 @@ struct {
 } battery;
 
 #include "other.hpp"
-MovingAverage current_MovingAverage;
-MovingAverage amp_out_voltage1_MovingAverage;
-MovingAverage amp_out_voltage2_MovingAverage;
-MovingAverage acceleration_MovingAverage;
-MovingAverage wattage_MovingAverage;
-MovingAverage wattageMoreSmooth_MovingAverage;
+
+struct {
+    MovingAverage current;
+    MovingAverage acceleration;
+    MovingAverage wattage;
+    MovingAverage wattageMoreSmooth;
+} movingAverages;
 
 CPUUsage cpuUsage_ImGui;
 CPUUsage cpuUsage_SerialThread;
@@ -436,12 +437,10 @@ int main(int, char**)
     // ####################
     // ##### Settings #####
     // ####################
-    current_MovingAverage.smoothingFactor = 0.7f;
-    amp_out_voltage1_MovingAverage.smoothingFactor = 0.5f;
-    amp_out_voltage2_MovingAverage.smoothingFactor = 0.5f;
-    acceleration_MovingAverage.smoothingFactor = 0.5f;
-    wattage_MovingAverage.smoothingFactor = 0.6f;
-    wattageMoreSmooth_MovingAverage.smoothingFactor = 0.1f;
+    movingAverages.current.smoothingFactor = 0.7f;
+    movingAverages.acceleration.smoothingFactor = 0.5f;
+    movingAverages.wattage.smoothingFactor = 0.6f;
+    movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
 
     settings.TARGET_FPS = 60;
     settings.LIMIT_FRAMERATE = true;
@@ -752,7 +751,7 @@ int main(int, char**)
                             ImGui::PopStyleColor(4);
                             ImGui::PopID();
 
-                            wattageMoreSmooth_MovingAverage.moveAverage(battery.watts);
+                            movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
                             ImGui::PushID(2);
                             ImGui::SameLine();
                             ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(1 / 7.0f, 0.5f, 0.5f));
@@ -760,8 +759,8 @@ int main(int, char**)
                             ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(1 / 7.0f, 0.7f, 0.5f));
                             ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(1 / 7.0f, 0.9f, 0.9f));
                             char sliderFormat[100];
-                            // sprintf(sliderFormat, "%0.0fW\n%0.0fW\n%0.0f%%/h", battery.watts, wattageMoreSmooth_MovingAverage.output, 100.0 / ((battery.ampHoursRated*72.0) / wattageMoreSmooth_MovingAverage.output));
-                            sprintf(sliderFormat, "%0.0fW\n%0.0fW\n", battery.watts, wattageMoreSmooth_MovingAverage.output);
+                            // sprintf(sliderFormat, "%0.0fW\n%0.0fW\n%0.0f%%/h", battery.watts, movingAverages.wattageMoreSmooth.output, 100.0 / ((battery.ampHoursRated*72.0) / movingAverages.wattageMoreSmooth.output));
+                            sprintf(sliderFormat, "%0.0fW\n%0.0fW\n", battery.watts, movingAverages.wattageMoreSmooth.output);
                             ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.watts, 0.0f, MAX_WATTAGE, sliderFormat);
                             ImGui::PopStyleColor(4);
                             ImGui::PopID();
@@ -842,8 +841,8 @@ int main(int, char**)
                     // Wh/km
                     ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 6, io.DisplaySize.y / 1.7));
                     ImGui::BeginGroup();
-                        wattage_MovingAverage.moveAverage(battery.watts);
-                        powerVerticalDiagonalHorizontal(wattage_MovingAverage.output);
+                        movingAverages.wattage.moveAverage(battery.watts);
+                        powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
                         // ImGui::SameLine();
                         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
                         ImGui::BeginGroup();
@@ -863,7 +862,7 @@ int main(int, char**)
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
-                                // acceleration_MovingAverage.moveAverage(esp32.acceleration);
+                                // movingAverages.acceleration.moveAverage(esp32.acceleration);
                                 ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
                             ImGui::PopFont();
                         ImGui::EndGroup();
