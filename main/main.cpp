@@ -75,7 +75,8 @@ enum COMMAND_ID {
     GET_FW = 9,
     PING = 10,
     TOGGLE_FRONT_LIGHT = 11,
-    ESP32_SERIAL_LENGTH = 12
+    ESP32_SERIAL_LENGTH = 12,
+    SET_AMPHOURS_USED_LIFETIME = 13
 };
 
 void commAddValue(std::string* string, double value, int precision) {
@@ -206,6 +207,7 @@ float wh_over_km_average = 0; // over time
 float speed_kmh = 0;
 float speed_kmh_previous = 0;
 float acceleration = 0;
+float motor_rpm = 0;
 
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
 uint32_t timeStartCore0 = 0, timeCore0 = 0;    
@@ -1036,7 +1038,8 @@ void loop_core1 (void* pvParameters) {
                 trip.tachometer_abs_previous = VESC.data.tachometerAbs;
             }
 
-            speed_kmh = (((float)VESC.data.rpm / (float)motor.magnetPairs) / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+            motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
+            speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
             speed_kmhMovingAverage.moveAverage(speed_kmh);
             // if (timer_delta_ms(timer_u32() - timeAcceleration) >= 100) {
                 acceleration = (speed_kmhMovingAverage.output - speed_kmh_previous) * (1.0 / timer_delta_s(timer_u32() - timeAcceleration));
@@ -1371,6 +1374,7 @@ void app_main(void)
                     case COMMAND_ID::GET_STATS:
                         commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
                         commAddValue(&toSend, speed_kmh, 1);
+                        commAddValue(&toSend, motor_rpm, 0);
                         commAddValue(&toSend, odometer.distance, 1);
                         commAddValue(&toSend, trip.distance, 2);
                         commAddValue(&toSend, gearCurrent.level, 0);
@@ -1429,6 +1433,10 @@ void app_main(void)
 
                     case COMMAND_ID::TOGGLE_FRONT_LIGHT:
 
+                        break;
+
+                    case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
+                        battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
                         break;
                 }
             }
