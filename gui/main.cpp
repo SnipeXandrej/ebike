@@ -149,6 +149,18 @@ CPUUsage cpuUsage_SerialThread;
 CPUUsage cpuUsage_Everything;
 SerialProcessor SerialP;
 
+void setBrightnessLow() {
+    // std::system("brightnessctl set 0%");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::system("kscreen-doctor --dpms off");
+}
+
+void setBrightnessHigh() {
+    // std::system("brightnessctl set 100%");
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::system("kscreen-doctor --dpms on");
+}
+
 std::string to_send = "";
 std::string to_send_extra = "";
 
@@ -665,6 +677,19 @@ int main(int, char**)
         cpuUsage_ImGui.measureStart(1);
         cpuUsage_Everything.measureStart(0);
 
+        static bool power_on_old = false;
+        if (esp32.power_on && power_on_old != esp32.power_on) {
+            power_on_old = esp32.power_on;
+
+            // Run this when the bike gets powered on
+            std::thread(setBrightnessHigh).detach();
+        } else if (!esp32.power_on && power_on_old != esp32.power_on) {
+            power_on_old = esp32.power_on;
+
+            // Run this when the bike gets powered off
+            std::thread(setBrightnessLow).detach();
+        }
+
         // Poll and handle events (inputs, window resize, etc.)
         // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
         // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
@@ -1080,7 +1105,7 @@ int main(int, char**)
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
                             ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
                             ImGui::Dummy(ImVec2(0, 20));
-                            // Amphours used lifetime since 17.09.2025
+                            // Amphours used lifetime since 22.09.2025
                             ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
 
                             static char newAmphoursUsedLifetimeValue[30];
