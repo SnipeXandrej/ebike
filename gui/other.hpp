@@ -310,5 +310,5 @@ void StyleColorsDarkBreeze(ImGuiStyle* dst = nullptr) {
     style->GrabRounding      = 3.0f;
     style->ScrollbarRounding = 5.0f;
     style->TabRounding       = 4.0f;
-    style->ScrollbarSize     = 30.0f;
+    style->ScrollbarSize     = 70.0f;
 }

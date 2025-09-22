@@ -1131,11 +1131,11 @@ int main(int, char**)
                             ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
                             ImGui::EndTabItem();
                         }
-                    ImGui::EndTabBar(); //TABBAR2
+                        ImGui::EndTabBar(); //TABBAR2
                     }
-                ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
+                    ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
                 }
-            ImGui::EndTabBar(); //TABBAR1
+                ImGui::EndTabBar(); //TABBAR1
             }
 
             ImGui::End();
