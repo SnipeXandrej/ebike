@@ -1361,14 +1361,12 @@ void app_main(void)
                         commAddValue(&toSend, battery.amphours_max_voltage, 1);
 
                         toSend.append("\n");
-                        Serial.printf(toSend.c_str());
                         break;
 
                     case COMMAND_ID::ARE_YOU_ALIVE:
                         commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
 
                         toSend.append("\n");
-                        Serial.printf(toSend.c_str());
                         break;
 
                     case COMMAND_ID::GET_STATS:
@@ -1392,7 +1390,6 @@ void app_main(void)
                         commAddValue(&toSend, POWER_ON, 0);
                    
                         toSend.append("\n");
-                        Serial.printf(toSend.c_str());
                         break;
 
                     case COMMAND_ID::SET_ODOMETER:
@@ -1416,7 +1413,6 @@ void app_main(void)
                         commAddValue(&toSend, COMMAND_ID::READY_TO_WRITE, 0);
 
                         toSend.append("\n");
-                        Serial.printf(toSend.c_str());
                         break;
 
                     case COMMAND_ID::GET_FW:
@@ -1424,7 +1420,6 @@ void app_main(void)
                         toSend.append(std::format("{};{}; {} {};", "EBIKE", "0.0", __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
 
                         toSend.append("\n");
-                        Serial.printf(toSend.c_str());
                         break;
 
                     case COMMAND_ID::PING:
@@ -1438,6 +1433,10 @@ void app_main(void)
                     case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
                         battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
                         break;
+                }
+
+                if (strlen(toSend.c_str()) > 0) {
+                    Serial.printf(toSend.c_str());
                 }
             }
 
