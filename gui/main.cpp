@@ -44,7 +44,8 @@ enum COMMAND_ID {
     GET_FW = 9,
     PING = 10,
     TOGGLE_FRONT_LIGHT = 11,
-    ESP32_SERIAL_LENGTH = 12
+    ESP32_SERIAL_LENGTH = 12,
+    SET_AMPHOURS_USED_LIFETIME = 13
 };
 
 float voltage;
@@ -88,6 +89,7 @@ struct {
     uint64_t clockDaysSinceBoot = 0;
 
     float speed_kmh;
+    float motor_rpm;
     float odometer_distance;
     float trip_distance;
     float gear_level;
@@ -365,6 +367,7 @@ void processSerialRead(std::string line) {
 
                     case COMMAND_ID::GET_STATS:
                         esp32.speed_kmh = getValueFromPacket(packet, &index);
+                        esp32.motor_rpm = getValueFromPacket(packet, &index);
                         esp32.odometer_distance = getValueFromPacket(packet, &index);
                         esp32.trip_distance = getValueFromPacket(packet, &index);
                         esp32.gear_level = getValueFromPacket(packet, &index);
@@ -863,7 +866,8 @@ int main(int, char**)
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
-                                ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
+                                // ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
+                                ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
                             ImGui::PopFont();
                         ImGui::EndGroup();
 
@@ -1079,6 +1083,18 @@ int main(int, char**)
                             // Amphours used lifetime since 17.09.2025
                             ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
 
+                            static char newAmphoursUsedLifetimeValue[30];
+                            ImGui::Text("Set Amphours Used (Lifetime) value = ");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(100.0);
+                            ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
+                            // ImGui::SameLine();
+                            if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                if (strlen(newAmphoursUsedLifetimeValue) > 0) {
+                                    std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_USED_LIFETIME), newAmphoursUsedLifetimeValue);
+                                    to_send_extra.append(append);
+                                }
+                            }
 
                             ImGui::EndChild();
                             ImGui::EndTabItem();
