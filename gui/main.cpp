@@ -45,8 +45,26 @@ enum COMMAND_ID {
     PING = 10,
     TOGGLE_FRONT_LIGHT = 11,
     ESP32_SERIAL_LENGTH = 12,
-    SET_AMPHOURS_USED_LIFETIME = 13
+    SET_AMPHOURS_USED_LIFETIME = 13,
+    GET_VESC_MCCONF = 14,
+    SET_VESC_MCCONF = 15,
 };
+
+struct {
+    float l_current_min_scale;
+    float l_current_max_scale;
+    float l_min_erpm;
+    float l_max_erpm;
+    float l_min_duty;
+    float l_max_duty;
+    float l_watt_min;
+    float l_watt_max;
+    float l_in_current_min;
+    float l_in_current_max;
+    // int motor_poles;
+    // float gear_ratio;
+    // float wheel_diameter;
+} esp32_vesc_mcconf;
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -231,6 +249,19 @@ void processSerialRead(std::string line) {
                     case COMMAND_ID::READY_TO_WRITE:
                         ready_to_write = true;
                         break;
+
+                    case COMMAND_ID::GET_VESC_MCCONF:
+                        esp32_vesc_mcconf.l_current_min_scale = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_current_max_scale = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_min_erpm = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_max_erpm = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_min_duty = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_max_duty = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_watt_min = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_watt_max = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_in_current_min = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
+                        break;
                 }
             }
         }
@@ -321,11 +352,6 @@ int main(int, char**)
                 to_send.append("\n");
                 commAddValue(&to_send, COMMAND_ID::GET_STATS, 0);
                 to_send.append("\n");
-
-                if (!SerialP.sent_once) {
-
-                    SerialP.sent_once = true;
-                }
 
                 to_send.append(to_send_extra);
                 to_send_extra = "";
@@ -855,6 +881,47 @@ int main(int, char**)
                                     to_send_extra.append(append);
                                 }
                             }
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("VESC MCCONF");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            ImGui::BeginGroup();
+                                if (ImGui::Button("Get MCCONF values")) {
+                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
+                                    to_send_extra.append(append);
+                                }
+                                float ItemWidth = 150.0;
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_current_min_scale", &esp32_vesc_mcconf.l_current_min_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_current_max_scale", &esp32_vesc_mcconf.l_current_max_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_min_erpm", &esp32_vesc_mcconf.l_min_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_max_erpm", &esp32_vesc_mcconf.l_max_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_min_duty", &esp32_vesc_mcconf.l_min_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_max_duty", &esp32_vesc_mcconf.l_max_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_watt_min", &esp32_vesc_mcconf.l_watt_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_watt_max", &esp32_vesc_mcconf.l_watt_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_in_current_min", &esp32_vesc_mcconf.l_in_current_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_in_current_max", &esp32_vesc_mcconf.l_in_current_max);
+
+                                if (ImGui::Button("Send MCCONF")) {
+                                    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
+                                                                        ,static_cast<int>(COMMAND_ID::SET_VESC_MCCONF)
+                                                                        ,esp32_vesc_mcconf.l_current_min_scale
+                                                                        ,esp32_vesc_mcconf.l_current_max_scale
+                                                                        ,esp32_vesc_mcconf.l_min_erpm
+                                                                        ,esp32_vesc_mcconf.l_max_erpm
+                                                                        ,esp32_vesc_mcconf.l_min_duty
+                                                                        ,esp32_vesc_mcconf.l_max_duty
+                                                                        ,esp32_vesc_mcconf.l_watt_min
+                                                                        ,esp32_vesc_mcconf.l_watt_max
+                                                                        ,esp32_vesc_mcconf.l_in_current_min
+                                                                        ,esp32_vesc_mcconf.l_in_current_max
+                                    );
+                                    to_send_extra.append(append);
+                                }
+                            ImGui::EndGroup();
 
                             ImGui::EndChild();
                             ImGui::EndTabItem();

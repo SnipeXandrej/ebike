@@ -64,7 +64,9 @@ enum COMMAND_ID {
     PING = 10,
     TOGGLE_FRONT_LIGHT = 11,
     ESP32_SERIAL_LENGTH = 12,
-    SET_AMPHOURS_USED_LIFETIME = 13
+    SET_AMPHOURS_USED_LIFETIME = 13,
+    GET_VESC_MCCONF = 14,
+    SET_VESC_MCCONF = 15,
 };
 
 struct {
@@ -1387,6 +1389,44 @@ void app_main(void)
 
                     case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
                         battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
+                        break;
+
+                    case COMMAND_ID::GET_VESC_MCCONF:
+                        if (VESC.getMcconfTempValues()) {
+                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
+                            commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
+                            toSend.append("\n");
+                        } else {
+                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
+                            for (i = 1; i <= 10; i++) {
+                                commAddValue(&toSend, -1, 0);
+                            }
+
+                            toSend.append("\n");
+                        }
+                        break;
+
+                    case COMMAND_ID::SET_VESC_MCCONF:
+                        VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
+                        VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
+                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1360.82;
+                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1360.82;
+                        VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
+                        VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
+                        VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
+                        VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
+                        VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
+                        VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
+                        VESC.setMcconfTempValues();
                         break;
                 }
 
