@@ -730,6 +730,11 @@ int main(int, char**)
             timeDrawStart = std::chrono::steady_clock::now();
             ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
 
+            // Account for the notch on the device's left side
+            ImGui::Dummy(ImVec2(28.0, 10.0));
+            ImGui::SameLine();
+            ImGui::BeginGroup();
+
             ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_FittingPolicyScroll;
             if (ImGui::BeginTabBar("Tabbar", tab_bar_flags)) {
                 if (ImGui::BeginTabItem("Main"))
@@ -833,7 +838,7 @@ int main(int, char**)
                     // VU METERS
                     // VU METERS
                     ImGui::SameLine();
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 240.0f, 45.0f));
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 200.0f, 45.0f));
                     ImGui::BeginGroup();
                         // ImGui::Text("VU Meter");
                         ImGui::Dummy(ImVec2(0, 3));
@@ -867,7 +872,7 @@ int main(int, char**)
 
 
                     // Wh/km
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 6, io.DisplaySize.y / 1.7));
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 5.2, io.DisplaySize.y / 1.7));
                     ImGui::BeginGroup();
                         movingAverages.wattage.moveAverage(battery.watts);
                         powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
@@ -1137,6 +1142,8 @@ int main(int, char**)
                 }
                 ImGui::EndTabBar(); //TABBAR1
             }
+
+            ImGui::EndGroup();
 
             ImGui::End();
             timeDrawEnd = std::chrono::steady_clock::now();
