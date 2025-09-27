@@ -28,8 +28,8 @@
 #include <print>
 #include <format>
 
-// float scale;
 float MAX_WATTAGE = 7500.0;
+#include "other.hpp"
 
 enum COMMAND_ID {
     GET_BATTERY = 0,
@@ -47,39 +47,6 @@ enum COMMAND_ID {
     ESP32_SERIAL_LENGTH = 12,
     SET_AMPHOURS_USED_LIFETIME = 13
 };
-
-float voltage;
-float current;
-float wattage;
-
-float amp_out_voltage1;
-float amp_out_voltage2;
-
-bool done = false;
-bool first_run = false;
-bool can_run_these = false;
-bool ready_to_write = true;
-
-// TODO: do not hardcode filepaths :trol:
-const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
-char hostname[1024];
-
-auto timeDrawStart = std::chrono::steady_clock::now();
-auto timeDrawEnd = std::chrono::steady_clock::now();
-auto timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - timeDrawStart).count();
-
-auto timeRenderStart = std::chrono::steady_clock::now();
-auto timeRenderEnd = std::chrono::steady_clock::now();
-auto timeRenderDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
-
-auto timePingStart = std::chrono::steady_clock::now();
-auto timePingEnd = std::chrono::steady_clock::now();
-auto timePingDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
-
-float voltage_last_values_array[140];
-float current_last_values_array[140];
-float wattage_last_values_array[2000];
-float temperature_last_values_array[2000];
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -135,14 +102,46 @@ struct {
     float amphours_max_voltage;
 } battery;
 
-#include "other.hpp"
-
 struct {
     MovingAverage current;
     MovingAverage acceleration;
     MovingAverage wattage;
     MovingAverage wattageMoreSmooth;
 } movingAverages;
+
+float voltage;
+float current;
+float wattage;
+
+float amp_out_voltage1;
+float amp_out_voltage2;
+
+bool done = false;
+bool ready_to_write = true;
+
+// TODO: do not hardcode filepaths :trol:
+const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
+char hostname[1024];
+
+auto timeDrawStart = std::chrono::steady_clock::now();
+auto timeDrawEnd = std::chrono::steady_clock::now();
+auto timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - timeDrawStart).count();
+
+auto timeRenderStart = std::chrono::steady_clock::now();
+auto timeRenderEnd = std::chrono::steady_clock::now();
+auto timeRenderDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
+
+auto timePingStart = std::chrono::steady_clock::now();
+auto timePingEnd = std::chrono::steady_clock::now();
+auto timePingDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - timeRenderStart).count();
+
+float voltage_last_values_array[140];
+float current_last_values_array[140];
+float wattage_last_values_array[2000];
+float temperature_last_values_array[2000];
+
+std::string to_send = "";
+std::string to_send_extra = "";
 
 CPUUsage cpuUsage_ImGui;
 CPUUsage cpuUsage_SerialThread;
@@ -151,193 +150,12 @@ SerialProcessor SerialP;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::system("kscreen-doctor --dpms off");
 }
 
 void setBrightnessHigh() {
     // std::system("brightnessctl set 100%");
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     std::system("kscreen-doctor --dpms on");
-}
-
-std::string to_send = "";
-std::string to_send_extra = "";
-
-void commAddValue(std::string* string, double value, int precision) {
-    std::ostringstream out;
-    out.precision(precision);
-    out << std::fixed << value;
-
-    string->append(out.str());
-    string->append(";");
-}
-
-void TextCenteredOnLine(const char* label, float alignment = 0.5f, bool contentRegionFromWindow = false) {
-    ImGuiStyle& style = ImGui::GetStyle();
-
-    float size = ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
-    float avail = contentRegionFromWindow ? ImGui::GetWindowContentRegionMax().x : ImGui::GetContentRegionAvail().x;
-    // if (contentRegionFromWindow)
-    //     avail = ImGui::GetContentRegionMax().x;
-    // else
-    //     avail = ImGui::GetContentRegionAvail().x;
-
-    float off = (avail - size) * alignment;
-    if (off > 0.0f)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
-
-    ImGui::Text(label);
-}
-
-void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness = 1.0f) {
-    float angle_rad = angle_deg * M_PI / 180.0f;
-    float cos_a = cosf(angle_rad);
-    float sin_a = sinf(angle_rad);
-
-    // Half extents
-    float hx = size.x * 0.5f;
-    float hy = size.y * 0.5f;
-
-    // Corners relative to center
-    ImVec2 corners[4] = {
-        ImVec2(-hx, -hy),
-        ImVec2(hx, -hy),
-        ImVec2(hx, hy),
-        ImVec2(-hx, hy)
-    };
-
-    // Rotate and translate
-    for (int i = 0; i < 4; ++i) {
-        float x = corners[i].x;
-        float y = corners[i].y;
-        corners[i].x = center.x + x * cos_a - y * sin_a;
-        corners[i].y = center.y + x * sin_a + y * cos_a;
-    }
-
-    // Draw the rotated rectangle
-    // draw_list->AddPolyline(corners, 4, color, true, thickness);
-    // draw_list->AddQuadFilled(corners, 4, color, true, thickness);
-    draw_list->AddConvexPolyFilled(corners, 4, color);
-}
-
-void powerVerticalDiagonalHorizontal(float input) {
-    ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
-    // ImVec2 pos = ImVec2(ImGui::GetWindowSize().x/2.0, ImGui::GetWindowSize().y/2.0);
-    ImU32 color = IM_COL32(0, 255, 0, 255); // Green
-    ImVec2 size = ImVec2(100, 10); // Width x Height
-
-    ImU32 greenDark     = IM_COL32(0, 45, 0, 255); // Green
-    ImU32 greenBright   = IM_COL32(0, 255, 0, 255); // Green
-
-    float mapped = map_f(input, 0.0, MAX_WATTAGE, 1.0, 75.0);
-
-    int BAR_COUNT_DIAGONAL = 25;
-    int BAR_COUNT_HORIZONTAL = BAR_COUNT_DIAGONAL + 50;
-
-    // ImGui::BeginGroup();
-    ImDrawList* draw_list = ImGui::GetWindowDrawList();
-
-    int kw_point = 0;
-
-    for (float i = 1; i <= BAR_COUNT_DIAGONAL; i += 1) {
-        pos.y -= 13.0f;
-        pos.x += 5.0f;
-        ImVec2 center = ImVec2(pos.x + 100, pos.y + 100);
-
-        if (mapped < i) {
-            color = greenDark;
-        } else {
-            if ((mapped - i) < 1.0) {
-                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
-                color = IM_COL32(0, color_brightness, 0 , 255);
-            } else {
-                color = greenBright;
-            }
-        }
-
-        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
-        if (((int)i+1) % 10 == 1) {
-            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
-            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
-
-            ImGui::BeginGroup();
-                ImGui::SetCursorPos(ImVec2(center.x - 35.0, center.y - 70.0));
-                kw_point++;
-                ImGui::Text("%d", kw_point);
-            ImGui::EndGroup();
-        }
-    }
-
-    size = ImVec2(80, 10); // Width x Height
-    for (int i = BAR_COUNT_DIAGONAL+1; i < BAR_COUNT_HORIZONTAL; i++) {
-        // pos.y -= 8.0f;
-        pos.x += 11.0f;
-
-        ImVec2 center = ImVec2(pos.x + 95, pos.y + 90.0);
-
-        if (mapped < i) {
-            color = greenDark;
-        } else {
-            if ((mapped - i) < 1.0) {
-                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
-                color = IM_COL32(0, color_brightness, 0 , 255);
-            } else {
-                color = greenBright;
-            }
-        }
-
-        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
-        if (((int)i+1) % 10 == 1) {
-            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
-            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
-
-            ImGui::BeginGroup();
-                ImGui::SetCursorPos(ImVec2(center.x - 30.0, center.y - 65.0));
-                kw_point++;
-                ImGui::Text("%d", kw_point);
-            ImGui::EndGroup();
-        }
-    }
-    // ImGui::EndGroup();
-}
-
-float getValueFromPacket(std::vector<std::string> token, int *index) {
-    if (*index < (int)token.size()) {
-        float ret = std::stof(token[*index]);
-        *index = *index+1;
-
-        return ret;
-        // std::cout << "index: " << *index << "\n";
-    }
-
-    std::println("Index out of bounds");
-    return -1;
-}
-
-std::string getValueFromPacket_string(std::vector<std::string> token, int *index) {
-    if (*index < (int)token.size()) {
-        std::string ret = token[*index];
-        *index = *index+1;
-
-        return ret;
-        // std::cout << "index: " << *index << "\n";
-    }
-
-    std::println("Index out of bounds");
-    return "Error";
-}
-
-uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index) {
-    if (*index < (int)token.size()) {
-        std::stringstream stream(token[*index]);
-        uint64_t result;
-        stream >> result;
-        return result;
-    }
-
-    std::println("Index out of bounds");
-    return -1;
 }
 
 void processSerialRead(std::string line) {
@@ -414,15 +232,6 @@ void processSerialRead(std::string line) {
                         ready_to_write = true;
                         break;
                 }
-
-                // if (line.rfind("UPTIME_IN_SECONDS", 0) == 0) {
-                //     esp32.totalSecondsSinceBoot = getValueFromString("UPTIME_IN_SECONDS", line);
-
-                //     esp32.clockSecondsSinceBoot = (u_int64_t)(esp32.totalSecondsSinceBoot) % 60;
-                //     esp32.clockMinutesSinceBoot = (u_int64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
-                //     esp32.clockHoursSinceBoot   = (u_int64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
-                //     esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
-                // }
             }
         }
 }
@@ -437,17 +246,6 @@ int main(int, char**)
     // ##########################
     gethostname(hostname, sizeof(hostname));
     printf("Hostname = %s\n", hostname);
-
-    if (strcmp(hostname, "audiophool") == 0) {
-        printf("Enabling FIRST_RUN/CAN_RUN_THESE functions\n");
-        first_run = 1;
-        can_run_these = 1;
-
-    } else {
-        printf("Disabling FIRST_RUN/CAN_RUN_THESE functions\n");
-        first_run = 0;
-        can_run_these = 0;
-    }
 
     // ####################
     // ##### Settings #####
@@ -482,22 +280,14 @@ int main(int, char**)
         std::cout << "OSC_PORT: " << settings.OSC_PORT << "\n";
     }
 
-    if (first_run) {
-
-    }
-
-
     // ########################
     // ##### Serial Port ######
     // ########################
 
     std::thread backend([&]() -> int {
         std::cout << "[SERIAL] Initializing" << "\n";
-        // auto startLastTransmitTime = std::chrono::steady_clock::now();
-        // auto endLastTransmitTime = std::chrono::steady_clock::now();
 
         SerialP.init(settings.serialPortName.c_str());
-        // SerialP.timeout_ms = settings.serialWriteWaitMs;
 
         std::cout << "[SERIAL] Entering main while loop\n";
         while(!done) {
@@ -515,7 +305,6 @@ int main(int, char**)
             }
 
             if (SerialP.succesfulCommunication) { //  && ready_to_write
-                // startLastTransmitTime = std::chrono::steady_clock::now();
 
                 timePingEnd = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 500.0) {
@@ -538,35 +327,17 @@ int main(int, char**)
                     SerialP.sent_once = true;
                 }
 
-                // commAddValue(&to_send, COMMAND_ID::READY_TO_WRITE ,0);
-                // to_send.append("\n");
                 to_send.append(to_send_extra);
                 to_send_extra = "";
 
                 SerialP.writeSerial(to_send.c_str());
-                // ready_to_write = false;
-
-                // hol'up
-                // std::this_thread::sleep_for(std::chrono::milliseconds(settings.serialWriteWaitMs)); // 15ms minimum at 115200b
             }
-
-            // endLastTransmitTime = std::chrono::steady_clock::now();
-
-            // if (std::chrono::duration<double, std::milli>(endLastTransmitTime - startLastTransmitTime).count() >= 100) {
-            //     commAddValue(&to_send, COMMAND_ID::READY_TO_WRITE ,0);
-            //     to_send.append("\n");
-
-            //     SerialP.writeSerial(to_send.c_str());
-            //     ready_to_write = false;
-            //     std::this_thread::sleep_for(std::chrono::milliseconds(settings.serialWriteWaitMs)); // 15ms minimum at 115200b
-            // }
 
             SerialP.readSerial(processSerialRead);
             cpuUsage_SerialThread.measureEnd(1);
         }
 
         close(SerialP.serialPort);
-
         return 0;
     });
 
@@ -620,7 +391,6 @@ int main(int, char**)
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    // float main_scale = 0.66f;
     SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
     if (window == nullptr)
@@ -669,7 +439,6 @@ int main(int, char**)
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     style.FontScaleDpi = 2.0f;
-    // scale = style.FontScaleDpi;
 
     // Main loop
     while (!done)
@@ -812,21 +581,6 @@ int main(int, char**)
                             ImGui::PopStyleColor(1);
                             ImGui::PopID();
 
-                            // ImGui::Text("Temperature history");
-                            // ImGui::PushID(30);
-                            // ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
-                            // ImGui::PlotHistogram("##", temperature_last_values_array, IM_ARRAYSIZE(temperature_last_values_array), 0, NULL, 60.0f, 130.0f, ImVec2(250, 140.0f));
-                            // ImGui::PopStyleColor(1);
-                            // ImGui::PopID();
-
-                            // ImGui::SameLine();
-
-                            // ImGui::PushID(21);
-                            // ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(0 / 7.0f, 0.9f, 0.9f));
-                            // ImGui::PlotHistogram("##", current_last_values_array, IM_ARRAYSIZE(current_last_values_array), 0, NULL, 0.0f, 20.0f, ImVec2(250, 140.0f));
-                            // ImGui::PopStyleColor(1);
-                            // ImGui::PopID();
-
                             if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
                                 std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
                                 to_send_extra.append(append);
@@ -840,7 +594,6 @@ int main(int, char**)
                     ImGui::SameLine();
                     ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 200.0f, 45.0f));
                     ImGui::BeginGroup();
-                        // ImGui::Text("VU Meter");
                         ImGui::Dummy(ImVec2(0, 3));
                         ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
                         ImGui::BeginGroup();
@@ -918,18 +671,6 @@ int main(int, char**)
 
                     ImGui::EndGroup();
 
-                    // // Battery Percentage
-                    // ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, 50.0f));
-                    // ImGui::BeginGroup();
-                    // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    //     memset(text, 0, sizeof(text));
-                    //     sprintf(text, "%0.1f", battery.percentage);
-                    //     // ImGui::Text(text);
-                    //     TextCenteredOnLine(text, 0.95f, false);
-                    // ImGui::PopFont();
-                    // ImGui::EndGroup();
-
-                    // ImGui::Dummy(ImVec2(0.0f, io.DisplaySize.y - 120.0f));
                     ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
                     ImGui::Separator();
                     ImGui::Text("ESP32  Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
@@ -991,8 +732,6 @@ int main(int, char**)
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "serialWriteWaitMs", settings.serialWriteWaitMs);
                             }
 
-                            // char text[100];
-                            // sprintf(text, "Serialport Buffer (%d bytes in buffer)", SerialP.bytesInBuffer);
                             if (ImGui::CollapsingHeader("SerialPort Buffer")) {
                                 ImGui::Dummy(ImVec2(30, 0));
                                 ImGui::SameLine();
@@ -1014,12 +753,10 @@ int main(int, char**)
                             ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            // std::string text = "CPU Usage (100% = 1 core)";
                             ImGui::Text("CPU Usage (100%% is 1 core)");
                             ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
                             ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
                             ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
-                            // ImGui::Text("Memory Usage: %f", get_memory_usage());
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
@@ -1042,9 +779,6 @@ int main(int, char**)
                             ImGui::SeparatorText("ESP32 / EBIKE");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
-
-                            // char newSerialPortPath[100] = { settings.serialPortName.c_str() };
-                            // ImGui::InputText("Serialport path:", &newSerialPortPath[0], IM_ARRAYSIZE(newSerialPortPath));
 
                             ImGui::Text("Powered on: %s", esp32.power_on ? "True" : "False");
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
@@ -1132,8 +866,10 @@ int main(int, char**)
 
                         if (ImGui::BeginTabItem("Serial Log"))
                         {
-                            // ImGui::Text(SerialP.log.c_str());
-                            ImGui::InputTextMultiline("##", (char*)SerialP.log.c_str(), sizeof(SerialP.log.c_str()), ImGui::GetContentRegionAvail());
+                            std::string SerialLog;
+                            SerialLog = SerialP.log;
+
+                            ImGui::InputTextMultiline("##", (char*)SerialLog.c_str(), sizeof(SerialLog.c_str()), ImGui::GetContentRegionAvail());
                             ImGui::EndTabItem();
                         }
                         ImGui::EndTabBar(); //TABBAR2
@@ -1183,8 +919,6 @@ int main(int, char**)
             }
             lasttime += 1.0/settings.TARGET_FPS;
         }
-
-        if (first_run) first_run = 0;
 
         cpuUsage_ImGui.measureEnd(1);
         cpuUsage_Everything.measureEnd(0);

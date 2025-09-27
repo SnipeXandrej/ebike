@@ -46,74 +46,6 @@ std::vector<std::string> split(const std::string& input, char delimiter) {
     return result;
 }
 
-
-// #define _CRT_SECURE_NO_WARNINGS
-// #define STB_IMAGE_IMPLEMENTATION
-// #include "stb_image.h"
-
-// // Simple helper function to load an image into a OpenGL texture with common settings
-// bool LoadTextureFromMemory(const void* data, size_t data_size, GLuint* out_texture, int* out_width, int* out_height)
-// {
-//     // Load from file
-//     int image_width = 0;
-//     int image_height = 0;
-//     unsigned char* image_data = stbi_load_from_memory((const unsigned char*)data, (int)data_size, &image_width, &image_height, NULL, 4);
-//     if (image_data == NULL)
-//         return false;
-
-//     // Create a OpenGL texture identifier
-//     GLuint image_texture;
-//     glGenTextures(1, &image_texture);
-//     glBindTexture(GL_TEXTURE_2D, image_texture);
-
-//     // Setup filtering parameters for display
-//     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-//     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-//     // Upload pixels into texture
-//     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-//     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, image_data);
-//     stbi_image_free(image_data);
-
-//     *out_texture = image_texture;
-//     *out_width = image_width;
-//     *out_height = image_height;
-
-//     return true;
-// }
-
-// // Open and read a file, then forward to LoadTextureFromMemory()
-// bool LoadTextureFromFile(const char* file_name, GLuint* out_texture, int* out_width, int* out_height)
-// {
-//     FILE* f = fopen(file_name, "rb");
-//     if (f == NULL)
-//         return false;
-//     fseek(f, 0, SEEK_END);
-//     size_t file_size = (size_t)ftell(f);
-//     if (file_size == -1)
-//         return false;
-//     fseek(f, 0, SEEK_SET);
-//     void* file_data = IM_ALLOC(file_size);
-//     fread(file_data, 1, file_size, f);
-//     fclose(f);
-//     bool ret = LoadTextureFromMemory(file_data, file_size, out_texture, out_width, out_height);
-//     IM_FREE(file_data);
-//     return ret;
-// }
-
-
-    // int my_image_width = 0;
-    // int my_image_height = 0;
-    // GLuint my_image_texture = 0;
-    // bool ret = LoadTextureFromFile("/home/snipex/ototototto/648A7623.jpg", &my_image_texture, &my_image_width, &my_image_height);
-
-                        // ImGui::Text("pointer = %x", my_image_texture);
-                    // ImGui::Text("size = %d x %d", my_image_width, my_image_height);
-                    // // ImGui::Image((ImTextureID)(intptr_t)my_image_texture, ImVec2(my_image_width, my_image_height));
-                    // // Half size, same contents
-                    // ImGui::Image((ImTextureID)(intptr_t)my_image_texture, ImVec2(my_image_width/5, my_image_height/5), ImVec2(0.0f, 0.0f), ImVec2(1.0f, 1.0f));
-
-
 float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
     float temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 
@@ -209,9 +141,6 @@ float getValueFromString(const std::string toRemove, std::string str) {
     return value;
 }
 
-
-
-
 int findInArray_int(const char* items[], int item_count, int target) {
     char targetStr[256];
 
@@ -247,6 +176,174 @@ void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, con
     std::ofstream file(SETTINGS_FILEPATH);
     file << tbl;
     file.close();
+}
+
+void commAddValue(std::string* string, double value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+void TextCenteredOnLine(const char* label, float alignment = 0.5f, bool contentRegionFromWindow = false) {
+    ImGuiStyle& style = ImGui::GetStyle();
+
+    float size = ImGui::CalcTextSize(label).x + style.FramePadding.x * 2.0f;
+    float avail = contentRegionFromWindow ? ImGui::GetWindowContentRegionMax().x : ImGui::GetContentRegionAvail().x;
+
+    float off = (avail - size) * alignment;
+    if (off > 0.0f)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
+
+    ImGui::Text(label);
+}
+
+void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness = 1.0f) {
+    float angle_rad = angle_deg * M_PI / 180.0f;
+    float cos_a = cosf(angle_rad);
+    float sin_a = sinf(angle_rad);
+
+    // Half extents
+    float hx = size.x * 0.5f;
+    float hy = size.y * 0.5f;
+
+    // Corners relative to center
+    ImVec2 corners[4] = {
+        ImVec2(-hx, -hy),
+        ImVec2(hx, -hy),
+        ImVec2(hx, hy),
+        ImVec2(-hx, hy)
+    };
+
+    // Rotate and translate
+    for (int i = 0; i < 4; ++i) {
+        float x = corners[i].x;
+        float y = corners[i].y;
+        corners[i].x = center.x + x * cos_a - y * sin_a;
+        corners[i].y = center.y + x * sin_a + y * cos_a;
+    }
+
+    // Draw the rotated rectangle
+    // draw_list->AddPolyline(corners, 4, color, true, thickness);
+    // draw_list->AddQuadFilled(corners, 4, color, true, thickness);
+    draw_list->AddConvexPolyFilled(corners, 4, color);
+}
+
+void powerVerticalDiagonalHorizontal(float input) {
+    ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
+    // ImVec2 pos = ImVec2(ImGui::GetWindowSize().x/2.0, ImGui::GetWindowSize().y/2.0);
+    ImU32 color = IM_COL32(0, 255, 0, 255); // Green
+    ImVec2 size = ImVec2(100, 10); // Width x Height
+
+    ImU32 greenDark     = IM_COL32(0, 45, 0, 255); // Green
+    ImU32 greenBright   = IM_COL32(0, 255, 0, 255); // Green
+
+    float mapped = map_f(input, 0.0, MAX_WATTAGE, 1.0, 75.0);
+
+    int BAR_COUNT_DIAGONAL = 25;
+    int BAR_COUNT_HORIZONTAL = BAR_COUNT_DIAGONAL + 50;
+
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
+
+    int kw_point = 0;
+
+    for (float i = 1; i <= BAR_COUNT_DIAGONAL; i += 1) {
+        pos.y -= 13.0f;
+        pos.x += 5.0f;
+        ImVec2 center = ImVec2(pos.x + 100, pos.y + 100);
+
+        if (mapped < i) {
+            color = greenDark;
+        } else {
+            if ((mapped - i) < 1.0) {
+                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
+                color = IM_COL32(0, color_brightness, 0 , 255);
+            } else {
+                color = greenBright;
+            }
+        }
+
+        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+        if (((int)i+1) % 10 == 1) {
+            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
+            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+
+            ImGui::BeginGroup();
+                ImGui::SetCursorPos(ImVec2(center.x - 35.0, center.y - 70.0));
+                kw_point++;
+                ImGui::Text("%d", kw_point);
+            ImGui::EndGroup();
+        }
+    }
+
+    size = ImVec2(80, 10); // Width x Height
+    for (int i = BAR_COUNT_DIAGONAL+1; i < BAR_COUNT_HORIZONTAL; i++) {
+        // pos.y -= 8.0f;
+        pos.x += 11.0f;
+
+        ImVec2 center = ImVec2(pos.x + 95, pos.y + 90.0);
+
+        if (mapped < i) {
+            color = greenDark;
+        } else {
+            if ((mapped - i) < 1.0) {
+                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
+                color = IM_COL32(0, color_brightness, 0 , 255);
+            } else {
+                color = greenBright;
+            }
+        }
+
+        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
+        if (((int)i+1) % 10 == 1) {
+            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
+            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+
+            ImGui::BeginGroup();
+                ImGui::SetCursorPos(ImVec2(center.x - 30.0, center.y - 65.0));
+                kw_point++;
+                ImGui::Text("%d", kw_point);
+            ImGui::EndGroup();
+        }
+    }
+}
+
+float getValueFromPacket(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        float ret = std::stof(token[*index]);
+        *index = *index+1;
+
+        return ret;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
+std::string getValueFromPacket_string(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        std::string ret = token[*index];
+        *index = *index+1;
+
+        return ret;
+    }
+
+    std::println("Index out of bounds");
+    return "Error";
+}
+
+uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        std::stringstream stream(token[*index]);
+        uint64_t result;
+        stream >> result;
+        return result;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
 }
 
 void StyleColorsDarkBreeze(ImGuiStyle* dst = nullptr) {
