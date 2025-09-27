@@ -685,10 +685,6 @@ int main(int, char**)
                                                                   : ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
                     ImGui::TextColored(color, SerialP.succesfulCommunication ? "Connected" : "Disconnected");
 
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2, io.DisplaySize.y - 35.0f));
-                    if (!SerialP.allDataReceived)
-                        ImGui::TextColored(ImVec4(1.0f, 0.0f, 0.0f, 1.0f), "Data corrupted");
-
                     ImGui::EndTabItem();
                 }
 

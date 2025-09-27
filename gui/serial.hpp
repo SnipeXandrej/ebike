@@ -12,15 +12,10 @@ public:
 
     std::string log;
 
-    bool sent_once = false;
-
     bool succesfulCommunication = false;
-    bool wasAllDataReceived = true;
-    bool allDataReceived = true;
     int serialPort = -1;
     const char *serialPortNameStored;
 
-    char bufferToRead[1024];            // Buffer for incoming data
     std::string receivedDataToRead;
 
     int timeout_ms = 5;
