@@ -50,18 +50,6 @@ public:
     }
 };
 
-std::vector<std::string> split(const std::string& input, char delimiter) {
-    std::vector<std::string> result;
-    std::stringstream ss(input);
-    std::string token;
-
-    while (std::getline(ss, token, delimiter)) {
-        result.push_back(token);
-    }
-
-    return result;
-}
-
 enum COMMAND_ID {
     GET_BATTERY = 0,
     ARE_YOU_ALIVE = 1,
@@ -78,49 +66,6 @@ enum COMMAND_ID {
     ESP32_SERIAL_LENGTH = 12,
     SET_AMPHOURS_USED_LIFETIME = 13
 };
-
-void commAddValue(std::string* string, double value, int precision) {
-    std::ostringstream out;
-    out.precision(precision);
-    out << std::fixed << value;
-
-    string->append(out.str());
-    string->append(";");
-}
-
-void commAddValue_uint64(std::string* string, uint64_t value, int precision) {
-    std::ostringstream out;
-    out.precision(precision);
-    out << std::fixed << value;
-
-    string->append(out.str());
-    string->append(";");
-}
-
-float getValueFromPacket(std::vector<std::string> token, int index) {
-    if (index < (int)token.size()) {
-        return std::stof(token[index]);
-    }
-
-    std::println("Index out of bounds");
-    return -1;
-}
-
-uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
-    if (index < (int)token.size()) {
-        std::stringstream stream(token[index]);
-        uint64_t result;
-        stream >> result;
-        return result;
-    }
-
-    std::println("Index out of bounds");
-    return -1;
-}
-
-TFT_eSPI tft = TFT_eSPI();
-Adafruit_ADS1115 dedicatedADC;
-VescUart VESC;
 
 struct {
     bool automaticGearChanging = 1;
@@ -264,7 +209,6 @@ std::string readString;
 
 InputOffset BatVoltageCorrection;
 InputOffset PotThrottleCorrection;
-InputOffset ThrottleCurveCorrection;
 
 MovingAverage BatVoltageMovingAverage;
 MovingAverage PotThrottleMovingAverage;
@@ -281,6 +225,10 @@ ThrottleMap throttle;
 Display display;
 
 Preferences preferences;
+
+TFT_eSPI tft = TFT_eSPI();
+Adafruit_ADS1115 dedicatedADC;
+VescUart VESC;
 
 double kP = 1, kI = 0.02, kD = 0.5; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
@@ -301,6 +249,57 @@ MiniPID powerLimiterPID(kP, kI, kD);
 
 // Enabling C++ compile
 extern "C" { void app_main(); }
+
+std::vector<std::string> split(const std::string& input, char delimiter) {
+    std::vector<std::string> result;
+    std::stringstream ss(input);
+    std::string token;
+
+    while (std::getline(ss, token, delimiter)) {
+        result.push_back(token);
+    }
+
+    return result;
+}
+
+void commAddValue(std::string* string, double value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+void commAddValue_uint64(std::string* string, uint64_t value, int precision) {
+    std::ostringstream out;
+    out.precision(precision);
+    out << std::fixed << value;
+
+    string->append(out.str());
+    string->append(";");
+}
+
+float getValueFromPacket(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        return std::stof(token[index]);
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
+uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        std::stringstream stream(token[index]);
+        uint64_t result;
+        stream >> result;
+        return result;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
 
 int setDuty_previousDuty;
 void setDuty(ledc_channel_t channel, int duty) {
@@ -919,16 +918,6 @@ void loop_core1 (void* pvParameters) {
             }
         }
 
-        // Map throttle
-        potThrottleVoltage = (
-            PotThrottleCorrection.correctInput(
-                PotThrottleMovingAverage.moveAverage(
-                    ((float)3.3/(float)4095) * _potThrottleVoltage
-                )
-            )
-        );
-        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
-
         // Gears
         static int rotorTimeoutMs = 10000;
         static int rotorEnergiseTimeMs = 0;
@@ -985,28 +974,21 @@ void loop_core1 (void* pvParameters) {
             }
         }
 
+        // Map throttle
+        potThrottleVoltage = (
+            PotThrottleCorrection.correctInput(
+                PotThrottleMovingAverage.moveAverage(
+                    ((float)3.3/(float)4095) * _potThrottleVoltage
+                )
+            )
+        );
+        PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
+
         // Throttle
         if (rotorCanPowerMotor == 0 || !POWER_ON) {
             VESC.setCurrent(0.0f);
         } else {
-            // PotThrottleAmpsRequested = map_f(PotThrottleLevelReal, 0, 100, 0, gear1.maxCurrent);
-            // PotThrottleAmpsRequested = map_f(ThrottleCurveCorrection.correctInput(PotThrottleLevelReal), 0, 100, 0, gear1.maxCurrent);
-
-            // if (PotThrottleLevelReal < 1.0) {
-            //     VESC.setBrakeCurrent(20.0f);
-            // } else {
-                // wattageMoreSmooth_MovingAverage.moveAverage(battery.watts);
-                // float PotThrottleLevelAdjusted = PotThrottleLevelReal + powerLimiterPID.getOutput(wattageMoreSmooth_MovingAverage.output, 100);
-                // VESC.setCurrent(throttle.map(PotThrottleLevelAdjusted));
-                VESC.setCurrent(throttle.map(PotThrottleLevelReal));
-            // }
-            // VESC.setDuty(PotThrottleLevelReal / 100.0);
-
-            // VESC.setCurrent(
-            //     clampValue(
-            //         PotThrottleAmpsRequested, maxCurrentAtERPM(VESC.data.rpm)
-            //     )
-            // );
+            VESC.setCurrent(throttle.map(PotThrottleLevelReal));
         }
 
         static uint32_t timeAcceleration;
@@ -1065,45 +1047,34 @@ void loop_core1 (void* pvParameters) {
         estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
         estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
 
-        static bool run_once_mcconf = false;
-        static bool run_once_mcconf2 = false;
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
             timeExecEverySecondCore1 = timer_u32();
-            // if (!run_once_mcconf) {
-                // printVescMcConfTempValues();
-                // run_once_mcconf = true;
-            // }
-
             // stuff to run
+
         }
 
         // Execute every 100ms that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 10000) {
             timeExecEvery100millisecondsCore1 = timer_u32();
 
-            // if (!run_once_mcconf2) {
+            // VESC.setMcconfTempValues();
+            // run_once_mcconf2 = true;
 
-                // VESC.setMcconfTempValues();
-                // run_once_mcconf2 = true;
+            // if (VESC.getMcconfTempValues()) {
+            //     VESC.data_mcconf.l_current_max_scale = 0.3;
+            //     VESC.data_mcconf.l_current_min_scale = 1.0;
+            //     VESC.data_mcconf.l_max_erpm = 3.0; // 3k
+            //     VESC.data_mcconf.l_min_erpm = -3.0; // -3k
+            //     VESC.data_mcconf.l_min_duty = 0.005;
+            //     VESC.data_mcconf.l_max_duty = 0.01;
+            //     VESC.data_mcconf.l_watt_min = -1500.0;
+            //     VESC.data_mcconf.l_watt_max = 200.0;
 
-                // if (VESC.getMcconfTempValues()) {
-                //     VESC.data_mcconf.l_current_max_scale = 0.3;
-                //     VESC.data_mcconf.l_current_min_scale = 1.0;
-                //     VESC.data_mcconf.l_max_erpm = 3.0; // 3k
-                //     VESC.data_mcconf.l_min_erpm = -3.0; // -3k
-                //     VESC.data_mcconf.l_min_duty = 0.005;
-                //     VESC.data_mcconf.l_max_duty = 0.01;
-                //     VESC.data_mcconf.l_watt_min = -1500.0;
-                //     VESC.data_mcconf.l_watt_max = 200.0;
-
-                //     VESC.setMcconfTempValues();
-                //     delay(1000);
-                // }
+            //     VESC.setMcconfTempValues();
+            //     delay(1000);
             // }
-            // stuff to run
         }
-        // run_once_mcconf = true;
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -1134,7 +1105,7 @@ void app_main(void)
 
     gearCurrent = gear1;
 
-    std::vector<Point> customCurve = {
+    std::vector<Point> customThrottleCurve = {
         {0, 0},
         {8, 8},
         {15, 13},
@@ -1145,7 +1116,7 @@ void app_main(void)
         {75, 120},
         {100, 200}
     };
-    throttle.setCurve(customCurve);
+    throttle.setCurve(customThrottleCurve);
 
     BatVoltageCorrection.offsetPoints = { // 12DB Attenuation... can read up to 3.3V
     // input, offset
@@ -1188,17 +1159,6 @@ void app_main(void)
     };
     PotThrottleCorrection.offsetPoints = BatVoltageCorrection.offsetPoints;
 
-    ThrottleCurveCorrection.offsetPoints = {
-    // input, offset
-    {0.0, 0},
-    {5.0, -2.0},
-    {10.0, -5.0},
-    {15.0, -8.0},
-    {20.0, -10.0},
-    {30.0, 0.0},
-    {100.0, 0.0}
-    };
-
     // smoothing factors
     BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
     BatWattMovingAverage.smoothingFactor = 0.1;
@@ -1214,7 +1174,6 @@ void app_main(void)
     Serial.begin(230400);
 
     Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX/TX
-    // Serial2.
     VESC.setSerialPort(&Serial2);
     // VESC.setDebugPort(&Serial);
 
@@ -1223,7 +1182,6 @@ void app_main(void)
 
     if (!dedicatedADC.begin()) {
         Serial.println("Failed to initialize ADS.");
-        // while (1);
     }
     // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noise af
     dedicatedADC.setDataRate(RATE_ADS1115_64SPS);
@@ -1262,13 +1220,12 @@ void app_main(void)
     attachInterrupt(pinButton4, button4Callback, GPIO_INTR_POSEDGE);
 
     // configure backlight of the TFT
-    pinMode(     pinTFTbacklight, OUTPUT); // Backlight of TFT
-    digitalWrite(pinTFTbacklight, LOW); // Turn on backlight
+    pinMode(     pinTFTbacklight, OUTPUT);
+    digitalWrite(pinTFTbacklight, LOW); // Turn off backlight
 
     // Power Switch
     pinMode(pinPowerSwitch, INPUT_PULLDOWN);
     attachInterrupt(pinPowerSwitch, powerSwitchCallback, GPIO_INTR_ANYEDGE);
-
     powerSwitchCallback();
 
     ledc_timer_config_t timer_conf = {
@@ -1287,7 +1244,7 @@ void app_main(void)
         .channel = LEDC_CHANNEL_0,
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LEDC_TIMER_0,
-        .duty = 127,
+        .duty = 0,
         .hpoint = 0
     };
     ledc_channel_config(&channel_conf);
@@ -1313,8 +1270,6 @@ void app_main(void)
 
     estimatedRangeReset();
     odometer.distance_tmp = odometer.distance;
-
-    delay(1000);
 
     xTaskCreatePinnedToCore (
         loop_core1,     // Function to implement the task
