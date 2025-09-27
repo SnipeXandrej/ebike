@@ -50,6 +50,8 @@ enum COMMAND_ID {
     SET_VESC_MCCONF = 15,
 };
 
+// 125.48 RPM per km/h
+
 struct {
     float l_current_min_scale;
     float l_current_max_scale;
@@ -61,10 +63,11 @@ struct {
     float l_watt_max;
     float l_in_current_min;
     float l_in_current_max;
+    std::string name = "Default";
     // int motor_poles;
     // float gear_ratio;
     // float wheel_diameter;
-} esp32_vesc_mcconf;
+} esp32_vesc_mcconf, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance;
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -176,6 +179,23 @@ void setBrightnessHigh() {
     std::system("kscreen-doctor --dpms on");
 }
 
+void setMcconfValues() {
+    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
+                                        ,static_cast<int>(COMMAND_ID::SET_VESC_MCCONF)
+                                        ,esp32_vesc_mcconf.l_current_min_scale
+                                        ,esp32_vesc_mcconf.l_current_max_scale
+                                        ,esp32_vesc_mcconf.l_min_erpm
+                                        ,esp32_vesc_mcconf.l_max_erpm
+                                        ,esp32_vesc_mcconf.l_min_duty
+                                        ,esp32_vesc_mcconf.l_max_duty
+                                        ,esp32_vesc_mcconf.l_watt_min
+                                        ,esp32_vesc_mcconf.l_watt_max
+                                        ,esp32_vesc_mcconf.l_in_current_min
+                                        ,esp32_vesc_mcconf.l_in_current_max
+    );
+    to_send_extra.append(append);
+}
+
 void processSerialRead(std::string line) {
         if (!line.empty()) {
             // std::cout << "Received: " << line << "\n";
@@ -271,6 +291,55 @@ void processSerialRead(std::string line) {
 int main(int, char**)
 {
     setenv("SDL_VIDEODRIVER", "wayland", 1);
+
+    mcconf_legal.l_current_min_scale = 1.0;
+    mcconf_legal.l_current_max_scale = 0.15;
+    mcconf_legal.l_min_erpm = -(500*3);
+    mcconf_legal.l_max_erpm = (3137*3); // 25km/h
+    mcconf_legal.l_min_duty = 0.005;
+    mcconf_legal.l_max_duty = 0.95;
+    mcconf_legal.l_watt_min = -10000;
+    mcconf_legal.l_watt_max = 250;
+    mcconf_legal.l_in_current_min = -10;
+    mcconf_legal.l_in_current_max = 90;
+    mcconf_legal.name = "Legal";
+
+    mcconf_eco.l_current_min_scale = 1.0;
+    mcconf_eco.l_current_max_scale = 0.3;
+    mcconf_eco.l_min_erpm = -(500*3);
+    mcconf_eco.l_max_erpm = (3137*3); // 25km/h
+    mcconf_eco.l_min_duty = 0.005;
+    mcconf_eco.l_max_duty = 0.95;
+    mcconf_eco.l_watt_min = -10000;
+    mcconf_eco.l_watt_max = 750;
+    mcconf_eco.l_in_current_min = -10;
+    mcconf_eco.l_in_current_max = 90;
+    mcconf_eco.name = "Eco";
+
+    mcconf_balanced.l_current_min_scale = 1.0;
+    mcconf_balanced.l_current_max_scale = 0.4;
+    mcconf_balanced.l_min_erpm = -(500*3);
+    mcconf_balanced.l_max_erpm = (5020*3); // 40km/h
+    mcconf_balanced.l_min_duty = 0.005;
+    mcconf_balanced.l_max_duty = 0.95;
+    mcconf_balanced.l_watt_min = -10000;
+    mcconf_balanced.l_watt_max = 2500;
+    mcconf_balanced.l_in_current_min = -10;
+    mcconf_balanced.l_in_current_max = 90;
+    mcconf_balanced.name = "Balanced";
+
+    mcconf_performance.l_current_min_scale = 1.0;
+    mcconf_performance.l_current_max_scale = 1.0;
+    mcconf_performance.l_min_erpm = -(500*3);
+    mcconf_performance.l_max_erpm = (6901*3); // 55km/h
+    mcconf_performance.l_min_duty = 0.005;
+    mcconf_performance.l_max_duty = 0.95;
+    mcconf_performance.l_watt_min = -10000;
+    mcconf_performance.l_watt_max = 7000;
+    mcconf_performance.l_in_current_min = -10;
+    mcconf_performance.l_in_current_max = 90;
+    mcconf_performance.name = "Performance";
+
 
     // ##########################
     // ##### Hostname stuff #####
@@ -552,7 +621,7 @@ int main(int, char**)
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
                             static bool succesfulCommunication_avoidMutex;
-                            if (!SerialP.succesfulCommunication || !esp32.power_on) {
+                            if (!SerialP.succesfulCommunication) {
                                 succesfulCommunication_avoidMutex = false;
                                 ImGui::BeginDisabled();
                             } else {
@@ -677,8 +746,48 @@ int main(int, char**)
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
                                 // ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
                                 ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
+
+                                {
+                                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
+                                    static int picker_pick;
+
+                                    auto pickerFunction = [&]() {
+                                        if (picker_pick == 0) {
+                                            esp32_vesc_mcconf = mcconf_legal;
+                                            setMcconfValues();
+                                        }
+
+                                        if (picker_pick == 1) {
+                                            esp32_vesc_mcconf = mcconf_eco;
+                                            setMcconfValues();
+                                        }
+
+                                        if (picker_pick == 2) {
+                                            esp32_vesc_mcconf = mcconf_balanced;
+                                            setMcconfValues();
+                                        }
+
+                                        if (picker_pick == 3) {
+                                            esp32_vesc_mcconf = mcconf_performance;
+                                            setMcconfValues();
+                                        }
+                                    };
+
+                                    ImGui::SetNextItemWidth(200.0);
+                                    if (ImGui::Combo("##v", &picker_pick, "Legal\0Eco\0Balanced\0Performance\0")) {
+                                        pickerFunction();
+                                    }
+
+                                    ImGui::SameLine();
+                                    if (ImGui::Button("Reapply")) {
+                                        pickerFunction();
+                                    }
+
+                                    ImGui::PopFont();
+                                }
                             ImGui::PopFont();
                         ImGui::EndGroup();
+
 
                     ImGui::EndGroup();
 
@@ -894,32 +1003,19 @@ int main(int, char**)
                                     to_send_extra.append(append);
                                 }
                                 float ItemWidth = 150.0;
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_current_min_scale", &esp32_vesc_mcconf.l_current_min_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_current_max_scale", &esp32_vesc_mcconf.l_current_max_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_min_erpm", &esp32_vesc_mcconf.l_min_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_max_erpm", &esp32_vesc_mcconf.l_max_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_min_duty", &esp32_vesc_mcconf.l_min_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_max_duty", &esp32_vesc_mcconf.l_max_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_watt_min", &esp32_vesc_mcconf.l_watt_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_watt_max", &esp32_vesc_mcconf.l_watt_max);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_in_current_min", &esp32_vesc_mcconf.l_in_current_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("l_in_current_max", &esp32_vesc_mcconf.l_in_current_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &esp32_vesc_mcconf.l_current_min_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &esp32_vesc_mcconf.l_current_max_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &esp32_vesc_mcconf.l_min_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &esp32_vesc_mcconf.l_max_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &esp32_vesc_mcconf.l_min_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &esp32_vesc_mcconf.l_max_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &esp32_vesc_mcconf.l_watt_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &esp32_vesc_mcconf.l_watt_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &esp32_vesc_mcconf.l_in_current_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &esp32_vesc_mcconf.l_in_current_max);
 
                                 if (ImGui::Button("Send MCCONF")) {
-                                    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
-                                                                        ,static_cast<int>(COMMAND_ID::SET_VESC_MCCONF)
-                                                                        ,esp32_vesc_mcconf.l_current_min_scale
-                                                                        ,esp32_vesc_mcconf.l_current_max_scale
-                                                                        ,esp32_vesc_mcconf.l_min_erpm
-                                                                        ,esp32_vesc_mcconf.l_max_erpm
-                                                                        ,esp32_vesc_mcconf.l_min_duty
-                                                                        ,esp32_vesc_mcconf.l_max_duty
-                                                                        ,esp32_vesc_mcconf.l_watt_min
-                                                                        ,esp32_vesc_mcconf.l_watt_max
-                                                                        ,esp32_vesc_mcconf.l_in_current_min
-                                                                        ,esp32_vesc_mcconf.l_in_current_max
-                                    );
-                                    to_send_extra.append(append);
+                                    setMcconfValues();
                                 }
                             ImGui::EndGroup();
 
