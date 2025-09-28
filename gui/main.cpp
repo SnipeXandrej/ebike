@@ -50,9 +50,18 @@ enum COMMAND_ID {
     SET_VESC_MCCONF = 15,
 };
 
+enum POWER_PROFILE {
+    LEGAL = 0,
+    ECO = 1,
+    BALANCED = 2,
+    PERFORMANCE = 3
+};
+
+int POWER_PROFILE_CURRENT;
+
 // 125.48 RPM per km/h
 
-struct {
+struct VESC_MCCONF {
     float l_current_min_scale;
     float l_current_max_scale;
     float l_min_erpm;
@@ -63,11 +72,14 @@ struct {
     float l_watt_max;
     float l_in_current_min;
     float l_in_current_max;
-    std::string name = "Default";
+    std::string name = "";
+    int id;
     // int motor_poles;
     // float gear_ratio;
     // float wheel_diameter;
-} esp32_vesc_mcconf, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance;
+};
+
+VESC_MCCONF esp32_vesc_mcconf, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance;
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -172,21 +184,41 @@ void setBrightnessHigh() {
     std::system("kscreen-doctor --dpms on");
 }
 
-void setMcconfValues() {
-    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
+void setMcconfValues(VESC_MCCONF mcconf) {
+    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};{};\n"
                                         ,static_cast<int>(COMMAND_ID::SET_VESC_MCCONF)
-                                        ,esp32_vesc_mcconf.l_current_min_scale
-                                        ,esp32_vesc_mcconf.l_current_max_scale
-                                        ,esp32_vesc_mcconf.l_min_erpm
-                                        ,esp32_vesc_mcconf.l_max_erpm
-                                        ,esp32_vesc_mcconf.l_min_duty
-                                        ,esp32_vesc_mcconf.l_max_duty
-                                        ,esp32_vesc_mcconf.l_watt_min
-                                        ,esp32_vesc_mcconf.l_watt_max
-                                        ,esp32_vesc_mcconf.l_in_current_min
-                                        ,esp32_vesc_mcconf.l_in_current_max
+                                        ,mcconf.l_current_min_scale
+                                        ,mcconf.l_current_max_scale
+                                        ,mcconf.l_min_erpm
+                                        ,mcconf.l_max_erpm
+                                        ,mcconf.l_min_duty
+                                        ,mcconf.l_max_duty
+                                        ,mcconf.l_watt_min
+                                        ,mcconf.l_watt_max
+                                        ,mcconf.l_in_current_min
+                                        ,mcconf.l_in_current_max
+                                        ,mcconf.name
     );
     to_send_extra.append(append);
+}
+
+void setPowerProfile(int PROFILE) {
+    POWER_PROFILE_CURRENT = PROFILE;
+    switch (PROFILE) {
+        case POWER_PROFILE::LEGAL:
+            mcconf_current = mcconf_legal;
+            break;
+        case POWER_PROFILE::ECO:
+            mcconf_current = mcconf_eco;
+            break;
+        case POWER_PROFILE::BALANCED:
+            mcconf_current = mcconf_balanced;
+            break;
+        case POWER_PROFILE::PERFORMANCE:
+            mcconf_current = mcconf_performance;
+            break;
+    }
+    setMcconfValues(mcconf_current);
 }
 
 void processSerialRead(std::string line) {
@@ -274,6 +306,7 @@ void processSerialRead(std::string line) {
                         esp32_vesc_mcconf.l_watt_max = getValueFromPacket(packet, &index);
                         esp32_vesc_mcconf.l_in_current_min = getValueFromPacket(packet, &index);
                         esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
+                        esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
                         break;
                 }
             }
@@ -284,6 +317,16 @@ void processSerialRead(std::string line) {
 int main(int, char**)
 {
     setenv("SDL_VIDEODRIVER", "wayland", 1);
+
+    // ##########################
+    // ##### Hostname stuff #####
+    // ##########################
+    gethostname(hostname, sizeof(hostname));
+    printf("Hostname = %s\n", hostname);
+
+    // ####################
+    // ##### Settings #####
+    // ####################
 
     mcconf_legal.l_current_min_scale = 1.0;
     mcconf_legal.l_current_max_scale = 0.15;
@@ -296,6 +339,7 @@ int main(int, char**)
     mcconf_legal.l_in_current_min = -10;
     mcconf_legal.l_in_current_max = 96;
     mcconf_legal.name = "Legal";
+    mcconf_legal.id = POWER_PROFILE::LEGAL;
 
     mcconf_eco.l_current_min_scale = 1.0;
     mcconf_eco.l_current_max_scale = 0.3;
@@ -308,6 +352,7 @@ int main(int, char**)
     mcconf_eco.l_in_current_min = -10;
     mcconf_eco.l_in_current_max = 96;
     mcconf_eco.name = "Eco";
+    mcconf_eco.id = POWER_PROFILE::ECO;
 
     mcconf_balanced.l_current_min_scale = 1.0;
     mcconf_balanced.l_current_max_scale = 0.4;
@@ -320,6 +365,7 @@ int main(int, char**)
     mcconf_balanced.l_in_current_min = -10;
     mcconf_balanced.l_in_current_max = 96;
     mcconf_balanced.name = "Balanced";
+    mcconf_balanced.id = POWER_PROFILE::BALANCED;
 
     mcconf_performance.l_current_min_scale = 1.0;
     mcconf_performance.l_current_max_scale = 1.0;
@@ -332,25 +378,15 @@ int main(int, char**)
     mcconf_performance.l_in_current_min = -10;
     mcconf_performance.l_in_current_max = 96;
     mcconf_performance.name = "Performance";
+    mcconf_performance.id = POWER_PROFILE::PERFORMANCE;
 
-
-    // ##########################
-    // ##### Hostname stuff #####
-    // ##########################
-    gethostname(hostname, sizeof(hostname));
-    printf("Hostname = %s\n", hostname);
-
-    // ####################
-    // ##### Settings #####
-    // ####################
     movingAverages.current.smoothingFactor = 0.7f;
     movingAverages.acceleration.smoothingFactor = 0.5f;
     movingAverages.wattage.smoothingFactor = 0.6f;
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.1f;
 
-    settings.TARGET_FPS = 60;
-    settings.LIMIT_FRAMERATE = true;
+    setPowerProfile(POWER_PROFILE::BALANCED);
 
     // ########################
     // ######### TOML #########
@@ -397,7 +433,7 @@ int main(int, char**)
             if (SerialP.succesfulCommunication) { //  && ready_to_write
 
                 timePingEnd = std::chrono::steady_clock::now();
-                if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 500.0) {
+                if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 750.0) {
                     timePingStart = std::chrono::steady_clock::now();
 
                     commAddValue(&to_send, COMMAND_ID::PING, 0);
@@ -405,6 +441,21 @@ int main(int, char**)
 
                     commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
                     to_send.append("\n");
+
+                    static int GET_VESC_MCCONF_COUNTER = 0;
+
+                    GET_VESC_MCCONF_COUNTER++;
+                    if (GET_VESC_MCCONF_COUNTER >= 3) {
+                        GET_VESC_MCCONF_COUNTER = 0;
+
+                        if (esp32_vesc_mcconf.name != mcconf_current.name) {
+                            setPowerProfile(mcconf_current.id);
+                        }
+
+
+                        commAddValue(&to_send, COMMAND_ID::GET_VESC_MCCONF, 0);
+                        to_send.append("\n");
+                    }
                 }
 
                 commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
@@ -745,38 +796,15 @@ int main(int, char**)
 
                                 {
                                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
-                                    static int picker_pick;
-
-                                    auto pickerFunction = [&]() {
-                                        if (picker_pick == 0) {
-                                            esp32_vesc_mcconf = mcconf_legal;
-                                            setMcconfValues();
-                                        }
-
-                                        if (picker_pick == 1) {
-                                            esp32_vesc_mcconf = mcconf_eco;
-                                            setMcconfValues();
-                                        }
-
-                                        if (picker_pick == 2) {
-                                            esp32_vesc_mcconf = mcconf_balanced;
-                                            setMcconfValues();
-                                        }
-
-                                        if (picker_pick == 3) {
-                                            esp32_vesc_mcconf = mcconf_performance;
-                                            setMcconfValues();
-                                        }
-                                    };
 
                                     ImGui::SetNextItemWidth(200.0);
-                                    if (ImGui::Combo("##v", &picker_pick, "Legal\0Eco\0Balanced\0Performance\0")) {
-                                        pickerFunction();
+                                    if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance\0")) {
+                                        setPowerProfile(POWER_PROFILE_CURRENT);
                                     }
 
                                     ImGui::SameLine();
                                     if (ImGui::Button("Reapply")) {
-                                        pickerFunction();
+                                        setPowerProfile(POWER_PROFILE_CURRENT);
                                     }
 
                                     ImGui::PopFont();
@@ -1005,15 +1033,16 @@ int main(int, char**)
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &esp32_vesc_mcconf.l_watt_max);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &esp32_vesc_mcconf.l_in_current_min);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &esp32_vesc_mcconf.l_in_current_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", esp32_vesc_mcconf.name.c_str());
 
-                                if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
-                                    to_send_extra.append(append);
-                                }
-                                ImGui::SameLine();
-                                if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    setMcconfValues();
-                                }
+                                // if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
+                                //     to_send_extra.append(append);
+                                // }
+                                // ImGui::SameLine();
+                                // if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                //     setMcconfValues(esp32_vesc_mcconf);
+                                // }
                             ImGui::EndGroup();
 
                             ImGui::EndChild();

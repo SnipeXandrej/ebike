@@ -6,6 +6,9 @@
 auto startLastTransmitTime = std::chrono::steady_clock::now();
 auto endLastTransmitTime = std::chrono::steady_clock::now();
 
+auto startMessageTimeout = std::chrono::steady_clock::now();
+auto endMessageTimeout = std::chrono::steady_clock::now();
+
 class SerialProcessor {
 public:
     struct termios tty;
@@ -21,6 +24,7 @@ public:
     int timeout_ms = 5;
 
     float receiveRateMs = 0;
+    float messageTimeout = 0;
     int bytesInBuffer = 0;
 
     void init(const char *portName) {
@@ -61,24 +65,39 @@ public:
     void readSerial(std::function<void(std::string)> execFunc) {
         std::string receivedData;    // String to store received lines
 
-        int bytes_available = 0;
-        int bytes_available_previous = -1;
+        int bytes_available = -1;
         ioctl(serialPort, FIONREAD, &bytes_available);
 
-        while (bytes_available_previous != bytes_available) {
-            bytes_available_previous = bytes_available;
+        std::string buffer;
+        startMessageTimeout = std::chrono::steady_clock::now();
+        messageTimeout = 0;
+        while (bytes_available == 0 && messageTimeout < 500.0) {
+            ioctl(serialPort, FIONREAD, &bytes_available);
+
+            endMessageTimeout = std::chrono::steady_clock::now();
+            messageTimeout = std::chrono::duration<double, std::milli>(endMessageTimeout - startMessageTimeout).count();
+        }
+
+        startMessageTimeout = std::chrono::steady_clock::now();
+        messageTimeout = 0;
+        while (bytes_available > 0 && messageTimeout < 500.0) {
+            std::vector<char> buffer_TEMP(bytes_available);
+            int n = read(serialPort, buffer_TEMP.data(), bytes_available);
+            // std::cout << "buffer_TEMP: \n" << std::string(buffer_TEMP.data(), n) << "\n\n";
+
+            buffer.append(buffer_TEMP.data(), n);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
             ioctl(serialPort, FIONREAD, &bytes_available);
+
+            endMessageTimeout = std::chrono::steady_clock::now();
+            messageTimeout = std::chrono::duration<double, std::milli>(endMessageTimeout - startMessageTimeout).count();
         }
 
-        bytesInBuffer = bytes_available;
+        if (buffer.size() > 0) {
+            buffer += '\0';
 
-        if (bytes_available > 0) {
-            char buffer[bytes_available + 1];
-            int n = read(serialPort, buffer, bytes_available);
-            buffer[n] = '\0';
-
+            bytesInBuffer = buffer.size();
 
             receivedData = buffer;
             receivedDataToRead = receivedData;
@@ -86,9 +105,8 @@ public:
             endLastTransmitTime = std::chrono::steady_clock::now();
             receiveRateMs = std::chrono::duration<double, std::milli>(endLastTransmitTime - startLastTransmitTime).count();
             startLastTransmitTime = std::chrono::steady_clock::now();
-        }
 
-        if (bytes_available > 0) {
+
             // Process each complete line
             size_t newlinePos;
             while ((newlinePos = receivedData.find('\n')) != std::string::npos) {

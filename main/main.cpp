@@ -303,6 +303,15 @@ uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
     return -1;
 }
 
+std::string getValueFromPacket_string(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        return token[index];
+    }
+
+    std::println("Index out of bounds");
+    return "-1";
+}
+
 int setDuty_previousDuty;
 void setDuty(ledc_channel_t channel, int duty) {
     if (setDuty_previousDuty != duty) { // set the new dutyCycle only if the value is different from the previous one
@@ -1404,13 +1413,7 @@ void app_main(void)
                             commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
                             commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
                             commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
-                            toSend.append("\n");
-                        } else {
-                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
-                            for (i = 1; i <= 10; i++) {
-                                commAddValue(&toSend, -1, 0);
-                            }
-
+                            toSend.append(VESC.data_mcconf.name); toSend.append(";");
                             toSend.append("\n");
                         }
                         break;
@@ -1426,6 +1429,7 @@ void app_main(void)
                         VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
                         VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
                         VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
+                        VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
                         VESC.setMcconfTempValues();
                         break;
                 }
