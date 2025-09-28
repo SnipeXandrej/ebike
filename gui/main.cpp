@@ -116,6 +116,7 @@ struct {
     bool LIMIT_FRAMERATE;
     std::string serialPortName;
     int serialWriteWaitMs;
+    int powerProfile;
 } settings;
 
 struct {
@@ -204,6 +205,8 @@ void setMcconfValues(VESC_MCCONF mcconf) {
 
 void setPowerProfile(int PROFILE) {
     POWER_PROFILE_CURRENT = PROFILE;
+    settings.powerProfile = PROFILE;
+
     switch (PROFILE) {
         case POWER_PROFILE::LEGAL:
             mcconf_current = mcconf_legal;
@@ -386,8 +389,6 @@ int main(int, char**)
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.1f;
 
-    setPowerProfile(POWER_PROFILE::BALANCED);
-
     // ########################
     // ######### TOML #########
     // ########################
@@ -397,14 +398,17 @@ int main(int, char**)
     tbl = toml::parse_file(SETTINGS_FILEPATH);
 
     // values
-    settings.TARGET_FPS      = tbl["settings"]["framerate"].value_or(60);
-    settings.LIMIT_FRAMERATE = tbl["settings"]["limit_framerate"].value_or(0);
-    settings.serialWriteWaitMs = tbl["settings"]["serialWriteWaitMs"].value_or(50);
+    settings.TARGET_FPS         = tbl["settings"]["framerate"].value_or(60);
+    settings.LIMIT_FRAMERATE    = tbl["settings"]["limit_framerate"].value_or(0);
+    settings.serialWriteWaitMs  = tbl["settings"]["serialWriteWaitMs"].value_or(50);
+    settings.powerProfile       = tbl["settings"]["powerProfile"].value_or(POWER_PROFILE::BALANCED);
 
     // strings
     if (auto val = tbl.at_path("settings.serialPortName").value<std::string>()) {
         settings.serialPortName = *val;
     }
+
+    setPowerProfile(settings.powerProfile);
 
     // ########################
     // ##### Serial Port ######
@@ -800,6 +804,7 @@ int main(int, char**)
                                     ImGui::SetNextItemWidth(200.0);
                                     if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance\0")) {
                                         setPowerProfile(POWER_PROFILE_CURRENT);
+                                        updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
                                     }
 
                                     ImGui::SameLine();
