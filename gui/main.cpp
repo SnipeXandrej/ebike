@@ -103,7 +103,6 @@ struct {
     float TARGET_FPS;
     bool LIMIT_FRAMERATE;
     std::string serialPortName;
-    std::string OSC_PORT;
     int serialWriteWaitMs;
 } settings;
 
@@ -128,14 +127,8 @@ struct {
     MovingAverage acceleration;
     MovingAverage wattage;
     MovingAverage wattageMoreSmooth;
+    MovingAverage whOverKm;
 } movingAverages;
-
-float voltage;
-float current;
-float wattage;
-
-float amp_out_voltage1;
-float amp_out_voltage2;
 
 bool done = false;
 bool ready_to_write = true;
@@ -301,7 +294,7 @@ int main(int, char**)
     mcconf_legal.l_watt_min = -10000;
     mcconf_legal.l_watt_max = 250;
     mcconf_legal.l_in_current_min = -10;
-    mcconf_legal.l_in_current_max = 90;
+    mcconf_legal.l_in_current_max = 96;
     mcconf_legal.name = "Legal";
 
     mcconf_eco.l_current_min_scale = 1.0;
@@ -313,7 +306,7 @@ int main(int, char**)
     mcconf_eco.l_watt_min = -10000;
     mcconf_eco.l_watt_max = 750;
     mcconf_eco.l_in_current_min = -10;
-    mcconf_eco.l_in_current_max = 90;
+    mcconf_eco.l_in_current_max = 96;
     mcconf_eco.name = "Eco";
 
     mcconf_balanced.l_current_min_scale = 1.0;
@@ -325,7 +318,7 @@ int main(int, char**)
     mcconf_balanced.l_watt_min = -10000;
     mcconf_balanced.l_watt_max = 2500;
     mcconf_balanced.l_in_current_min = -10;
-    mcconf_balanced.l_in_current_max = 90;
+    mcconf_balanced.l_in_current_max = 96;
     mcconf_balanced.name = "Balanced";
 
     mcconf_performance.l_current_min_scale = 1.0;
@@ -337,7 +330,7 @@ int main(int, char**)
     mcconf_performance.l_watt_min = -10000;
     mcconf_performance.l_watt_max = 7000;
     mcconf_performance.l_in_current_min = -10;
-    mcconf_performance.l_in_current_max = 90;
+    mcconf_performance.l_in_current_max = 96;
     mcconf_performance.name = "Performance";
 
 
@@ -354,6 +347,7 @@ int main(int, char**)
     movingAverages.acceleration.smoothingFactor = 0.5f;
     movingAverages.wattage.smoothingFactor = 0.6f;
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
+    movingAverages.whOverKm.smoothingFactor = 0.1f;
 
     settings.TARGET_FPS = 60;
     settings.LIMIT_FRAMERATE = true;
@@ -374,10 +368,6 @@ int main(int, char**)
     // strings
     if (auto val = tbl.at_path("settings.serialPortName").value<std::string>()) {
         settings.serialPortName = *val;
-    }
-    if (auto val = tbl.at_path("settings.OSC_PORT").value<std::string>()) {
-        settings.OSC_PORT = *val;
-        std::cout << "OSC_PORT: " << settings.OSC_PORT << "\n";
     }
 
     // ########################
@@ -727,8 +717,14 @@ int main(int, char**)
                         // ImGui::SameLine();
                         ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
                         ImGui::BeginGroup();
+                            float whOverKmAveraged = 0.0;
+                            if (esp32.speed_kmh > 0.5) {
+                                whOverKmAveraged = movingAverages.whOverKm.moveAverage(battery.watts / esp32.speed_kmh);
+                            } else {
+                                whOverKmAveraged = 0.0;
+                            }
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::Text("Wh/km: %0.1f\nWh/km: %0.1f NOW", esp32.wh_over_km_average, (battery.watts / esp32.speed_kmh));
+                            ImGui::Text("Wh/km: %0.1f\nWh/km: %0.1f NOW", esp32.wh_over_km_average, whOverKmAveraged);
                             ImGui::PopFont();
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
@@ -799,7 +795,7 @@ int main(int, char**)
                         ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                             sprintf(text, "O: %0.0f", esp32.odometer_distance);
                             TextCenteredOnLine(text, 0.0f, false);
-                            sprintf(text, "T:%5.1f", esp32.trip_distance);
+                            sprintf(text, "T:%5.2f", esp32.trip_distance);
                         ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                             TextCenteredOnLine(text, 1.0f, false);
                         ImGui::PopFont();
@@ -993,15 +989,11 @@ int main(int, char**)
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("VESC MCCONF");
+                            ImGui::SeparatorText("VESC");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
                             ImGui::BeginGroup();
-                                if (ImGui::Button("Get MCCONF values")) {
-                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
-                                    to_send_extra.append(append);
-                                }
                                 float ItemWidth = 150.0;
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &esp32_vesc_mcconf.l_current_min_scale);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &esp32_vesc_mcconf.l_current_max_scale);
@@ -1014,7 +1006,12 @@ int main(int, char**)
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &esp32_vesc_mcconf.l_in_current_min);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &esp32_vesc_mcconf.l_in_current_max);
 
-                                if (ImGui::Button("Send MCCONF")) {
+                                if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
+                                    to_send_extra.append(append);
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                     setMcconfValues();
                                 }
                             ImGui::EndGroup();
