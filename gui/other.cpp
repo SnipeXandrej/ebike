@@ -5,7 +5,6 @@ float MovingAverage::smoothValue(float newValue, float previousValue, float smoo
     return previousValue + smoothingFactor * (newValue - previousValue);
 }
 
-
 void MovingAverage::initInput(float input) {
     if (!done) {
         previousInput = input;
@@ -21,7 +20,6 @@ float MovingAverage::moveAverage(float input) {
 
     return Input;
 }
-
 
 std::vector<std::string> split(const std::string& input, char delimiter) {
     std::vector<std::string> result;

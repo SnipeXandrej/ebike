@@ -30,6 +30,7 @@
 
 #include "serial.hpp"
 #include "other.hpp"
+#include "cpuUsage.hpp"
 
 float MAX_WATTAGE = 7500.0;
 
