@@ -150,6 +150,8 @@ bool ready_to_write = true;
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
 char hostname[1024];
 
+char *desktopEnvironment;
+
 auto timeDrawStart = std::chrono::steady_clock::now();
 auto timeDrawEnd = std::chrono::steady_clock::now();
 auto timeDrawDiff = std::chrono::duration<double, std::milli>(timeDrawEnd - timeDrawStart).count();
@@ -177,12 +179,16 @@ SerialProcessor SerialP;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
-    std::system("kscreen-doctor --dpms off");
+    if (strcmp(desktopEnvironment, "KDE") == 0) {
+        std::system("kscreen-doctor --dpms off");
+    }
 }
 
 void setBrightnessHigh() {
     // std::system("brightnessctl set 100%");
-    std::system("kscreen-doctor --dpms on");
+    if (strcmp(desktopEnvironment, "KDE") == 0) {
+        std::system("kscreen-doctor --dpms on");
+    }
 }
 
 void setMcconfValues(VESC_MCCONF mcconf) {
@@ -326,6 +332,9 @@ int main(int, char**)
     // ##########################
     gethostname(hostname, sizeof(hostname));
     printf("Hostname = %s\n", hostname);
+
+    desktopEnvironment = getenv("XDG_CURRENT_DESKTOP");
+    printf("Desktop Environment = %s\n", desktopEnvironment);
 
     // ####################
     // ##### Settings #####
