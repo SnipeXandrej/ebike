@@ -74,6 +74,7 @@ public:
         while (bytes_available == 0 && messageTimeout < 500.0) {
             ioctl(serialPort, FIONREAD, &bytes_available);
 
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
             endMessageTimeout = std::chrono::steady_clock::now();
             messageTimeout = std::chrono::duration<double, std::milli>(endMessageTimeout - startMessageTimeout).count();
         }
