@@ -28,8 +28,11 @@
 #include <print>
 #include <format>
 
-float MAX_WATTAGE = 7500.0;
+#include "serial.hpp"
 #include "other.hpp"
+
+float MAX_WATTAGE = 7500.0;
+
 
 enum COMMAND_ID {
     GET_BATTERY = 0,
@@ -572,7 +575,7 @@ int main(int, char**)
     // Setup Dear ImGui style
     // ImGui::StyleColorsDark();
     // ImGui::StyleColorsLight();
-    StyleColorsDarkBreeze();
+    StyleColorsDarkBreeze(nullptr);
 
     // Setup scaling
     ImGuiStyle& style = ImGui::GetStyle();
