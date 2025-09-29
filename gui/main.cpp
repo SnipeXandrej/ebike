@@ -583,8 +583,6 @@ int main(int, char**)
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
-    // Our state
-    bool show_demo_window = false;
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
     style.FontScaleDpi = 2.0f;
@@ -634,11 +632,6 @@ int main(int, char**)
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
-
-        // 1. Show the big demo window (Most of the sample code is in ImGui::ShowDemoWindow()! You can browse its code to learn more about Dear ImGui!).
-        if (show_demo_window) {
-            ImGui::ShowDemoWindow(&show_demo_window);
-        }
 
         // ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->Pos);
@@ -873,7 +866,6 @@ int main(int, char**)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Checkbox("Demo Window", &show_demo_window);
                             if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
                             }
