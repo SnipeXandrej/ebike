@@ -743,10 +743,10 @@ int main(int, char**)
                         //
                         ImGui::BeginGroup();
 
-                            if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
-                                to_send_extra.append(append);
-                            }
+                            // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
+                            //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
+                            //     to_send_extra.append(append);
+                            // }
 
                         ImGui::EndGroup();
                     ImGui::EndGroup(); // Ends here
