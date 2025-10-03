@@ -449,8 +449,12 @@ void getBatteryCurrent() {
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
     if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
             battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+
+            // TODO: later move it outside of this if function, and only allow subtracting from the wattHoursUsed variable
+            //       when using regenerative braking
+            trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
-    trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+
 
     getBatteryCurrent_newData = false;
     // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - time_getBatteryCurrent));
