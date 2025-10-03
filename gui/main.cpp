@@ -686,7 +686,7 @@ int main(int, char**)
                     {
                         // Bike Battery
                         char text[100];
-                        sprintf(text, "SOC: %0.1f", 100.0);
+                        sprintf(text, "SOC: %0.1f", battery.percentage);
                         ImVec2 textSize = ImGui::CalcTextSize(text);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 10.0, 7.0));
                         ImGui::Text(text);
