@@ -34,7 +34,6 @@
 
 float MAX_WATTAGE = 7500.0;
 
-
 enum COMMAND_ID {
     GET_BATTERY = 0,
     ARE_YOU_ALIVE = 1,
@@ -58,12 +57,11 @@ enum POWER_PROFILE {
     LEGAL = 0,
     ECO = 1,
     BALANCED = 2,
-    PERFORMANCE = 3
+    PERFORMANCE = 3,
+    PERFORMANCE2 = 4
 };
 
 int POWER_PROFILE_CURRENT;
-
-// 125.48 RPM per km/h
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -82,8 +80,7 @@ struct VESC_MCCONF {
     // float gear_ratio;
     // float wheel_diameter;
 };
-
-VESC_MCCONF esp32_vesc_mcconf, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance;
+VESC_MCCONF esp32_vesc_mcconf, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance, mcconf_performance2;
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -135,6 +132,7 @@ struct {
     float percentage;
     float ampHoursRated;
     float ampHoursRated_tmp;
+    float ampHoursRatedWhenNew = 32.0;
     float amphours_min_voltage;
     float amphours_max_voltage;
 } battery;
@@ -230,6 +228,9 @@ void setPowerProfile(int PROFILE) {
         case POWER_PROFILE::PERFORMANCE:
             mcconf_current = mcconf_performance;
             break;
+        case POWER_PROFILE::PERFORMANCE2:
+            mcconf_current = mcconf_performance2;
+            break;
     }
     setMcconfValues(mcconf_current);
 }
@@ -240,6 +241,7 @@ void processSerialRead(std::string line) {
             int index = 1;
             int command_id;
             auto packet = split(line, ';');
+
             try {
                 command_id = std::stoi(packet[0]);
             } catch(...) {
@@ -344,10 +346,12 @@ int main(int, char**)
     // ##### Settings #####
     // ####################
 
+    float RPM_PER_KMH = 125.36;
+
     mcconf_legal.l_current_min_scale = 1.0;
     mcconf_legal.l_current_max_scale = 0.15;
     mcconf_legal.l_min_erpm = -(500*3);
-    mcconf_legal.l_max_erpm = (3137*3); // 25km/h
+    mcconf_legal.l_max_erpm = ((RPM_PER_KMH * 25) * 3); // 25km/h
     mcconf_legal.l_min_duty = 0.005;
     mcconf_legal.l_max_duty = 0.95;
     mcconf_legal.l_watt_min = -10000;
@@ -360,11 +364,11 @@ int main(int, char**)
     mcconf_eco.l_current_min_scale = 1.0;
     mcconf_eco.l_current_max_scale = 0.3;
     mcconf_eco.l_min_erpm = -(500*3);
-    mcconf_eco.l_max_erpm = (3137*3); // 25km/h
+    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 25) * 3); // 25km/h
     mcconf_eco.l_min_duty = 0.005;
     mcconf_eco.l_max_duty = 0.95;
     mcconf_eco.l_watt_min = -10000;
-    mcconf_eco.l_watt_max = 750;
+    mcconf_eco.l_watt_max = 1250;
     mcconf_eco.l_in_current_min = -10;
     mcconf_eco.l_in_current_max = 96;
     mcconf_eco.name = "Eco";
@@ -373,11 +377,11 @@ int main(int, char**)
     mcconf_balanced.l_current_min_scale = 1.0;
     mcconf_balanced.l_current_max_scale = 0.4;
     mcconf_balanced.l_min_erpm = -(500*3);
-    mcconf_balanced.l_max_erpm = (5020*3); // 40km/h
+    mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 42) * 3); // 42km/h
     mcconf_balanced.l_min_duty = 0.005;
     mcconf_balanced.l_max_duty = 0.95;
     mcconf_balanced.l_watt_min = -10000;
-    mcconf_balanced.l_watt_max = 2500;
+    mcconf_balanced.l_watt_max = 3000;
     mcconf_balanced.l_in_current_min = -10;
     mcconf_balanced.l_in_current_max = 96;
     mcconf_balanced.name = "Balanced";
@@ -386,15 +390,28 @@ int main(int, char**)
     mcconf_performance.l_current_min_scale = 1.0;
     mcconf_performance.l_current_max_scale = 1.0;
     mcconf_performance.l_min_erpm = -(500*3);
-    mcconf_performance.l_max_erpm = (6901*3); // 55km/h
+    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 51.85) * 3); // 51.85km/h // 6500RPM
     mcconf_performance.l_min_duty = 0.005;
     mcconf_performance.l_max_duty = 0.95;
     mcconf_performance.l_watt_min = -10000;
-    mcconf_performance.l_watt_max = 7000;
+    mcconf_performance.l_watt_max = 4500;
     mcconf_performance.l_in_current_min = -10;
     mcconf_performance.l_in_current_max = 96;
     mcconf_performance.name = "Performance";
     mcconf_performance.id = POWER_PROFILE::PERFORMANCE;
+
+    mcconf_performance2.l_current_min_scale = 1.0;
+    mcconf_performance2.l_current_max_scale = 1.0;
+    mcconf_performance2.l_min_erpm = -(500*3);
+    mcconf_performance2.l_max_erpm = ((RPM_PER_KMH * 90) * 3); // 51.85km/h // 6500RPM
+    mcconf_performance2.l_min_duty = 0.005;
+    mcconf_performance2.l_max_duty = 0.95;
+    mcconf_performance2.l_watt_min = -10000;
+    mcconf_performance2.l_watt_max = 7000;
+    mcconf_performance2.l_in_current_min = -10;
+    mcconf_performance2.l_in_current_max = 96;
+    mcconf_performance2.name = "Performance2";
+    mcconf_performance2.id = POWER_PROFILE::PERFORMANCE2;
 
     movingAverages.current.smoothingFactor = 0.7f;
     movingAverages.acceleration.smoothingFactor = 0.5f;
@@ -747,7 +764,7 @@ int main(int, char**)
                             ImGui::SameLine();
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
-                            addVUMeter(esp32.temperature_motor, 30.0f, 130.0f, "T", 0);
+                            addVUMeter(esp32.temperature_motor, 25.0f, 100.0f, "T", 0);
                             ImGui::SameLine();
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
@@ -807,8 +824,8 @@ int main(int, char**)
                                 {
                                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
 
-                                    ImGui::SetNextItemWidth(200.0);
-                                    if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance\0")) {
+                                    ImGui::SetNextItemWidth(250.0);
+                                    if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
                                         setPowerProfile(POWER_PROFILE_CURRENT);
                                         updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
                                     }
@@ -1005,7 +1022,7 @@ int main(int, char**)
                             ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
                             ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
                             ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::Text("Amphours when new: 32 Ah");
+                            ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursRatedWhenNew);
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
                             ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
                             ImGui::Dummy(ImVec2(0, 20));
