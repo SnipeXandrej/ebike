@@ -11,24 +11,20 @@ class SerialProcessor {
 public:
     struct termios tty;
 
+    int         serialPort = -1;
+
     std::string log;
-
-    bool succesfulCommunication = false;
-    int serialPort = -1;
-    const char *serialPortNameStored;
-
     std::string receivedDataToRead;
 
-    int timeout_ms = 5;
-
-    float receiveRateMs = 0;
-    float messageTimeout = 0;
-    int bytesInBuffer = 0;
+    bool        succesfulCommunication = false;
+    const char  *serialPortNameStored;
+    int         timeout_ms = 5;
+    float       receiveRateMs = 0;
+    float       messageTimeout = 0;
+    int         bytesInBuffer = 0;
 
     void init(const char *portName);
-
     void readSerial(std::function<void(std::string)> execFunc);
-
     void writeSerial(const char *data);
 
     private:
