@@ -168,7 +168,6 @@ auto timePingDiff = std::chrono::duration<double, std::milli>(timeRenderEnd - ti
 
 float voltage_last_values_array[140];
 float current_last_values_array[140];
-float wattage_last_values_array[2000];
 float temperature_last_values_array[2000];
 
 std::string to_send = "";
@@ -269,8 +268,6 @@ void processSerialRead(std::string line) {
                         battery.voltage_max = getValueFromPacket(packet, &index);
                         battery.amphours_min_voltage = getValueFromPacket(packet, &index);
                         battery.amphours_max_voltage = getValueFromPacket(packet, &index);
-
-                        addValueToArray(2000, wattage_last_values_array, battery.watts);
                         break;
 
                     case COMMAND_ID::GET_STATS:
@@ -736,13 +733,6 @@ int main(int, char**)
                         // ImGui::SameLine();
                         //
                         ImGui::BeginGroup();
-                            ImGui::Text("Power history");
-
-                            ImGui::PushID(20);
-                            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
-                            ImGui::PlotHistogram("##", wattage_last_values_array, IM_ARRAYSIZE(wattage_last_values_array), 0, NULL, 0.0f, MAX_WATTAGE, ImVec2(250, 140.0f));
-                            ImGui::PopStyleColor(1);
-                            ImGui::PopID();
 
                             if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
                                 std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
