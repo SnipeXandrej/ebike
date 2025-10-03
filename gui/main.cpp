@@ -692,6 +692,8 @@ int main(int, char**)
                         ImGui::Text(text);
                     }
 
+
+
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
                             static bool succesfulCommunication_avoidMutex;
@@ -796,9 +798,14 @@ int main(int, char**)
                             } else {
                                 whOverKmAveraged = 999.0;
                             }
+
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", esp32.wh_over_km_average, whOverKmAveraged);
+                                ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", esp32.wh_over_km_average, whOverKmAveraged);
                             ImGui::PopFont();
+
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip("¹tells the long-term Watthour usage per km\n²tells the immediate Watthour usage per km");
+                            }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
                             if (esp32.speed_kmh >= 50.0) {
