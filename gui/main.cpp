@@ -683,6 +683,15 @@ int main(int, char**)
                         ImGui::Text(text);
                     }
 
+                    {
+                        // Bike Battery
+                        char text[100];
+                        sprintf(text, "SOC: %0.1f", 100.0);
+                        ImVec2 textSize = ImGui::CalcTextSize(text);
+                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 10.0, 7.0));
+                        ImGui::Text(text);
+                    }
+
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
                             static bool succesfulCommunication_avoidMutex;
@@ -745,7 +754,7 @@ int main(int, char**)
                     // VU METERS
                     // VU METERS
                     ImGui::SameLine();
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 200.0f, 45.0f));
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 140.0f, 45.0f));
                     ImGui::BeginGroup();
                         ImGui::Dummy(ImVec2(0, 3));
                         ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
@@ -755,10 +764,6 @@ int main(int, char**)
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
                             addVUMeter(esp32.temperature_motor, 25.0f, 100.0f, "T", 0);
-                            ImGui::SameLine();
-                            ImGui::Dummy(ImVec2(2, 0));
-                            ImGui::SameLine();
-                            addVUMeter(battery.percentage, 0.0f, 100.0f, "BAT", 1); //BAT
                         ImGui::EndGroup();
                         ImVec2 groupEnd = ImGui::GetItemRectMax();       // Bottom-right of the group
                         ImDrawList* drawList = ImGui::GetWindowDrawList();
