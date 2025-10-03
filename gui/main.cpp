@@ -794,10 +794,10 @@ int main(int, char**)
                             if (esp32.speed_kmh > 0.5) {
                                 whOverKmAveraged = movingAverages.whOverKm.moveAverage(battery.watts / esp32.speed_kmh);
                             } else {
-                                whOverKmAveraged = 0.0;
+                                whOverKmAveraged = 999.0;
                             }
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::Text("Wh/km: %0.1f\nWh/km: %0.1f NOW", esp32.wh_over_km_average, whOverKmAveraged);
+                            ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", esp32.wh_over_km_average, whOverKmAveraged);
                             ImGui::PopFont();
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
