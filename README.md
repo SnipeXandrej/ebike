@@ -41,15 +41,19 @@ Ano, viem, tá terminológia okolo baterky je zlá... napríklad "Amphours Rated
 - [x] Zobraziť trip
 
 ### Ostatné
-- [ ] Vypínanie celého systému aby z baterky (takmer) nič nežralo
-- [ ] Obmedzovač/Prepínač výkonu (250W [aby bolo legálne], 1kW, a pod.)
+- [x] Vypínanie celého systému aby z baterky (takmer) nič nežralo
+	* Zatial to je tak smíšno že to len vypína displej a možnosť ovládania motora
+- [x] Obmedzovač/Prepínač výkonu (250W [aby bolo legálne], 1kW, a pod.)
 - [ ] Svetlá
-- [ ] Smerovky
+	- [x] Predné
+	- [ ] Zadné
+	- [ ] Smerovky
 - [ ] Odomykanie (na kartičku? NFC? 1-Wire?)
 - [x] ESC: Flipsky 75200
 - [x] EC:  ESP32
 - [x] Telefón ako displej
 - [ ] Vodotesné
-- [ ] Výdrž baterky na 100km
+- [x] Výdrž baterky na 100km (pri sústavnej rýchlosti cca 30-35km/h)
 - [ ] Nabíjanie pomocou USB-C PD
 - [ ] Nabíjanie cez vlastný spínaný zdroj
+- [ ] USB-C PD 65W + USB-A porty
