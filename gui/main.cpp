@@ -387,7 +387,7 @@ int main(int, char**)
     mcconf_performance.l_current_min_scale = 1.0;
     mcconf_performance.l_current_max_scale = 1.0;
     mcconf_performance.l_min_erpm = -(500*3);
-    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 51.85) * 3); // 51.85km/h // 6500RPM
+    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 54) * 3); // 54km/h // 51.85km/h // 6500RPM
     mcconf_performance.l_min_duty = 0.005;
     mcconf_performance.l_max_duty = 0.95;
     mcconf_performance.l_watt_min = -10000;
@@ -688,7 +688,7 @@ int main(int, char**)
                         char text[100];
                         sprintf(text, "SOC: %0.1f", battery.percentage);
                         ImVec2 textSize = ImGui::CalcTextSize(text);
-                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 10.0, 7.0));
+                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
                         ImGui::Text(text);
                     }
 
@@ -785,7 +785,7 @@ int main(int, char**)
 
 
                     // Wh/km
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 5.2, io.DisplaySize.y / 1.7));
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 5.9, io.DisplaySize.y / 1.7));
                     ImGui::BeginGroup();
                         movingAverages.wattage.moveAverage(battery.watts);
                         powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
@@ -822,23 +822,6 @@ int main(int, char**)
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
                                 // ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
                                 ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
-
-                                {
-                                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
-
-                                    ImGui::SetNextItemWidth(250.0);
-                                    if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
-                                        setPowerProfile(POWER_PROFILE_CURRENT);
-                                        updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
-                                    }
-
-                                    ImGui::SameLine();
-                                    if (ImGui::Button("Reapply")) {
-                                        setPowerProfile(POWER_PROFILE_CURRENT);
-                                    }
-
-                                    ImGui::PopFont();
-                                }
                             ImGui::PopFont();
                         ImGui::EndGroup();
 
@@ -857,6 +840,29 @@ int main(int, char**)
                         ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                             TextCenteredOnLine(text, 1.0f, false);
                         ImGui::PopFont();
+
+                        {
+                            // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
+
+                            ImVec2 cursorPos = ImGui::GetContentRegionAvail();
+                            cursorPos.x = (cursorPos.x / 2.0) - 125.0 - 8.0;
+
+                            ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 80.0f));
+
+                            ImGui::SetNextItemWidth(250.0);
+                            if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
+                                setPowerProfile(POWER_PROFILE_CURRENT);
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
+                            }
+
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(90.0);
+                            if (ImGui::Button("Reapply")) {
+                                setPowerProfile(POWER_PROFILE_CURRENT);
+                            }
+
+                            // ImGui::PopFont();
+                        }
 
                     ImGui::EndGroup();
 
