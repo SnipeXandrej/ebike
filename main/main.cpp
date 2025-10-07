@@ -130,7 +130,6 @@ struct {
 struct {
     float range;
     float ampHoursUsedOnStart;
-    float tripOnStart;
     float distance;
     float ampHoursUsed;
     float AhPerKm;
@@ -156,6 +155,8 @@ float speed_kmh_previous = 0;
 float acceleration = 0;
 float motor_rpm = 0;
 
+bool BRAKING = 0;
+
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
 uint32_t timeStartCore0 = 0, timeCore0 = 0;    
 uint32_t timeStartDisplay = 0; //timeDisplay = 0;
@@ -164,10 +165,8 @@ uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 uint32_t timeAmphoursMinVoltage = 0;
+uint32_t timeAmphoursMaxVoltage = 0;
 unsigned long timeSavePreferencesStart = millis();
-
-bool rotorCanPowerMotor = 1;
-bool rotorCutOff_temp = 1;
 
 // uptime
 float totalSecondsSinceBoot;
@@ -222,6 +221,10 @@ MovingAverage batteryWattsMovingAverage;
 MovingAverage speed_kmhMovingAverage;
 MovingAverage wattageMoreSmooth_MovingAverage;
 
+struct {
+    MovingAverage brakingCurrent;
+} movingAverages;
+
 ThrottleMap throttle;
 
 Display display;
@@ -245,6 +248,7 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
 #define pinAdcRdyAlert 33 // D33
 #define pinPowerSwitch 27 // D27
+#define pinBrake       13 // D13
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
@@ -448,11 +452,11 @@ void getBatteryCurrent() {
 
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
     if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
-            battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+        battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
 
-            // TODO: later move it outside of this if function, and only allow subtracting from the wattHoursUsed variable
-            //       when using regenerative braking
-            trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+        trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+    } else if (BRAKING) {
+        trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
 
 
@@ -551,7 +555,6 @@ int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetwee
 }
 
 bool POWER_ON = false;
-
 void powerSwitchCallback() {
     if (digitalRead(pinPowerSwitch)) {
         POWER_ON = true;
@@ -901,6 +904,14 @@ void loop_core1 (void* pvParameters) {
 
         battery.watts = battery.voltage * battery.current;
 
+
+        // BRAKING = digitalRead(pinBrake);
+        if (speed_kmh > 1.0 && PotThrottleLevelReal == 0) {
+            BRAKING = true;
+        } else {
+            BRAKING = false;
+        }
+
         // Battery charge tracking stuff
         if (settings.batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
@@ -909,7 +920,7 @@ void loop_core1 (void* pvParameters) {
         }
 
         BatVoltageMovingAverage.moveAverage(battery.voltage);
-        if (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) {
+        if (!BRAKING && (BatVoltageMovingAverage.output <= battery.amphours_min_voltage)) {
             if (timer_delta_ms(timer_u32() - timeAmphoursMinVoltage) >= 5000 && battery.current <= 5.0) {
                 battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
                                                                 // this temporary value will later get applied to the actual
@@ -920,9 +931,9 @@ void loop_core1 (void* pvParameters) {
             timeAmphoursMinVoltage = timer_u32();
         }
 
-        if (BatVoltageMovingAverage.output >= battery.amphours_max_voltage) {
+        if (!BRAKING && (BatVoltageMovingAverage.output >= battery.amphours_max_voltage)) {
             // TODO: use dedicated current sensing for charging
-            if (PotThrottleLevelReal == 0 && (battery.current < -0.05 && battery.current >= -0.5)) {
+            if (timer_delta_ms(timer_u32() - timeAmphoursMaxVoltage) >= 5000 && PotThrottleLevelReal == 0 && (battery.current < -0.05 && battery.current >= -0.5)) {
                 battery.ampHoursUsed = 0;
                 battery.wattHoursUsed = 0;
                 if (battery.ampHoursRated_tmp != 0.0) {
@@ -931,62 +942,8 @@ void loop_core1 (void* pvParameters) {
 
                 estimatedRangeReset();
             }
-        }
-
-        // Gears
-        static int rotorTimeoutMs = 10000;
-        static int rotorEnergiseTimeMs = 0;
-
-        if (PotThrottleLevelReal < 1) {
-            if (rotorCutOff_temp == true) {
-                rotorCutOff_temp = false;
-                timeRotorSleep = timer_u32();
-            }
-
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorTimeoutMs) {
-                // if the erpm is lower than 50 -> send little power to rotor (maybe 1 watt?)
-                // else send enough power to the rotor to track speed accurately
-                if (VESC.data.rpm < 50.0f) {
-                    // // this logic is so that the little current for tracking doesnt run all the time
-                    // // it will power the rotor for 0.5s, then the next 4.5s there will be no power goind to the rotor, rinse and repeat
-                    // static uint32_t timeRotorLittleCurrent = 0;
-                    // if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) <= 500) {
-                    //     setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
-                    // } else if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) > 500) {
-                    //     setDuty(LEDC_CHANNEL_0, 0);
-                    //     if (timer_delta_ms(timer_u32() - timeRotorLittleCurrent) >= 5000) {
-                    //         timeRotorLittleCurrent = timer_u32();
-                    //     }
-                    // }
-                    setDuty(LEDC_CHANNEL_0, GearLevelIdleLittleCurrentDutyCycle);
-                    rotorCanPowerMotor = 0;
-                } else {
-                    setDuty(LEDC_CHANNEL_0, GearLevelTrackSpeedDutyCycle);
-                }
-            } else {
-                if (settings.automaticGearChanging == 1) {
-                    setGearLevel(3);
-                }
-            }
         } else {
-            if (rotorCutOff_temp == false) {
-                rotorCutOff_temp = true;
-                timeRotorSleep = timer_u32();
-            }
-
-            if (timer_delta_ms(timer_u32() - timeRotorSleep) >= rotorEnergiseTimeMs) {
-                rotorCanPowerMotor = 1;
-            }
-
-            if (settings.automaticGearChanging == 1) {
-                if (VESC.data.avgMotorCurrent >= 110.0) { // PotThrottleAmpsRequested
-                    setGearLevel(1);
-                } else if (VESC.data.avgMotorCurrent >= 45.0) { // PotThrottleAmpsRequested
-                    setGearLevel(2);
-                } else {
-                    setGearLevel(3);
-                }
-            }
+            timeAmphoursMaxVoltage = timer_u32();
         }
 
         // Map throttle
@@ -1000,10 +957,16 @@ void loop_core1 (void* pvParameters) {
         PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
 
         // Throttle
-        if (rotorCanPowerMotor == 0 || !POWER_ON) {
+        if (!POWER_ON) {
             VESC.setCurrent(0.0f);
+        } else if (BRAKING) {
+            static float brakingCurrentMax = 100.0;
+
+            // gradually increase braking current
+            VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
         } else {
             VESC.setCurrent(throttle.map(PotThrottleLevelReal));
+            movingAverages.brakingCurrent.setInput(0.0f);
         }
 
         static uint32_t timeAcceleration;
@@ -1184,6 +1147,7 @@ void app_main(void)
     batteryWattsMovingAverage.smoothingFactor = 0.2;
     speed_kmhMovingAverage.smoothingFactor = 0.02;
     wattageMoreSmooth_MovingAverage.smoothingFactor = 0.4f;
+    movingAverages.brakingCurrent.smoothingFactor = 0.025f;
 
     initArduino();
     Serial.begin(230400);
@@ -1242,6 +1206,9 @@ void app_main(void)
     pinMode(pinPowerSwitch, INPUT_PULLDOWN);
     attachInterrupt(pinPowerSwitch, powerSwitchCallback, GPIO_INTR_ANYEDGE);
     powerSwitchCallback();
+
+    // Braking Switch
+    pinMode(pinBrake, INPUT_PULLDOWN);
 
     ledc_timer_config_t timer_conf = {
         .speed_mode = LEDC_HIGH_SPEED_MODE,

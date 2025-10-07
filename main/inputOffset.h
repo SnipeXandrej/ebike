@@ -15,8 +15,14 @@ public:
     void initInput(float input) {
         if (!done) {
             previousInput = input;
+            Input = input;
             done = 1;
         }
+    }
+
+    void setInput(float input) {
+        previousInput = input;
+        Input = input;
     }
 
     float moveAverage(float input) {
