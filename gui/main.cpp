@@ -74,7 +74,7 @@ struct VESC_MCCONF {
     float l_watt_max;
     float l_in_current_min;
     float l_in_current_max;
-    std::string name = "";
+    std::string name;
     int id;
     // int motor_poles;
     // float gear_ratio;
@@ -98,7 +98,7 @@ struct {
     float power_level;
     float phase_current;
     float wh_over_km_average;
-    float ah_per_km;
+    float wh_per_km;
     float range_left;
     float temperature_motor;
     float timeCore0_us;
@@ -135,6 +135,8 @@ struct {
     float ampHoursRatedWhenNew = 32.0;
     float amphours_min_voltage;
     float amphours_max_voltage;
+
+    float nominalVoltage;
 } battery;
 
 struct {
@@ -170,12 +172,15 @@ float voltage_last_values_array[140];
 float current_last_values_array[140];
 float temperature_last_values_array[2000];
 
-std::string to_send = "";
-std::string to_send_extra = "";
+std::string to_send;
+std::string to_send_extra;
 
-CPUUsage cpuUsage_ImGui;
-CPUUsage cpuUsage_SerialThread;
-CPUUsage cpuUsage_Everything;
+struct {
+    CPUUsage ImGui;
+    CPUUsage SerialThread;
+    CPUUsage Everything;
+} cpuUsage;
+
 SerialProcessor SerialP;
 
 void setBrightnessLow() {
@@ -266,6 +271,7 @@ void processSerialRead(std::string line) {
                         battery.percentage = getValueFromPacket(packet, &index);
                         battery.voltage_min = getValueFromPacket(packet, &index);
                         battery.voltage_max = getValueFromPacket(packet, &index);
+                        battery.nominalVoltage = getValueFromPacket(packet, &index);
                         battery.amphours_min_voltage = getValueFromPacket(packet, &index);
                         battery.amphours_max_voltage = getValueFromPacket(packet, &index);
                         break;
@@ -280,7 +286,7 @@ void processSerialRead(std::string line) {
                         esp32.power_level = getValueFromPacket(packet, &index);
                         esp32.phase_current = getValueFromPacket(packet, &index);
                         esp32.wh_over_km_average = getValueFromPacket(packet, &index);
-                        esp32.ah_per_km = getValueFromPacket(packet, &index);
+                        esp32.wh_per_km = getValueFromPacket(packet, &index);
                         esp32.range_left = getValueFromPacket(packet, &index);
                         esp32.temperature_motor = getValueFromPacket(packet, &index);
                         esp32.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
@@ -343,17 +349,19 @@ int main(int, char**)
     // ##### Settings #####
     // ####################
 
-    float RPM_PER_KMH = 125.36;
+
+    // (42/14)*(57/16) = 10.6875 Gear ratio
+    float RPM_PER_KMH = 90.04;
 
     mcconf_legal.l_current_min_scale = 1.0;
     mcconf_legal.l_current_max_scale = 0.15;
     mcconf_legal.l_min_erpm = -(500*3);
-    mcconf_legal.l_max_erpm = ((RPM_PER_KMH * 25) * 3); // 25km/h
+    mcconf_legal.l_max_erpm = ((RPM_PER_KMH * 26) * 3); // 25km/h
     mcconf_legal.l_min_duty = 0.005;
     mcconf_legal.l_max_duty = 0.95;
     mcconf_legal.l_watt_min = -10000;
     mcconf_legal.l_watt_max = 250;
-    mcconf_legal.l_in_current_min = -10;
+    mcconf_legal.l_in_current_min = -16;
     mcconf_legal.l_in_current_max = 96;
     mcconf_legal.name = "Legal";
     mcconf_legal.id = POWER_PROFILE::LEGAL;
@@ -361,12 +369,12 @@ int main(int, char**)
     mcconf_eco.l_current_min_scale = 1.0;
     mcconf_eco.l_current_max_scale = 0.3;
     mcconf_eco.l_min_erpm = -(500*3);
-    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 25) * 3); // 25km/h
+    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 26) * 3); // 25km/h
     mcconf_eco.l_min_duty = 0.005;
     mcconf_eco.l_max_duty = 0.95;
     mcconf_eco.l_watt_min = -10000;
-    mcconf_eco.l_watt_max = 1250;
-    mcconf_eco.l_in_current_min = -10;
+    mcconf_eco.l_watt_max = 1000;
+    mcconf_eco.l_in_current_min = -16;
     mcconf_eco.l_in_current_max = 96;
     mcconf_eco.name = "Eco";
     mcconf_eco.id = POWER_PROFILE::ECO;
@@ -374,12 +382,12 @@ int main(int, char**)
     mcconf_balanced.l_current_min_scale = 1.0;
     mcconf_balanced.l_current_max_scale = 0.4;
     mcconf_balanced.l_min_erpm = -(500*3);
-    mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 42) * 3); // 42km/h
+    mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 41) * 3); // 40km/h
     mcconf_balanced.l_min_duty = 0.005;
     mcconf_balanced.l_max_duty = 0.95;
     mcconf_balanced.l_watt_min = -10000;
-    mcconf_balanced.l_watt_max = 3000;
-    mcconf_balanced.l_in_current_min = -10;
+    mcconf_balanced.l_watt_max = 2250;
+    mcconf_balanced.l_in_current_min = -16;
     mcconf_balanced.l_in_current_max = 96;
     mcconf_balanced.name = "Balanced";
     mcconf_balanced.id = POWER_PROFILE::BALANCED;
@@ -387,12 +395,12 @@ int main(int, char**)
     mcconf_performance.l_current_min_scale = 1.0;
     mcconf_performance.l_current_max_scale = 1.0;
     mcconf_performance.l_min_erpm = -(500*3);
-    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 54) * 3); // 54km/h // 51.85km/h // 6500RPM
+    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 51) * 3); // 50km/h
     mcconf_performance.l_min_duty = 0.005;
     mcconf_performance.l_max_duty = 0.95;
     mcconf_performance.l_watt_min = -10000;
     mcconf_performance.l_watt_max = 4500;
-    mcconf_performance.l_in_current_min = -10;
+    mcconf_performance.l_in_current_min = -16;
     mcconf_performance.l_in_current_max = 96;
     mcconf_performance.name = "Performance";
     mcconf_performance.id = POWER_PROFILE::PERFORMANCE;
@@ -400,12 +408,12 @@ int main(int, char**)
     mcconf_performance2.l_current_min_scale = 1.0;
     mcconf_performance2.l_current_max_scale = 1.0;
     mcconf_performance2.l_min_erpm = -(500*3);
-    mcconf_performance2.l_max_erpm = ((RPM_PER_KMH * 90) * 3); // 51.85km/h // 6500RPM
+    mcconf_performance2.l_max_erpm = ((RPM_PER_KMH * 72.2) * 3); // 72.2km/h // Max RPM limit (6500RPM)
     mcconf_performance2.l_min_duty = 0.005;
     mcconf_performance2.l_max_duty = 0.95;
     mcconf_performance2.l_watt_min = -10000;
     mcconf_performance2.l_watt_max = 7000;
-    mcconf_performance2.l_in_current_min = -10;
+    mcconf_performance2.l_in_current_min = -16;
     mcconf_performance2.l_in_current_max = 96;
     mcconf_performance2.name = "Performance2";
     mcconf_performance2.id = POWER_PROFILE::PERFORMANCE2;
@@ -448,7 +456,7 @@ int main(int, char**)
 
         std::cout << "[SERIAL] Entering main while loop\n";
         while(!done) {
-            cpuUsage_SerialThread.measureStart(1);
+            cpuUsage.SerialThread.measureStart(1);
             SerialP.timeout_ms = settings.serialWriteWaitMs;
 
             to_send = "";
@@ -501,7 +509,7 @@ int main(int, char**)
             }
 
             SerialP.readSerial(processSerialRead);
-            cpuUsage_SerialThread.measureEnd(1);
+            cpuUsage.SerialThread.measureEnd(1);
         }
 
         close(SerialP.serialPort);
@@ -608,8 +616,8 @@ int main(int, char**)
     // Main loop
     while (!done)
     {
-        cpuUsage_ImGui.measureStart(1);
-        cpuUsage_Everything.measureStart(0);
+        cpuUsage.ImGui.measureStart(1);
+        cpuUsage.Everything.measureStart(0);
 
         static bool power_on_old = false;
         if (esp32.power_on && power_on_old != esp32.power_on) {
@@ -654,7 +662,7 @@ int main(int, char**)
         // ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->Pos);
         ImGui::SetNextWindowSize(io.DisplaySize);
-        char text[1024];
+
         if (true) {
             timeDrawStart = std::chrono::steady_clock::now();
             ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
@@ -807,15 +815,18 @@ int main(int, char**)
                                 ImGui::SetTooltip("¹tells the long-term Watthour usage per km\n²tells the immediate Watthour usage per km");
                             }
 
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
-                            if (esp32.speed_kmh >= 50.0) {
-                                sprintf(text, "%0.1fkm/h >:(", esp32.speed_kmh);
-                            } else {
-                                sprintf(text, "%0.1fkm/h", esp32.speed_kmh);
+                            {
+                                char text[128];
+                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
+                                if (esp32.speed_kmh >= 50.0) {
+                                    sprintf(text, "%0.1fkm/h >:(", esp32.speed_kmh);
+                                } else {
+                                    sprintf(text, "%0.1fkm/h", esp32.speed_kmh);
+                                }
+                                ImGui::Text(text);
+                                // TextCenteredOnLine(text, -0.5f, false);
+                                ImGui::PopFont();
                             }
-                            ImGui::Text(text);
-                            // TextCenteredOnLine(text, -0.5f, false);
-                            ImGui::PopFont();
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
@@ -830,41 +841,43 @@ int main(int, char**)
 
 
                     // ODOMETER / TRIP
-                    ImGui::BeginGroup();
+                    {
+                        char text[128];
+                        ImGui::BeginGroup();
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                                sprintf(text, "O: %0.0f", esp32.odometer_distance);
+                                TextCenteredOnLine(text, 0.0f, false);
+                                sprintf(text, "T:%5.2f", esp32.trip_distance);
+                            ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                                TextCenteredOnLine(text, 1.0f, false);
+                            ImGui::PopFont();
 
-                        ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                        ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
-                            sprintf(text, "O: %0.0f", esp32.odometer_distance);
-                            TextCenteredOnLine(text, 0.0f, false);
-                            sprintf(text, "T:%5.2f", esp32.trip_distance);
-                        ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
-                            TextCenteredOnLine(text, 1.0f, false);
-                        ImGui::PopFont();
+                            {
+                                // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
 
-                        {
-                            // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
+                                ImVec2 cursorPos = ImGui::GetContentRegionAvail();
+                                cursorPos.x = (cursorPos.x / 2.0) - 125.0 - 8.0;
 
-                            ImVec2 cursorPos = ImGui::GetContentRegionAvail();
-                            cursorPos.x = (cursorPos.x / 2.0) - 125.0 - 8.0;
+                                ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 80.0f));
 
-                            ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 80.0f));
+                                ImGui::SetNextItemWidth(250.0);
+                                if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
+                                    setPowerProfile(POWER_PROFILE_CURRENT);
+                                    updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
+                                }
 
-                            ImGui::SetNextItemWidth(250.0);
-                            if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
-                                setPowerProfile(POWER_PROFILE_CURRENT);
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(90.0);
+                                if (ImGui::Button("Reapply")) {
+                                    setPowerProfile(POWER_PROFILE_CURRENT);
+                                }
+
+                                // ImGui::PopFont();
                             }
 
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(90.0);
-                            if (ImGui::Button("Reapply")) {
-                                setPowerProfile(POWER_PROFILE_CURRENT);
-                            }
-
-                            // ImGui::PopFont();
-                        }
-
-                    ImGui::EndGroup();
+                        ImGui::EndGroup();
+                    }
 
                     ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
                     ImGui::Separator();
@@ -944,9 +957,9 @@ int main(int, char**)
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("CPU Usage (100%% is 1 core)");
-                            ImGui::Text("       All:    %0.2f%%", cpuUsage_Everything.cpu_percent);
-                            ImGui::Text("       ImGui:  %0.2f%%", cpuUsage_ImGui.cpu_percent);
-                            ImGui::Text("       Serial: %0.2f%%", cpuUsage_SerialThread.cpu_percent);
+                            ImGui::Text("       All:    %0.2f%%", cpuUsage.Everything.cpu_percent);
+                            ImGui::Text("       ImGui:  %0.2f%%", cpuUsage.ImGui.cpu_percent);
+                            ImGui::Text("       Serial: %0.2f%%", cpuUsage.SerialThread.cpu_percent);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
@@ -1029,6 +1042,7 @@ int main(int, char**)
                             // TODO: amphours when new is hardcoded
                             ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
                             ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
+                            ImGui::Text("Wh Capacity: %0.1f Wh", (battery.nominalVoltage * battery.ampHoursRated));
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursRatedWhenNew);
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
@@ -1095,7 +1109,7 @@ int main(int, char**)
                         ImGui::EndTabBar(); //TABBAR2
                     }
                     ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
-                }
+                } // Settings tab item
                 ImGui::EndTabBar(); //TABBAR1
             }
 
@@ -1140,8 +1154,8 @@ int main(int, char**)
             lasttime += 1.0/settings.TARGET_FPS;
         }
 
-        cpuUsage_ImGui.measureEnd(1);
-        cpuUsage_Everything.measureEnd(0);
+        cpuUsage.ImGui.measureEnd(1);
+        cpuUsage.Everything.measureEnd(0);
     }
 
     // Cleanup
