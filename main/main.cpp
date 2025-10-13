@@ -120,6 +120,9 @@ struct {
     float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
+
+    float wattHoursRated;
+    float nominalVoltage;
 } battery;
 
 struct {
@@ -129,10 +132,10 @@ struct {
 
 struct {
     float range;
-    float ampHoursUsedOnStart;
+    float wattHoursUsedOnStart;
     float distance;
-    float ampHoursUsed;
-    float AhPerKm;
+    float wattHoursUsed;
+    float WhPerKm;
 } estimatedRange;
 
 float  _batteryVoltage;
@@ -326,15 +329,14 @@ void setDuty(ledc_channel_t channel, int duty) {
 }
 
 void estimatedRangeReset() {
-    estimatedRange.ampHoursUsedOnStart  = battery.ampHoursUsed;
-    estimatedRange.distance             = 0.0;
-    estimatedRange.ampHoursUsed         = 0.0;
+    estimatedRange.wattHoursUsedOnStart  = battery.wattHoursUsed;
+    estimatedRange.distance              = 0.0;
+    estimatedRange.wattHoursUsed         = 0.0;
 }
 
 void tripReset() {
     trip.distance = 0;
     trip.wattHoursUsed = 0;
-    // estimatedRangeReset();
 }
 
 void preferencesSaveOdometer() {
@@ -447,16 +449,15 @@ void getBatteryCurrent() {
     battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
     if (_batteryCurrentUsedInElapsedTime >= 0.0) {
         battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
-        estimatedRange.ampHoursUsed += _batteryCurrentUsedInElapsedTime / 3600.0;
     }
 
-    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
-    if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
-        battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
 
+    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
+    battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+
+    if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) {
         trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
-    } else if (BRAKING) {
-        trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+        estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
 
 
@@ -903,6 +904,7 @@ void loop_core1 (void* pvParameters) {
         getBatteryCurrent();
 
         battery.watts = battery.voltage * battery.current;
+        battery.wattHoursRated = battery.nominalVoltage * battery.ampHoursRated;
 
 
         // BRAKING = digitalRead(pinBrake);
@@ -939,8 +941,6 @@ void loop_core1 (void* pvParameters) {
                 if (battery.ampHoursRated_tmp != 0.0) {
                     battery.ampHoursRated = battery.ampHoursRated_tmp;
                 }
-
-                estimatedRangeReset();
             }
         } else {
             timeAmphoursMaxVoltage = timer_u32();
@@ -1022,8 +1022,8 @@ void loop_core1 (void* pvParameters) {
         }
         wh_over_km_average = trip.wattHoursUsed / trip.distance;
 
-        estimatedRange.AhPerKm = estimatedRange.ampHoursUsed / estimatedRange.distance;
-        estimatedRange.range = (battery.ampHoursRated - battery.ampHoursUsed) / estimatedRange.AhPerKm;
+        estimatedRange.WhPerKm = estimatedRange.wattHoursUsed / estimatedRange.distance;
+        estimatedRange.range = (battery.wattHoursRated - battery.wattHoursUsed) / estimatedRange.WhPerKm;
 
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
@@ -1036,22 +1036,6 @@ void loop_core1 (void* pvParameters) {
         if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 10000) {
             timeExecEvery100millisecondsCore1 = timer_u32();
 
-            // VESC.setMcconfTempValues();
-            // run_once_mcconf2 = true;
-
-            // if (VESC.getMcconfTempValues()) {
-            //     VESC.data_mcconf.l_current_max_scale = 0.3;
-            //     VESC.data_mcconf.l_current_min_scale = 1.0;
-            //     VESC.data_mcconf.l_max_erpm = 3.0; // 3k
-            //     VESC.data_mcconf.l_min_erpm = -3.0; // -3k
-            //     VESC.data_mcconf.l_min_duty = 0.005;
-            //     VESC.data_mcconf.l_max_duty = 0.01;
-            //     VESC.data_mcconf.l_watt_min = -1500.0;
-            //     VESC.data_mcconf.l_watt_max = 200.0;
-
-            //     VESC.setMcconfTempValues();
-            //     delay(1000);
-            // }
         }
         timeCore1 = (timer_u32() - timeStartCore1);
     }
@@ -1063,9 +1047,10 @@ void app_main(void)
     motor.poles = 18;
     motor.magnetPairs = 3;
     wheel.diameter = 63.0f;
-    wheel.gear_ratio = 14.9625f; // (42/10) * (57/16)
+    wheel.gear_ratio = 10.6875f; // (42/14) * (57/16)
     battery.voltage_min = 66.0f;
     battery.voltage_max = 82.0f;
+    battery.nominalVoltage = 72.0f;
 
     battery.amphours_min_voltage = 68.0f;
     battery.amphours_max_voltage = 82.0f;
@@ -1092,7 +1077,8 @@ void app_main(void)
         {40, 40},
         {50, 60},
         {75, 120},
-        {100, 200}
+        {90, 200},
+        {100, 250}
     };
     throttle.setCurve(customThrottleCurve);
 
@@ -1294,6 +1280,7 @@ void app_main(void)
                         commAddValue(&toSend, battery.percentage, 1);
                         commAddValue(&toSend, battery.voltage_min, 1);
                         commAddValue(&toSend, battery.voltage_max, 1);
+                        commAddValue(&toSend, battery.nominalVoltage, 1);
                         commAddValue(&toSend, battery.amphours_min_voltage, 1);
                         commAddValue(&toSend, battery.amphours_max_voltage, 1);
 
@@ -1317,7 +1304,7 @@ void app_main(void)
                         commAddValue(&toSend, selectedPowerMode, 0);
                         commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
                         commAddValue(&toSend, wh_over_km_average, 1);
-                        commAddValue(&toSend, estimatedRange.AhPerKm, 1);
+                        commAddValue(&toSend, estimatedRange.WhPerKm, 1);
                         commAddValue(&toSend, estimatedRange.range, 1);
                         commAddValue(&toSend, VESC.data.tempMotor, 1);
                         commAddValue(&toSend, totalSecondsSinceBoot, 0);
