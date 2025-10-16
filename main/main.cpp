@@ -1076,8 +1076,8 @@ void app_main(void)
         {30, 30},
         {40, 40},
         {50, 60},
-        {75, 120},
-        {90, 200},
+        {75, 150},
+        {87, 200},
         {100, 250}
     };
     throttle.setCurve(customThrottleCurve);
