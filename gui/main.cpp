@@ -50,7 +50,8 @@ enum COMMAND_ID {
     ESP32_SERIAL_LENGTH = 12,
     SET_AMPHOURS_USED_LIFETIME = 13,
     GET_VESC_MCCONF = 14,
-    SET_VESC_MCCONF = 15
+    SET_VESC_MCCONF = 15,
+    SET_AMPHOURS_CHARGED = 16
 };
 
 enum POWER_PROFILE {
@@ -1047,9 +1048,10 @@ int main(int, char**)
                             ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursRatedWhenNew);
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
                             ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
-                            ImGui::Dummy(ImVec2(0, 20));
                             // Amphours used lifetime since 22.09.2025
                             ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
+
+                            ImGui::Dummy(ImVec2(0,40));
 
                             static char newAmphoursUsedLifetimeValue[30];
                             ImGui::Text("Set Amphours Used (Lifetime) value = ");
@@ -1060,6 +1062,19 @@ int main(int, char**)
                             if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                 if (strlen(newAmphoursUsedLifetimeValue) > 0) {
                                     std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_USED_LIFETIME), newAmphoursUsedLifetimeValue);
+                                    to_send_extra.append(append);
+                                }
+                            }
+
+                            static char newAmphoursChargedValue[30];
+                            ImGui::Text("Set Amphours when charged = ");
+                            ImGui::SameLine();
+                            ImGui::SetNextItemWidth(100.0);
+                            ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
+                            // ImGui::SameLine();
+                            if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                if (strlen(newAmphoursChargedValue) > 0) {
+                                    std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
                                     to_send_extra.append(append);
                                 }
                             }

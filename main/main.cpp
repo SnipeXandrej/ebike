@@ -67,6 +67,7 @@ enum COMMAND_ID {
     SET_AMPHOURS_USED_LIFETIME = 13,
     GET_VESC_MCCONF = 14,
     SET_VESC_MCCONF = 15,
+    SET_AMPHOURS_CHARGED = 16
 };
 
 struct {
@@ -1389,6 +1390,13 @@ void app_main(void)
                         VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
                         VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
                         VESC.setMcconfTempValues();
+                        break;
+
+                    case COMMAND_ID::SET_AMPHOURS_CHARGED:
+                        float newValue = (float)getValueFromPacket(packet, 1);
+
+                        battery.ampHoursRated = newValue;
+                        battery.ampHoursRated_tmp = newValue;
                         break;
                 }
 
