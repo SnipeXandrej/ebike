@@ -126,7 +126,7 @@ struct {
     float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
-    bool charging = 0;
+    bool charging = 1;
 
     float wattHoursRated;
     float nominalVoltage;
@@ -175,7 +175,6 @@ uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 uint32_t timeAmphoursMinVoltage = 0;
-uint32_t timeAmphoursMaxVoltage = 0;
 unsigned long timeSavePreferencesStart = millis();
 
 // uptime
@@ -462,7 +461,7 @@ void getBatteryCurrent() {
     _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
     battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
 
-    if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) {
+    if ((_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) && !battery.charging) {
         trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
         estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
     }
@@ -913,7 +912,6 @@ void loop_core1 (void* pvParameters) {
         battery.watts = battery.voltage * battery.current;
         battery.wattHoursRated = battery.nominalVoltage * battery.ampHoursRated;
 
-
         // BRAKING = digitalRead(pinBrake);
         if (speed_kmh > 1.0 && PotThrottleLevelReal == 0) {
             BRAKING = true;
@@ -929,8 +927,8 @@ void loop_core1 (void* pvParameters) {
         }
 
         BatVoltageMovingAverage.moveAverage(battery.voltage);
-        if (!BRAKING && (BatVoltageMovingAverage.output <= battery.amphours_min_voltage)) {
-            if (timer_delta_ms(timer_u32() - timeAmphoursMinVoltage) >= 5000 && battery.current <= 5.0) {
+        if (!battery.charging && (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) && (battery.current <= 3.0 && battery.current >= 0.0)) {
+            if (timer_delta_ms(timer_u32() - timeAmphoursMinVoltage) >= 5000) {
                 battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
                                                                 // this temporary value will later get applied to the actual
                                                                 // ampHourRated variable when the battery is done charging so
@@ -940,17 +938,15 @@ void loop_core1 (void* pvParameters) {
             timeAmphoursMinVoltage = timer_u32();
         }
 
-        if (!BRAKING && (BatVoltageMovingAverage.output >= battery.amphours_max_voltage)) {
+        if (BatVoltageMovingAverage.output >= battery.amphours_max_voltage) {
             // TODO: use dedicated current sensing for charging
-            if (timer_delta_ms(timer_u32() - timeAmphoursMaxVoltage) >= 5000 && PotThrottleLevelReal == 0 && (battery.current < -0.05 && battery.current >= -0.5)) {
+            if (battery.charging && (battery.current <= 0.0 && battery.current >= -0.5)) {
                 battery.ampHoursUsed = 0;
                 battery.wattHoursUsed = 0;
                 if (battery.ampHoursRated_tmp != 0.0) {
                     battery.ampHoursRated = battery.ampHoursRated_tmp;
                 }
             }
-        } else {
-            timeAmphoursMaxVoltage = timer_u32();
         }
 
         // Map throttle
@@ -964,7 +960,7 @@ void loop_core1 (void* pvParameters) {
         PotThrottleLevelReal = map_f(potThrottleVoltage, 0.9, 2.4, 0, 100);
 
         // Throttle
-        if (!POWER_ON) {
+        if (!POWER_ON || battery.charging) {
             VESC.setCurrent(0.0f);
         } else if (BRAKING) {
             static float brakingCurrentMax = 100.0;
@@ -973,6 +969,8 @@ void loop_core1 (void* pvParameters) {
             VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
         } else {
             VESC.setCurrent(throttle.map(PotThrottleLevelReal));
+
+            // reset regen braking
             movingAverages.brakingCurrent.setInput(0.0f);
         }
 
