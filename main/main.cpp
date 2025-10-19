@@ -1379,8 +1379,8 @@ void app_main(void)
                     case COMMAND_ID::SET_VESC_MCCONF:
                         VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
                         VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
-                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1360.82;
-                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1360.82;
+                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
+                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
                         VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
                         VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
                         VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
