@@ -52,7 +52,8 @@ enum COMMAND_ID {
     GET_VESC_MCCONF = 14,
     SET_VESC_MCCONF = 15,
     SET_AMPHOURS_CHARGED = 16,
-    ESP32_LOG = 17
+    ESP32_LOG = 17,
+    TOGGLE_CHARGING_STATE = 18
 };
 
 enum POWER_PROFILE {
@@ -138,6 +139,7 @@ struct {
     float ampHoursRatedWhenNew = 32.0;
     float amphours_min_voltage;
     float amphours_max_voltage;
+    bool charging = 0;
 
     float nominalVoltage;
 } battery;
@@ -279,6 +281,7 @@ void processSerialRead(std::string line) {
                         battery.nominalVoltage = getValueFromPacket(packet, &index);
                         battery.amphours_min_voltage = getValueFromPacket(packet, &index);
                         battery.amphours_max_voltage = getValueFromPacket(packet, &index);
+                        battery.charging = getValueFromPacket(packet, &index);
                         break;
 
                     case COMMAND_ID::GET_STATS:
@@ -709,7 +712,14 @@ int main(int, char**)
                         sprintf(text, "SOC: %0.1f", battery.percentage);
                         ImVec2 textSize = ImGui::CalcTextSize(text);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
-                        ImGui::Text(text);
+                        ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
+                        ImGui::TextColored(color, text);
+
+                        if (ImGui::IsItemClicked())
+                            to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
+
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Click to toggle charging state\nCharging: %s", battery.charging ? "true" : "false");
                     }
 
 
@@ -1051,6 +1061,8 @@ int main(int, char**)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
+
+                            ImGui::Text("Charging: %s", battery.charging ? "true": "false");
                             // TODO: amphours when new is hardcoded
                             ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
                             ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
@@ -1088,6 +1100,10 @@ int main(int, char**)
                                     std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
                                     to_send_extra.append(append);
                                 }
+                            }
+
+                            if (ImGui::Button("Toggle Charging State", ImVec2(buttonWidth+30.0 * main_scale, buttonHeight * main_scale))) {
+                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
                             }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);

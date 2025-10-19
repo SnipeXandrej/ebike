@@ -30,6 +30,9 @@
 #include "MiniPID.h"
 #include "map.cpp"
 
+#define EBIKE_NAME "EBIKE"
+#define EBIKE_VERSION "0.0"
+
 class Display {
 private:
     uint32_t timeStart;
@@ -68,7 +71,8 @@ enum COMMAND_ID {
     GET_VESC_MCCONF = 14,
     SET_VESC_MCCONF = 15,
     SET_AMPHOURS_CHARGED = 16,
-    ESP32_LOG = 17
+    ESP32_LOG = 17,
+    TOGGLE_CHARGING_STATE = 18
 };
 
 struct {
@@ -122,6 +126,7 @@ struct {
     float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
+    bool charging = 0;
 
     float wattHoursRated;
     float nominalVoltage;
@@ -1285,6 +1290,7 @@ void app_main(void)
                         commAddValue(&toSend, battery.nominalVoltage, 1);
                         commAddValue(&toSend, battery.amphours_min_voltage, 1);
                         commAddValue(&toSend, battery.amphours_max_voltage, 1);
+                        commAddValue(&toSend, battery.charging, 0);
 
                         toSend.append("\n");
                         break;
@@ -1347,7 +1353,7 @@ void app_main(void)
 
                     case COMMAND_ID::GET_FW:
                         commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
-                        toSend.append(std::format("{};{}; {} {};", "EBIKE", "0.0", __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
+                        toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
 
                         toSend.append("\n");
                         break;
@@ -1401,12 +1407,24 @@ void app_main(void)
                         break;
 
                     case COMMAND_ID::SET_AMPHOURS_CHARGED:
-                        float newValue = (float)getValueFromPacket(packet, 1);
+                        {
+                            float newValue = getValueFromPacket(packet, 1);
 
-                        battery.ampHoursRated = newValue;
-                        battery.ampHoursRated_tmp = newValue;
+                            battery.ampHoursRated = newValue;
+                            battery.ampHoursRated_tmp = newValue;
 
-                        toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), newValue));
+                            toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), newValue));
+                        }
+                        break;
+
+                    case COMMAND_ID::TOGGLE_CHARGING_STATE:
+                        if (battery.charging) {
+                            battery.charging = false;
+                        } else {
+                            battery.charging = true;
+                        }
+
+                        toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.charging));
                         break;
                 }
 
