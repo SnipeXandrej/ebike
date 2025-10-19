@@ -733,40 +733,12 @@ int main(int, char**)
                             } else {
                                 succesfulCommunication_avoidMutex = true;
                             }
-                            ImGui::Text("Power");
-
-                            ImGui::PushID(0);
-                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(2 / 7.0f, 0.5f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(2 / 7.0f, 0.6f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(2 / 7.0f, 0.7f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(2 / 7.0f, 0.9f, 0.9f));
-                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.voltage, battery.amphours_min_voltage, battery.amphours_max_voltage, "%0.1fV");
-                            ImGui::PopStyleColor(4);
-                            ImGui::PopID();
-
-                            ImGui::PushID(1);
-                            ImGui::SameLine();
-                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(0 / 7.0f, 0.5f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(0 / 7.0f, 0.6f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(0 / 7.0f, 0.7f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(0 / 7.0f, 0.9f, 0.9f));
-                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.current, 0.0f, 100.0f, "%0.2fA");
-                            ImGui::PopStyleColor(4);
-                            ImGui::PopID();
-
+                            ImGui::Text("Power info");
                             movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
-                            ImGui::PushID(2);
-                            ImGui::SameLine();
-                            ImGui::PushStyleColor(ImGuiCol_FrameBg, (ImVec4)ImColor::HSV(1 / 7.0f, 0.5f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, (ImVec4)ImColor::HSV(1 / 7.0f, 0.6f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_FrameBgActive, (ImVec4)ImColor::HSV(1 / 7.0f, 0.7f, 0.5f));
-                            ImGui::PushStyleColor(ImGuiCol_SliderGrab, (ImVec4)ImColor::HSV(1 / 7.0f, 0.9f, 0.9f));
-                            char sliderFormat[100];
-                            // sprintf(sliderFormat, "%0.0fW\n%0.0fW\n%0.0f%%/h", battery.watts, movingAverages.wattageMoreSmooth.output, 100.0 / ((battery.ampHoursRated*72.0) / movingAverages.wattageMoreSmooth.output));
-                            sprintf(sliderFormat, "%0.0fW\n%0.0fW\n", battery.watts, movingAverages.wattageMoreSmooth.output);
-                            ImGui::VSliderFloat("##v", ImVec2(36*2, 160), &battery.watts, 0.0f, MAX_WATTAGE, sliderFormat);
-                            ImGui::PopStyleColor(4);
-                            ImGui::PopID();
+
+                            ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%5.1fV", battery.voltage);
+                            ImGui::TextColored(ImVec4(1.0, 0.0, 0.0, 1.0), "%5.1fA", battery.current);
+                            ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%5.1fW", battery.watts);
                         ImGui::EndGroup();
                         //
                         ImGui::SameLine();
@@ -1100,10 +1072,6 @@ int main(int, char**)
                                     std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
                                     to_send_extra.append(append);
                                 }
-                            }
-
-                            if (ImGui::Button("Toggle Charging State", ImVec2(buttonWidth+30.0 * main_scale, buttonHeight * main_scale))) {
-                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
                             }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
