@@ -722,8 +722,6 @@ int main(int, char**)
                             ImGui::SetTooltip("Click to toggle charging state\nCharging: %s", battery.charging ? "true" : "false");
                     }
 
-
-
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
                             static bool succesfulCommunication_avoidMutex;
@@ -736,9 +734,9 @@ int main(int, char**)
                             ImGui::Text("Power info");
                             movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
 
-                            ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%5.1fV", battery.voltage);
-                            ImGui::TextColored(ImVec4(1.0, 0.0, 0.0, 1.0), "%5.1fA", battery.current);
-                            ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%5.1fW", battery.watts);
+                            ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
+                            ImGui::TextColored(ImVec4(1.0, 0.0, 0.0, 1.0), "%7.2f A", battery.current);
+                            ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
                         ImGui::EndGroup();
                         //
                         ImGui::SameLine();
@@ -763,7 +761,7 @@ int main(int, char**)
                         ImGui::Dummy(ImVec2(0, 3));
                         ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
                         ImGui::BeginGroup();
-                            addVUMeter(esp32.phase_current, 0.0f, 200.0f, "PhA", 0);
+                            addVUMeter(esp32.phase_current, 0.0f, 250.0f, "PhA", 0);
                             ImGui::SameLine();
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
@@ -842,7 +840,7 @@ int main(int, char**)
                             ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                                 sprintf(text, "O: %0.0f", esp32.odometer_distance);
                                 TextCenteredOnLine(text, 0.0f, false);
-                                sprintf(text, "T:%5.2f", esp32.trip_distance);
+                                sprintf(text, "T: %4.1f", esp32.trip_distance);
                             ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                                 TextCenteredOnLine(text, 1.0f, false);
                             ImGui::PopFont();
@@ -875,7 +873,6 @@ int main(int, char**)
 
                     ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
                     ImGui::Separator();
-                    ImGui::Text("ESP32  Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
 
                     if (!succesfulCommunication_avoidMutex) {
                         ImGui::EndDisabled();
@@ -990,6 +987,8 @@ int main(int, char**)
 
                             sprintf(text, "   Compile Time: %s", esp32.fw_compile_date_time.c_str());
                             ImGui::Text(text);
+
+                            ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("Core 0 loop exec time: %0.2f us", esp32.timeCore0_us);
@@ -1119,7 +1118,7 @@ int main(int, char**)
                             std::string SerialLog;
                             SerialLog = SerialP.log;
 
-                            ImGui::InputTextMultiline("##", (char*)SerialLog.c_str(), sizeof(SerialLog.c_str()), ImGui::GetContentRegionAvail());
+                            ImGui::InputTextMultiline("##", (char*)SerialLog.c_str(), sizeof(SerialLog.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                             ImGui::EndTabItem();
                         }
                         ImGui::EndTabBar(); //TABBAR2
