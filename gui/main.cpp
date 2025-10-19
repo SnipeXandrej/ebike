@@ -53,7 +53,8 @@ enum COMMAND_ID {
     SET_VESC_MCCONF = 15,
     SET_AMPHOURS_CHARGED = 16,
     ESP32_LOG = 17,
-    TOGGLE_CHARGING_STATE = 18
+    TOGGLE_CHARGING_STATE = 18,
+    TOGGLE_REGEN_BRAKING = 19
 };
 
 enum POWER_PROFILE {
@@ -109,6 +110,7 @@ struct {
     float acceleration;
     bool power_on = false;
     std::string log;
+    bool regenerativeBraking;
 
     std::string fw_name;
     std::string fw_version;
@@ -302,6 +304,7 @@ void processSerialRead(std::string line) {
                         esp32.timeCore1_us = getValueFromPacket(packet, &index);
                         esp32.acceleration = getValueFromPacket(packet, &index);
                         esp32.power_on = (bool)getValueFromPacket(packet, &index);
+                        esp32.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
 
                         esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
                         esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
@@ -737,6 +740,17 @@ int main(int, char**)
                             ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
                             ImGui::TextColored(ImVec4(1.0, 0.0, 0.0, 1.0), "%7.2f A", battery.current);
                             ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
+
+                            ImGui::Dummy(ImVec2(0.0, 40.0));
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.75);
+                                ImGui::TextColored(esp32.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 1.0),"REGEN");
+                            ImGui::PopFont();
+                            if (ImGui::IsItemClicked())
+                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
+
+                            if (ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", esp32.regenerativeBraking ? "on" : "off");
+
                         ImGui::EndGroup();
                         //
                         ImGui::SameLine();

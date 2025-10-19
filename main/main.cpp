@@ -72,7 +72,8 @@ enum COMMAND_ID {
     SET_VESC_MCCONF = 15,
     SET_AMPHOURS_CHARGED = 16,
     ESP32_LOG = 17,
-    TOGGLE_CHARGING_STATE = 18
+    TOGGLE_CHARGING_STATE = 18,
+    TOGGLE_REGEN_BRAKING = 19
 };
 
 struct {
@@ -82,6 +83,7 @@ struct {
     bool printCoreExecutionTime = 0;
     bool disableOptimizedDrawing = 0;
     bool batteryPercentageVoltageBased = 0;
+    bool regenerativeBraking = 0;
 } settings;
 
 struct {
@@ -913,6 +915,7 @@ void loop_core1 (void* pvParameters) {
         battery.wattHoursRated = battery.nominalVoltage * battery.ampHoursRated;
 
         // BRAKING = digitalRead(pinBrake);
+        // TODO: feature idea: when we manually start to roll the bike from a standstill, dont activate braking until some throttle is applied
         if (speed_kmh > 1.0 && PotThrottleLevelReal == 0) {
             BRAKING = true;
         } else {
@@ -962,7 +965,7 @@ void loop_core1 (void* pvParameters) {
         // Throttle
         if (!POWER_ON || battery.charging) {
             VESC.setCurrent(0.0f);
-        } else if (BRAKING) {
+        } else if (BRAKING && settings.regenerativeBraking) {
             static float brakingCurrentMax = 100.0;
 
             // gradually increase braking current
@@ -1318,6 +1321,7 @@ void app_main(void)
                         commAddValue(&toSend, timer_delta_us(timeCore1), 1);
                         commAddValue(&toSend, acceleration, 1);
                         commAddValue(&toSend, POWER_ON, 0);
+                        commAddValue(&toSend, settings.regenerativeBraking, 0);
                    
                         toSend.append("\n");
                         break;
@@ -1423,6 +1427,16 @@ void app_main(void)
                         }
 
                         toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.charging));
+                        break;
+
+                    case COMMAND_ID::TOGGLE_REGEN_BRAKING:
+                        if (settings.regenerativeBraking) {
+                            settings.regenerativeBraking = false;
+                        } else {
+                            settings.regenerativeBraking = true;
+                        }
+
+                        toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), settings.regenerativeBraking));
                         break;
                 }
 
