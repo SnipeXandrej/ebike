@@ -51,7 +51,8 @@ enum COMMAND_ID {
     SET_AMPHOURS_USED_LIFETIME = 13,
     GET_VESC_MCCONF = 14,
     SET_VESC_MCCONF = 15,
-    SET_AMPHOURS_CHARGED = 16
+    SET_AMPHOURS_CHARGED = 16,
+    ESP32_LOG = 17
 };
 
 enum POWER_PROFILE {
@@ -106,6 +107,7 @@ struct {
     float timeCore1_us;
     float acceleration;
     bool power_on = false;
+    std::string log;
 
     std::string fw_name;
     std::string fw_version;
@@ -150,6 +152,8 @@ struct {
 
 bool done = false;
 bool ready_to_write = true;
+
+char currentTimeAndDate[100];
 
 // TODO: do not hardcode filepaths :trol:
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
@@ -327,6 +331,9 @@ void processSerialRead(std::string line) {
                         esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
                         esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
                         break;
+
+                    case COMMAND_ID::ESP32_LOG:
+                        esp32.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
                 }
             }
         }
@@ -655,6 +662,19 @@ int main(int, char**)
             continue;
         }
 
+        {
+            // Clock
+            time_t currentTime;
+            struct tm *localTime;
+
+            time( &currentTime );
+            localTime = localtime( &currentTime );
+
+            char text[100];
+            sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon+1, localTime->tm_year+1900);
+            std::strcpy(currentTimeAndDate, text);
+        }
+
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
@@ -678,18 +698,9 @@ int main(int, char**)
                 if (ImGui::BeginTabItem("Main"))
                 {
                     {
-                        // Clock
-                        time_t currentTime;
-                        struct tm *localTime;
-
-                        time( &currentTime );
-                        localTime = localtime( &currentTime );
-
-                        char text[100];
-                        sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon+1, localTime->tm_year+1900);
-                        ImVec2 textSize = ImGui::CalcTextSize(text);
+                        ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
-                        ImGui::Text(text);
+                        ImGui::Text(currentTimeAndDate);
                     }
 
                     {
@@ -1110,6 +1121,12 @@ int main(int, char**)
                             ImGui::EndGroup();
 
                             ImGui::EndChild();
+                            ImGui::EndTabItem();
+                        }
+
+                        if (ImGui::BeginTabItem("E-BIKE Log"))
+                        {
+                            ImGui::InputTextMultiline("##", (char*)esp32.log.c_str(), sizeof(esp32.log.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                             ImGui::EndTabItem();
                         }
 

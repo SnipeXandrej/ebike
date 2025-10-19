@@ -67,7 +67,8 @@ enum COMMAND_ID {
     SET_AMPHOURS_USED_LIFETIME = 13,
     GET_VESC_MCCONF = 14,
     SET_VESC_MCCONF = 15,
-    SET_AMPHOURS_CHARGED = 16
+    SET_AMPHOURS_CHARGED = 16,
+    ESP32_LOG = 17
 };
 
 struct {
@@ -1319,19 +1320,23 @@ void app_main(void)
 
                     case COMMAND_ID::SET_ODOMETER:
                         odometer.distance = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), odometer.distance));
                         break;
 
                     case COMMAND_ID::SAVE_PREFERENCES:
                         preferencesSaveBattery();
                         preferencesSaveOdometer();
+                        toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         break;
                         
                     case COMMAND_ID::RESET_TRIP:
                         tripReset();
+                        toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         break;
 
                     case COMMAND_ID::RESET_ESTIMATED_RANGE:
                         estimatedRangeReset();
+                        toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         break;
 
                     case COMMAND_ID::READY_TO_WRITE:
@@ -1357,6 +1362,7 @@ void app_main(void)
 
                     case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
                         battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.ampHoursUsedLifetime));
                         break;
 
                     case COMMAND_ID::GET_VESC_MCCONF:
@@ -1390,6 +1396,8 @@ void app_main(void)
                         VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
                         VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
                         VESC.setMcconfTempValues();
+
+                        toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         break;
 
                     case COMMAND_ID::SET_AMPHOURS_CHARGED:
@@ -1397,6 +1405,8 @@ void app_main(void)
 
                         battery.ampHoursRated = newValue;
                         battery.ampHoursRated_tmp = newValue;
+
+                        toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), newValue));
                         break;
                 }
 
