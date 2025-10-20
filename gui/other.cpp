@@ -156,7 +156,7 @@ void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, con
     if (toml::table* settings = tbl[table_name].as_table()) {
         // Assign or update the value
         settings->insert_or_assign(setting_name, value); // or any desired value
-        std::cout << "saved: " << setting_name << "=" << value << "\n";
+        std::cout << "saved: " << table_name << "." << setting_name << "=" << value << "\n";
     }
 
     // Write back to file
