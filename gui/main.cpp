@@ -124,6 +124,7 @@ struct {
     std::string serialPortName;
     int serialWriteWaitMs;
     int powerProfile;
+    bool showMotorRPM;
 } settings;
 
 struct {
@@ -451,6 +452,7 @@ int main(int, char**)
     settings.LIMIT_FRAMERATE    = tbl["settings"]["limit_framerate"].value_or(0);
     settings.serialWriteWaitMs  = tbl["settings"]["serialWriteWaitMs"].value_or(50);
     settings.powerProfile       = tbl["settings"]["powerProfile"].value_or(POWER_PROFILE::BALANCED);
+    settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
 
     // strings
     if (auto val = tbl.at_path("settings.serialPortName").value<std::string>()) {
@@ -743,7 +745,7 @@ int main(int, char**)
 
                             ImGui::Dummy(ImVec2(0.0, 40.0));
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.75);
-                                ImGui::TextColored(esp32.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 1.0),"REGEN");
+                                ImGui::TextColored(esp32.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
                             ImGui::PopFont();
                             if (ImGui::IsItemClicked())
                                 to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
@@ -838,7 +840,9 @@ int main(int, char**)
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
                                 // ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
-                                ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
+                                if (settings.showMotorRPM)
+                                    ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
+
                             ImGui::PopFont();
                         ImGui::EndGroup();
 
@@ -924,6 +928,11 @@ int main(int, char**)
                             if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
                                 settings.TARGET_FPS = std::stof(items[item_current]);
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
+                            }
+
+
+                            if (ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorRPM", settings.showMotorRPM);
                             }
 
                             ImGui::Dummy(ImVec2(0, 20));
