@@ -368,7 +368,7 @@ int main(int, char**)
     float RPM_PER_KMH = 90.04;
 
     mcconf_legal.l_current_min_scale = 1.0;
-    mcconf_legal.l_current_max_scale = 0.15;
+    mcconf_legal.l_current_max_scale = 0.2;
     mcconf_legal.l_min_erpm = -(500*3);
     mcconf_legal.l_max_erpm = ((RPM_PER_KMH * 26) * 3); // 25km/h
     mcconf_legal.l_min_duty = 0.005;
@@ -394,7 +394,7 @@ int main(int, char**)
     mcconf_eco.id = POWER_PROFILE::ECO;
 
     mcconf_balanced.l_current_min_scale = 1.0;
-    mcconf_balanced.l_current_max_scale = 0.4;
+    mcconf_balanced.l_current_max_scale = 0.6;
     mcconf_balanced.l_min_erpm = -(500*3);
     mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 41) * 3); // 40km/h
     mcconf_balanced.l_min_duty = 0.005;
