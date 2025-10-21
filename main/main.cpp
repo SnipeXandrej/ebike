@@ -1,9 +1,7 @@
 #include <stdio.h>
 #include <iostream>
-#include <chrono>
 #include <mutex>
 #include <print>
-#include <utility>
 
 // Arduino Libraries
 #include "Arduino.h"
@@ -16,12 +14,8 @@
 #include <VescUart.h>
 #include <TFT_eSPI.h>
 
-#include "esp32-hal-dac.h"
-#include "esp32-hal-ledc.h"
-#include "hal/dac_types.h"
 #include "driver/adc.h"
 #include "driver/ledc.h"
-#include "esp_adc_cal.h"
 
 #include "inputOffset.h"
 #include "fastGPIO.h"
@@ -31,7 +25,7 @@
 #include "map.cpp"
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.0"
+#define EBIKE_VERSION "0.0.0"
 
 class Display {
 private:
@@ -208,10 +202,6 @@ const int daysInOctober = 31;
 const int daysInNovember = 30;
 const int daysInDecember = 31;
 
-// settings for gearing and power
-int selectedGear, DNU_selectedGear;
-int selectedPowerMode, DNU_selectedPowerMode;
-
 float PotThrottleAdjustment;
 float PotThrottleLevelReal;
 
@@ -236,15 +226,12 @@ struct {
     MovingAverage brakingCurrent;
 } movingAverages;
 
-ThrottleMap throttle;
-
-Display display;
-
-Preferences preferences;
-
-TFT_eSPI tft = TFT_eSPI();
-Adafruit_ADS1115 dedicatedADC;
-VescUart VESC;
+ThrottleMap         throttle;
+Display             display;
+Preferences         preferences;
+TFT_eSPI            tft = TFT_eSPI();
+Adafruit_ADS1115    dedicatedADC;
+VescUart            VESC;
 
 double kP = 1, kI = 0.02, kD = 0.5; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
@@ -253,10 +240,10 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
 #define pinPotThrottle    ADC1_CHANNEL_3    // D39 // VN
 #define pinTFTbacklight   2                 // D2
-#define pinButton1  -1  // D4
-#define pinButton2  -1 // RX2
-#define pinButton3  -1 // TX2
-#define pinButton4  -1 // D21 // Temporarily set to D26 for I2C
+#define pinButton1  -1
+#define pinButton2  -1
+#define pinButton3  -1
+#define pinButton4  -1
 #define pinAdcRdyAlert 33 // D33
 #define pinPowerSwitch 27 // D27
 #define pinBrake       13 // D13
@@ -475,76 +462,6 @@ void getBatteryCurrent() {
     time_getBatteryCurrent = timer_u32();
 }
 
-int PowerLevelnegative1Watts = 1000000;
-int PowerLevel0Watts = 100;
-int PowerLevel1Watts = 250;
-int PowerLevel2Watts = 500;
-int PowerLevel3Watts = 1000;
-
-void setPowerLevel(int level) {
-    if (level == -1) {
-        // powerLimiterPID.setSetpoint(PowerLevelnegative1Watts);
-        selectedPowerMode = -1;
-    }
-
-    if (level == 0) {
-        // powerLimiterPID.setSetpoint(PowerLevel0Watts);
-        selectedPowerMode = 0;
-    }
-
-    if (level == 1) {
-        // powerLimiterPID.setSetpoint(PowerLevel1Watts);
-        selectedPowerMode = 1;
-    }
-
-    if (level == 2) {
-        // powerLimiterPID.setSetpoint(PowerLevel2Watts);
-        selectedPowerMode = 2;
-    }
-
-    if (level == 3) {
-        // powerLimiterPID.setSetpoint(PowerLevel3Watts);
-        selectedPowerMode = 3;
-    }
-}
-
-// rotor electromagnet DC resistance is around 3,05 ohms
-int GearLevel0DutyCycle = 0; // 0W
-int GearLevel1DutyCycle = 255; // ~180W  // 225
-int GearLevel2DutyCycle = 255; // ~100W //180
-int GearLevel3DutyCycle = 110; // ~50W //110
-int GearLevelTrackSpeedDutyCycle = 70; // There is some power so the VESC can track the speed
-int GearLevelIdleLittleCurrentDutyCycle = 20; //10 // There is some power so the VESC can track the speed
-int GearDutyCycle;
-
-void setGearLevel(int level) {
-    if (level == 0) {
-        selectedGear = 0;
-        GearDutyCycle = GearLevel0DutyCycle;
-        // gearCurrent = gear1;
-    }
-
-    if (level == 1) {
-        selectedGear = 1;
-        GearDutyCycle = GearLevel1DutyCycle;
-        gearCurrent = gear1;
-    }
-
-    if (level == 2) {
-        selectedGear = 2;
-        GearDutyCycle = GearLevel2DutyCycle;
-        gearCurrent = gear2;
-    }
-
-    if (level == 3) {
-        selectedGear = 3;
-        GearDutyCycle = GearLevel3DutyCycle;
-        gearCurrent = gear3;
-    }
-
-    setDuty(LEDC_CHANNEL_0, GearDutyCycle);
-}
-
 int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetweenInterrupts) {
     int ret = 1;
     if (timer_delta_ms(timer_u32() - *timeKeeper) >= msToWaitBetweenInterrupts) {
@@ -582,40 +499,14 @@ void IRAM_ATTR button1Callback() { // Switch Gears
     if (buttonWait(&buttonPressCount[0], &timeButton[0], buttonsDebounceMs) == 1) {
         return;
     }
-
-    switch(selectedGear) {
-        case 3:
-            setGearLevel(2);
-            break;
-        case 2:
-            setGearLevel(1);
-            break;
-        case 1:
-            setGearLevel(0);
-            break;
-        default:
-            break;
-    }
+    // nothing right now
 }
 
 void IRAM_ATTR button2Callback() { // Switch Gears
     if (buttonWait(&buttonPressCount[1], &timeButton[1], buttonsDebounceMs) == 1) {
         return;
     }
-
-    switch(selectedGear) {
-        case 0:
-            setGearLevel(1);
-            break;
-        case 1:
-            setGearLevel(2);
-            break;
-        case 2:
-            setGearLevel(3);
-            break;
-        default:
-            break;
-    }
+    // nothing right now
 }
 
 void IRAM_ATTR button3Callback() {
@@ -826,17 +717,6 @@ void printDisplay() {
     // if (firsttime_draw) {
     //     tft.println("km/h");
     // }
-
-    // Gear // Power Level
-    if (firsttime_draw || (DNU_selectedGear != selectedGear) || (DNU_selectedPowerMode != selectedPowerMode)) {
-        DNU_selectedGear = selectedGear;
-        DNU_selectedPowerMode = selectedPowerMode;
-
-        // tft.setTextColor(ST77XX_BLACK, ST77XX_WHITE);
-        tft.setCursor(125, 147); tft.printf("Gear:  %d", gearCurrent.level);
-        tft.setCursor(125, 166); tft.printf("Power: %d", selectedPowerMode);
-        // tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-    }
 
     // Uptime
     tft.setTextSize(1);
@@ -1232,8 +1112,6 @@ void app_main(void)
 
     powerLimiterPID.setOutputLimits(-100, 0);
     // powerLimiterPID.setSetpoint(50); // max power watts
-    setPowerLevel(-1);
-    setGearLevel(2);
 
     // setup ebike namespace
     preferences.begin("ebike", false);
@@ -1310,7 +1188,7 @@ void app_main(void)
                         commAddValue(&toSend, trip.distance, 2);
                         commAddValue(&toSend, gearCurrent.level, 0);
                         commAddValue(&toSend, gearCurrent.maxCurrent, 0);
-                        commAddValue(&toSend, selectedPowerMode, 0);
+                        commAddValue(&toSend, -1, 0); // was selectedPowerMode
                         commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
                         commAddValue(&toSend, wh_over_km_average, 1);
                         commAddValue(&toSend, estimatedRange.WhPerKm, 1);
