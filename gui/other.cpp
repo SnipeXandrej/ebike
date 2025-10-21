@@ -396,4 +396,5 @@ void StyleColorsDarkBreeze(ImGuiStyle* dst) {
     style->ScrollbarRounding = 5.0f;
     style->TabRounding       = 4.0f;
     style->ScrollbarSize     = 70.0f;
+    style->TouchExtraPadding = ImVec2(5.0, 5.0);
 }
