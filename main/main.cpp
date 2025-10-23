@@ -122,7 +122,7 @@ struct {
     float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
-    bool charging = 1;
+    bool charging = false;
 
     float wattHoursRated;
     float nominalVoltage;
@@ -171,6 +171,7 @@ uint32_t timeExecEverySecondCore1 = 0;
 uint32_t timeExecEvery100millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 uint32_t timeAmphoursMinVoltage = 0;
+uint32_t timeWaitBeforeChangingToCharging = 0;
 unsigned long timeSavePreferencesStart = millis();
 
 // uptime
@@ -800,6 +801,17 @@ void loop_core1 (void* pvParameters) {
             BRAKING = true;
         } else {
             BRAKING = false;
+        }
+
+        // automatically change the battery.charging status to true if its false & we aint braking & the current is less than 0 (meaning it's charging)
+        // we don't have dedicated sensing pin for the charger being connected, yet...
+        // after that wait one second, just to make sure it's not a fluke, so it doesnt just randomly put it in charging mode because of a small anomaly...
+        if (!battery.charging && !BRAKING && battery.current < 0.0) {
+            if (timer_delta_ms(timer_u32() - timeWaitBeforeChangingToCharging) >= 1000) {
+                battery.charging = true;
+            }
+        } else {
+            timeWaitBeforeChangingToCharging = timer_u32();
         }
 
         // Battery charge tracking stuff
