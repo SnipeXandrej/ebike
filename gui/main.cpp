@@ -986,8 +986,8 @@ int main(int, char**)
                             ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("Core 0 loop exec time: %0.2f us", esp32.timeCore0_us);
-                            ImGui::Text("Core 1 loop exec time: %0.2f us", esp32.timeCore1_us);
+                            ImGui::Text("Core 0 loop exec time: %0.0f us", esp32.timeCore0_us);
+                            ImGui::Text("Core 1 loop exec time: %0.0f us", esp32.timeCore1_us);
 
                             ImGui::Dummy(ImVec2(0, 20));
 

@@ -1011,8 +1011,8 @@ void app_main(void)
                         commAddValue(&toSend, estimatedRange.range, 1);
                         commAddValue(&toSend, VESC.data.tempMotor, 1);
                         commAddValue(&toSend, totalSecondsSinceBoot, 0);
-                        commAddValue(&toSend, timer_delta_us(timeCore0), 1);
-                        commAddValue(&toSend, timer_delta_us(timeCore1), 1);
+                        commAddValue(&toSend, timer_delta_us(timeCore0), 0);
+                        commAddValue(&toSend, timer_delta_us(timeCore1), 0);
                         commAddValue(&toSend, acceleration, 1);
                         commAddValue(&toSend, POWER_ON, 0);
                         commAddValue(&toSend, settings.regenerativeBraking, 0);
