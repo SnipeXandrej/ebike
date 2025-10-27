@@ -27,6 +27,9 @@
 #include "MiniPID.h"
 #include "map.cpp"
 
+#define COLOR_WHITE SH110X_WHITE
+#define COLOR_BLACK SH110X_BLACK
+
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
 
@@ -164,6 +167,8 @@ float motor_rpm = 0;
 
 bool BRAKING = 0;
 
+std::string toSendExtra;
+
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
 uint32_t timeStartCore0 = 0, timeCore0 = 0;    
 uint32_t timeStartDisplay = 0; //timeDisplay = 0;
@@ -239,6 +244,30 @@ Display             display;
 Preferences         preferences;
 Adafruit_ADS1115    dedicatedADC;
 VescUart            VESC;
+
+class PreferencesActions {
+public:
+    void saveOdometer() {
+        preferences.putFloat("odometer", (float)odometer.distance);
+    }
+
+    void saveBattery() {
+        preferences.putFloat("batAhUsed", battery.ampHoursUsed);
+        preferences.putFloat("batAhFulDis", battery.ampHoursRated);
+        preferences.putFloat("batAhUsedLife", battery.ampHoursUsedLifetime);
+    }
+
+    void saveOther() {
+        preferences.putBool("regenBrake", settings.regenerativeBraking);
+    }
+
+    void saveAll() {
+        saveOdometer();
+        saveBattery();
+        saveOther();
+    }
+};
+PreferencesActions preferenceActions;
 
 double kP = 1, kI = 0.02, kD = 0.5; //kP = 0.1, 0.3 is unstable
 MiniPID powerLimiterPID(kP, kI, kD);
@@ -338,16 +367,6 @@ void estimatedRangeReset() {
 void tripReset() {
     trip.distance = 0;
     trip.wattHoursUsed = 0;
-}
-
-void preferencesSaveOdometer() {
-    preferences.putFloat("odometer", (float)odometer.distance);
-}
-
-void preferencesSaveBattery() {
-    preferences.putFloat("batAhUsed", battery.ampHoursUsed);
-    preferences.putFloat("batAhFulDis", battery.ampHoursRated);
-    preferences.putFloat("batAhUsedLife", battery.ampHoursUsedLifetime);
 }
 
 float maxCurrentAtERPM(int erpm) {
@@ -665,17 +684,15 @@ VerticalBar barAp;
 VerticalBar barW;
 
 void drawLightningBolt(int x, int y) {
-    tft.drawLine(x,   y,   x+3, y+3, SH110X_WHITE);
-    tft.drawLine(x+1, y+4, x+2, y+4, SH110X_WHITE);
-    tft.drawLine(x,   y+5, x+4, y+9, SH110X_WHITE);
+    tft.drawLine(x,   y,   x+3, y+3, COLOR_WHITE);
+    tft.drawLine(x+1, y+4, x+2, y+4, COLOR_WHITE);
+    tft.drawLine(x,   y+5, x+4, y+9, COLOR_WHITE);
 
-    tft.drawLine(x+3, y+9, x+1, y+9, SH110X_WHITE);
-    tft.drawLine(x+4, y+8, x+4, y+6, SH110X_WHITE);
+    tft.drawLine(x+3, y+9, x+1, y+9, COLOR_WHITE);
+    tft.drawLine(x+4, y+8, x+4, y+6, COLOR_WHITE);
 }
 
 void printDisplay() {
-    int COLOR_WHITE = SH110X_WHITE;
-    int COLOR_BLACK = SH110X_BLACK;
     tft.clearDisplay();
 
     tft.setCursor(0, 0); tft.printf ("V: %4.1f ", battery.voltage);
@@ -1085,6 +1102,7 @@ void app_main(void)
     battery.ampHoursUsed    = preferences.getFloat("batAhUsed", -1);
     battery.ampHoursRated   = preferences.getFloat("batAhFulDis", -1);
     battery.ampHoursUsedLifetime = preferences.getFloat("batAhUsedLife", 0);
+    settings.regenerativeBraking = preferences.getBool("regenBrake", 0);
 
     estimatedRangeReset();
     odometer.distance_tmp = odometer.distance;
@@ -1174,8 +1192,7 @@ void app_main(void)
                         break;
 
                     case COMMAND_ID::SAVE_PREFERENCES:
-                        preferencesSaveBattery();
-                        preferencesSaveOdometer();
+                        preferenceActions.saveAll();
                         toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         break;
                         
@@ -1335,14 +1352,19 @@ void app_main(void)
         if (timeSavePreferencesElapsed >= (10 * 60 * 1000)) { //10 minutes
             timeSavePreferencesStart = millis();
 
-            preferencesSaveBattery();
+            preferenceActions.saveBattery();
+            preferenceActions.saveOther();
 
             if (odometer.distance_tmp != odometer.distance) {
                 odometer.distance_tmp = odometer.distance;
 
-                preferencesSaveOdometer();
+                preferenceActions.saveOdometer();
             }
-            Serial.printf("Preferences Saved\n");
+            toSendExtra.append(std::format("{};Preferences saved;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+        }
+
+        if (strlen(toSendExtra.c_str()) > 0) {
+            Serial.printf(toSendExtra.c_str());
         }
         
         timeCore0 = (timer_u32() - timeStartCore0);
