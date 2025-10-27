@@ -2,6 +2,7 @@
 #include <iostream>
 #include <mutex>
 #include <print>
+#include <sstream>
 
 // Arduino Libraries
 #include "Arduino.h"
@@ -13,6 +14,8 @@
 #include <Adafruit_ADS1X15.h>
 #include <VescUart.h>
 #include <TFT_eSPI.h>
+#include <Adafruit_SH110X.h>
+#include "Adafruit_GFX.h"
 
 #include "driver/adc.h"
 #include "driver/ledc.h"
@@ -90,7 +93,6 @@ struct {
     double tachometer_abs_diff;
     double distance; // in km
     double distanceDiff;
-    double DNU_refresh;
     double wattHoursUsed;
 } trip;
 
@@ -98,7 +100,6 @@ struct {
     double trip_distance;    // in km
     double distance;         // in km
     double distance_tmp;
-    double DNU_refresh;
 } odometer;
 
 struct {
@@ -176,7 +177,7 @@ unsigned long timeSavePreferencesStart = millis();
 
 // uptime
 float totalSecondsSinceBoot;
-int clockSecondsSinceBoot, DNU_clockSecondsSinceBoot;
+int clockSecondsSinceBoot;
 int clockMinutesSinceBoot;
 int clockHoursSinceBoot;
 int clockDaysSinceBoot;
@@ -189,7 +190,7 @@ int clockMonth = 4;
 int clockDay = 24;
 int clockHours = 15;
 int clockMinutes = 10;
-float clockSeconds = 15, DNU_clockSeconds;
+float clockSeconds = 15;
 const int daysInJanuary = 31;
 const int daysInFebruary = 28;
 const int daysInMarch = 31;
@@ -227,10 +228,15 @@ struct {
     MovingAverage brakingCurrent;
 } movingAverages;
 
+#define SCREEN_WIDTH   128
+#define SCREEN_HEIGHT  64
+#define OLED_RESET     -1
+#define SCREEN_ADDRESS 0x3c
+Adafruit_SH1106G tft = Adafruit_SH1106G(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire1, OLED_RESET);
+
 ThrottleMap         throttle;
 Display             display;
 Preferences         preferences;
-TFT_eSPI            tft = TFT_eSPI();
 Adafruit_ADS1115    dedicatedADC;
 VescUart            VESC;
 
@@ -240,7 +246,6 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinRotor          25                // D25
 #define pinBatteryVoltage ADC1_CHANNEL_0    // D36
 #define pinPotThrottle    ADC1_CHANNEL_3    // D39 // VN
-#define pinTFTbacklight   2                 // D2
 #define pinButton1  -1
 #define pinButton2  -1
 #define pinButton3  -1
@@ -659,112 +664,61 @@ public:
 VerticalBar barAp;
 VerticalBar barW;
 
-void redrawScreen() {
-    tft.fillScreen(TFT_WHITE);
-    firsttime_draw = 1;
+void drawLightningBolt(int x, int y) {
+    tft.drawLine(x,   y,   x+3, y+3, SH110X_WHITE);
+    tft.drawLine(x+1, y+4, x+2, y+4, SH110X_WHITE);
+    tft.drawLine(x,   y+5, x+4, y+9, SH110X_WHITE);
+
+    tft.drawLine(x+3, y+9, x+1, y+9, SH110X_WHITE);
+    tft.drawLine(x+4, y+8, x+4, y+6, SH110X_WHITE);
 }
 
 void printDisplay() {
-    // TODO: only update the variables, not the whole text, as it takes longer to draw
+    int COLOR_WHITE = SH110X_WHITE;
+    int COLOR_BLACK = SH110X_BLACK;
+    tft.clearDisplay();
 
-    // TODO: Disable clock until time synchronization is implemented
-    // // Clock
-    // tft.setTextSize(2);
-    // if (firsttime_draw || ((int)DNU_clockSeconds != (int)clockSeconds)) {
-    //     DNU_clockSeconds = clockSeconds;
-    //     tft.setCursor(3, 3); tft.printf("%02d:%02d:%02.0f", clockHours, clockMinutes, clockSeconds);
-    //     tft.setTextSize(1);
-    //     tft.setCursor(100, 10); tft.printf("%1d.%1d.%4d  ", clockDay, clockMonth, clockYear);
-    // } 
-    tft.setTextSize(2);
+    tft.setCursor(0, 0); tft.printf ("V: %4.1f ", battery.voltage);
+    tft.setCursor(0, 0+9); tft.printf ("R:%3.0f ", estimatedRange.range);
+    tft.setCursor(0, 0+18); tft.printf ("U:%3.0f ", wh_over_km_average);
 
-    // Battery
-    tft.setCursor(236, 3); tft.printf("%6.1f%%", battery.percentage);
-    // Battery with amphours used
-    // tft.setCursor(150, 3); tft.printf("%5.3fAh %4.1f%%", battery.ampHoursUsed, battery.percentage); //batteryAmpHours
+    tft.setCursor(SCREEN_WIDTH - (6*5), 0); tft.printf ("%4.0f%%", battery.percentage);
 
-    // Upper Divider
-    if (firsttime_draw) {
-        tft.drawLine(0, 20, 320, 20, TFT_BLACK);
-    }
-
-    // Power Draw // Battery Voltage // Battery Amps draw
-    tft.setCursor(3, 28); tft.printf ("W:%6.1f  ", batteryWattsMovingAverage.moveAverage(battery.watts));
-    tft.setCursor(3, 47); tft.printf ("V:  %4.1f ", battery.voltage);
-    tft.setCursor(3, 66); tft.printf ("A:  %6.3f ", batteryAuxMovingAverage.moveAverage(battery.current));
-    tft.setCursor(3, 85); tft.printf ("Ah: %6.3f ", battery.ampHoursUsed);
-    tft.setCursor(3, 104); tft.printf("T: %3.0f C ", VESC.data.tempMotor);
-    // tft.setCursor(3, 104); tft.printf("R: %3.1fkm ", estimatedRange.range);
-    // tft.setCursor(3, 85); tft.printf("vA: %6.3f vAp: %5.1f  ", VESC.data.avgInputCurrent, VESC.data.avgMotorCurrent); //vescCurrent, vescAmpHours
-    // tft.setCursor(3, 85); tft.printf("vA: %6.3f ", VESC.data.avgInputCurrent); //vescCurrent, vescAmpHours
-    // tft.setCursor(3, 104); tft.printf("vAh: %5.3f", VESC.data.ampHours);
-    tft.setCursor(3, 123); tft.printf("Pot:%3.0f%%", PotThrottleLevelReal);
-    // tft.setCursor(3, 142); tft.printf("Dut:%3.0f%%", VESC.data.dutyCycleNow);
-
-    // tft.setCursor(3, 104); tft.printf("A: %6.3f  Ah: %5.4f  ", auxCurrent, auxAmpHours);
-    // tft.setCursor(3, 85); tft.printf("A: %6.3f  ", vescCurrent);
-    // tft.setCursor(3, 142); tft.printf("Pl: %3.0f%% ", PotThrottleLevelPowerLimited);
-    // tft.setCursor(3, 124); tft.printf("Pot:%5.2f", potThrottle_voltage);
-
-    // consumption over last 1km
-    tft.setCursor(207-20, 28); tft.printf("%5.1f Wh/km", WhOverKmMovingAverage.moveAverage(wh_over_km));
-    tft.setCursor(207-20, 28+19); tft.printf("%5.1f Wh/km", wh_over_km_average);
-    tft.setCursor(207-20, 28+19+19); tft.printf("%5.1f km", estimatedRange.range);
+    if (battery.charging)
+        drawLightningBolt(SCREEN_WIDTH - 10, 10);
 
     // Speed
-    tft.setTextSize(5);
-    tft.setCursor(100, 106); tft.printf("%4.1f", speed_kmh);
-    tft.setCursor(248, 127); tft.setTextSize(2);
-    // if (firsttime_draw) {
-    //     tft.println("km/h");
-    // }
-
-    // Uptime
+    static int SPEED_HEIGHT = 18;
+    int digitsSpace = speed_kmh < 10 ? 5 : 11;
+    tft.setTextSize(3);
+    tft.setCursor((SCREEN_WIDTH / 2) - (digitsSpace / 2), SPEED_HEIGHT); tft.printf("%1.0f", speed_kmh);
     tft.setTextSize(1);
-    if (settings.drawUptime && (firsttime_draw || DNU_clockSecondsSinceBoot != clockSecondsSinceBoot))  {
-        DNU_clockSecondsSinceBoot = clockSecondsSinceBoot;
-        tft.setCursor(3, 205);
-        tft.printf("Uptime: %2dd %2dh %2dm %2ds\n", clockDaysSinceBoot, clockHoursSinceBoot, clockMinutesSinceBoot, clockSecondsSinceBoot);
-    }
 
-    if (firsttime_draw) {
-        // Bottom Divider
-        tft.drawLine(0, 215, 320, 215, TFT_BLACK);
-    }
+    // Power profile
+    int len = strlen(VESC.data_mcconf.name.c_str());
+    tft.setCursor(SCREEN_WIDTH / 2 - ((len*5)/2), SPEED_HEIGHT + 24); tft.printf("%s", VESC.data_mcconf.name.c_str());
 
-    // Odometer
-    if (firsttime_draw || odometer.DNU_refresh != odometer.distance) {
-        odometer.DNU_refresh = odometer.distance;
-        tft.setTextSize(2);
-        tft.setCursor(3, 220);
-        tft.printf("O: %.0f", odometer.distance);
-    }
+    // Bottom Divider
+    static int BOTTOM_DIVIDER_Y = 55;
+    tft.drawLine(0, BOTTOM_DIVIDER_Y, SCREEN_WIDTH, BOTTOM_DIVIDER_Y, COLOR_WHITE);
 
-    // Trip
-    if (firsttime_draw || trip.DNU_refresh != trip.distance) {
-        trip.DNU_refresh = trip.distance;
-        tft.setTextSize(2);
-        tft.setCursor(220, 220);
-        tft.printf("T: %.2f", trip.distance);
-    }
+    // Odometer text
+    tft.setCursor(0, BOTTOM_DIVIDER_Y-9);
+    tft.printf("odo");
 
-    if (settings.drawDebug) {
-        tft.setTextSize(1);
-        sprintf(text, "\nExecution time:"
-                        "\n core0: %.1f us   "
-                        "\n core1: %.1f us   \n",
-                        timer_delta_us(timeCore0), timer_delta_us(timeCore1));
-        tft.setCursor(160, 150);
-        tft.println(text);
-    }
+    // Odometer distance
+    tft.setCursor(0, BOTTOM_DIVIDER_Y+2);
+    tft.printf("%.0f", odometer.distance);
 
-    barAp.drawVerticalBar(280, 104, 30, 92, VESC.data.avgMotorCurrent, 0, gear1.maxCurrent, "Ap", true);
-    barW.drawVerticalBar(240, 104, 30, 92, VESC.data.dutyCycleNow, 0.0, 1.0, "D", false);
-    // barW.drawVerticalBar(240, 104, 30, 92, battery.watts, 0, 5000, "W");
+    // Trip text
+    tft.setCursor(SCREEN_WIDTH-24, BOTTOM_DIVIDER_Y-9);
+    tft.printf("trip");
 
-    if (firsttime_draw) {
-        firsttime_draw = settings.disableOptimizedDrawing; // should be 0
-    }
+    // Trip distance
+    tft.setCursor(SCREEN_WIDTH-30, BOTTOM_DIVIDER_Y+2);
+    tft.printf("%5.1f", trip.distance);
+
+    tft.display();
 }
 
 // runs on core 1
@@ -920,10 +874,15 @@ void loop_core1 (void* pvParameters) {
         } else {
             wh_over_km = battery.watts / speed_kmh;
         }
-        wh_over_km_average = trip.wattHoursUsed / trip.distance;
 
+        // wh_over_km_average
+        double tmp = trip.wattHoursUsed / trip.distance;
+        tmp != tmp ? wh_over_km_average = -1 : wh_over_km_average = tmp;
+
+        // estimatedRange.range
         estimatedRange.WhPerKm = estimatedRange.wattHoursUsed / estimatedRange.distance;
-        estimatedRange.range = (battery.wattHoursRated - battery.wattHoursUsed) / estimatedRange.WhPerKm;
+        tmp = (battery.wattHoursRated - battery.wattHoursUsed) / estimatedRange.WhPerKm;
+        tmp != tmp ? estimatedRange.range = -1 : estimatedRange.range = tmp;
 
         // Execute every second that elapsed
         if (timer_delta_ms(timer_u32() - timeExecEverySecondCore1) >= 1000) {
@@ -1056,17 +1015,14 @@ void app_main(void)
     attachInterrupt(pinAdcRdyAlert, ADCNewDataReadyISR, FALLING);
     dedicatedADC.startADCReading(ADS1X15_REG_CONFIG_MUX_DIFF_2_3, /*continuous=*/true);
 
-    // tftVSPI.begin(18, 19, 23, TFT_RST);
 
-    tft.init(); // Init ST7789 320x240
-    tft.setRotation(1); // 270 degrees rotation
-    // SPI speed defaults to SPI_DEFAULT_FREQ defined in the library, you can override it here
-    // Note that speed allowable depends on chip and quality of wiring, if you go too fast, you
-    // may end up with a black screen some times, or all the time.
-    tft.setSwapBytes(true);
-    tft.fillScreen(TFT_WHITE);
-    tft.setTextColor(TFT_BLACK, TFT_WHITE);
-    tft.setCursor(0, 0);
+    Wire1.begin(25, 26);
+    Wire1.setClock(400000);
+    if(!tft.begin(SCREEN_ADDRESS, true)) {
+        Serial.println(F("SH1106 allocation failed"));
+    }
+    tft.clearDisplay();
+    tft.setTextColor(SH110X_WHITE, SH110X_BLACK);
 
     // Configure ADC width (resolution)
     adc1_config_width(ADC_WIDTH);
@@ -1083,10 +1039,6 @@ void app_main(void)
     attachInterrupt(pinButton2, button2Callback, GPIO_INTR_POSEDGE);
     attachInterrupt(pinButton3, button3Callback, GPIO_INTR_POSEDGE);
     attachInterrupt(pinButton4, button4Callback, GPIO_INTR_POSEDGE);
-
-    // configure backlight of the TFT
-    pinMode(     pinTFTbacklight, OUTPUT);
-    digitalWrite(pinTFTbacklight, LOW); // Turn off backlight
 
     // Power Switch
     pinMode(pinPowerSwitch, INPUT_PULLDOWN);
@@ -1347,11 +1299,16 @@ void app_main(void)
         // function for counting the current time and date
         clock_date_and_time();
 
-        if (!display.isExternalDisplayConnected() && POWER_ON) {
-            digitalWrite(pinTFTbacklight, HIGH); // Turn on backlight
+        static bool displayPreviousOnState = true;
+
+        if (!display.isExternalDisplayConnected()) { //  && POWER_ON
             printDisplay();
-        } else {
-            digitalWrite(pinTFTbacklight, LOW); // Turn off backlight
+            displayPreviousOnState = true;
+        } else if (displayPreviousOnState == true) {
+            displayPreviousOnState = false;
+
+            tft.clearDisplay();
+            tft.display();
         }
 
         // Execute every second that elapsed
