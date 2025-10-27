@@ -31,32 +31,9 @@
 #include "serial.hpp"
 #include "other.hpp"
 #include "cpuUsage.hpp"
+#include "../comm.h"
 
 float MAX_WATTAGE = 7500.0;
-
-enum COMMAND_ID {
-    GET_BATTERY = 0,
-    ARE_YOU_ALIVE = 1,
-    GET_STATS = 2,
-    RESET_ESTIMATED_RANGE = 3,
-    RESET_TRIP = 4,
-    READY_FOR_MESSAGE = 5,
-    SET_ODOMETER = 6,
-    SAVE_PREFERENCES = 7,
-    READY_TO_WRITE = 8,
-    GET_FW = 9,
-    PING = 10,
-    TOGGLE_FRONT_LIGHT = 11,
-    ESP32_SERIAL_LENGTH = 12,
-    SET_AMPHOURS_USED_LIFETIME = 13,
-    GET_VESC_MCCONF = 14,
-    SET_VESC_MCCONF = 15,
-    SET_AMPHOURS_CHARGED = 16,
-    ESP32_LOG = 17,
-    TOGGLE_CHARGING_STATE = 18,
-    TOGGLE_REGEN_BRAKING = 19,
-    ESP32_RESTART = 20
-};
 
 enum POWER_PROFILE {
     LEGAL = 0,
