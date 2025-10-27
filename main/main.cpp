@@ -53,7 +53,6 @@ public:
 };
 
 struct {
-    bool automaticGearChanging = 1;
     bool drawDebug = 0;
     bool drawUptime = 1;
     bool printCoreExecutionTime = 0;
@@ -107,11 +106,6 @@ struct {
     float wattHoursRated;
     float nominalVoltage;
 } battery;
-
-struct {
-    int level;
-    int maxCurrent;
-} gear1, gear2, gear3, gearCurrent;
 
 struct {
     float range;
@@ -184,8 +178,8 @@ const int daysInSeptember = 30;
 const int daysInOctober = 31;
 const int daysInNovember = 30;
 const int daysInDecember = 31;
+int daysInCurrentMonth = 0;
 
-float PotThrottleAdjustment;
 float PotThrottleLevelReal;
 
 char text[128];
@@ -325,6 +319,17 @@ std::string getValueFromPacket_string(std::vector<std::string> token, int index)
     return "-1";
 }
 
+bool POWER_ON = false;
+void powerSwitchCallback() {
+    if (digitalRead(pinPowerSwitch)) {
+        POWER_ON = true;
+        // setCpuFrequencyMhz(240);
+    } else {
+        POWER_ON = false;
+        // setCpuFrequencyMhz(80);
+    }
+}
+
 int setDuty_previousDuty;
 void setDuty(ledc_channel_t channel, int duty) {
     if (setDuty_previousDuty != duty) { // set the new dutyCycle only if the value is different from the previous one
@@ -345,44 +350,6 @@ void tripReset() {
     trip.wattHoursUsed = 0;
 }
 
-float maxCurrentAtERPM(int erpm) {
-    // 288 ERPM per km/h
-    // 48 RPM per km/h
-    float ERPM_current1 = 1500.0f; // ((1500/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.21 km/h
-    float ERPM_current2 = 1700.0f; // ((1700/6)/5.7) * 63 * 3.14 * 60 / 100000 = 5.9  km/h
-    float ERPM_current3 = 8644.0f; // ((8644/6)/5.7) * 63 * 3.14 * 60 / 100000 = 30km/h
-
-    if (erpm <= ERPM_current1) {
-        return 100.0f;
-    }
-
-    if (erpm <= ERPM_current2) {
-        // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
-        float slope = (gear1.maxCurrent - 120.0f) / (ERPM_current2 - ERPM_current1);
-        return 100.0f + slope * (erpm - ERPM_current1);
-    }
-
-    if (erpm <= ERPM_current3) {
-        return gear1.maxCurrent;
-    }
-
-    if (erpm > ERPM_current3) {
-        return 145.0f;
-    }
-
-    return 0.0;
-
-    // if (erpm <= ERPM_current1) {
-    //     return 120.0f;
-    // } else if (erpm <= ERPM_current2) {
-    //     // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
-    //     float slope = (gear1.maxCurrent - 120.0f) / (ERPM_current2 - ERPM_current1);
-    //     return 120 + slope * (erpm - ERPM_current1);
-    // } else {
-    //     return gear1.maxCurrent;
-    // }
-}
-
 float clampValue(float input, float clampTo) {
     float output = 0.0;
 
@@ -397,32 +364,6 @@ float clampValue(float input, float clampTo) {
     return output;
 }
 
-void setVescThrottleBrake(float inputThrottle) {
-    if (inputThrottle < 40) {
-        float current = map_f_nochecks(inputThrottle, 0, 40, 100, 0);
-        VESC.setBrakeCurrent(current);
-    }
-
-    if (inputThrottle >= 40) {
-        VESC.setCurrent(map_f(inputThrottle, 40, 100, 0, maxCurrentAtERPM(VESC.data.rpm))); //PotThrottleLevelPowerLimited
-    }
-}
-
-void printVescMcConfTempValues() {
-    if (VESC.getMcconfTempValues()) {
-        Serial.printf("l_current_min_scale: %f\n", VESC.data_mcconf.l_current_min_scale);
-        Serial.printf("l_current_max_scale: %f\n", VESC.data_mcconf.l_current_max_scale);
-        Serial.printf("l_min_erpm: %f\n", VESC.data_mcconf.l_min_erpm);
-        Serial.printf("l_max_erpm: %f\n", VESC.data_mcconf.l_max_erpm);
-        Serial.printf("l_min_duty: %f\n", VESC.data_mcconf.l_min_duty);
-        Serial.printf("l_max_duty: %f\n", VESC.data_mcconf.l_max_duty);
-        Serial.printf("l_watt_min: %f\n", VESC.data_mcconf.l_watt_min);
-        Serial.printf("l_watt_max: %f\n", VESC.data_mcconf.l_watt_max);
-        Serial.printf("l_in_current_min: %f\n", VESC.data_mcconf.l_in_current_min);
-        Serial.printf("l_in_current_max: %f\n", VESC.data_mcconf.l_in_current_max);
-    }
-}
-
 volatile bool getBatteryCurrent_newData = false;
 void IRAM_ATTR ADCNewDataReadyISR() {
   getBatteryCurrent_newData = true;
@@ -432,7 +373,6 @@ uint32_t time_getBatteryCurrent = timer_u32();
 void getBatteryCurrent() {
     // If we don't have new data, skip this iteration.
     if (!getBatteryCurrent_newData) {
-        // while(!getBatteryCurrent_newData);
         return;
     }
 
@@ -481,29 +421,17 @@ int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetwee
     return ret;
 }
 
-bool POWER_ON = false;
-void powerSwitchCallback() {
-    if (digitalRead(pinPowerSwitch)) {
-        POWER_ON = true;
-        // setCpuFrequencyMhz(240);
-    } else {
-        POWER_ON = false;
-        // setCpuFrequencyMhz(80);
-    }
-}
-
 int buttonPressCount[4] = {2};
 uint32_t timeButton[4] = {0};
-
 int buttonsDebounceMs = 20;
-void IRAM_ATTR button1Callback() { // Switch Gears
+void IRAM_ATTR button1Callback() {
     if (buttonWait(&buttonPressCount[0], &timeButton[0], buttonsDebounceMs) == 1) {
         return;
     }
     // nothing right now
 }
 
-void IRAM_ATTR button2Callback() { // Switch Gears
+void IRAM_ATTR button2Callback() {
     if (buttonWait(&buttonPressCount[1], &timeButton[1], buttonsDebounceMs) == 1) {
         return;
     }
@@ -525,8 +453,6 @@ void IRAM_ATTR button4Callback() {
     // nothing right now
 }
 
-
-int daysInCurrentMonth = 0;
 void clock_date_and_time() {
     clockSeconds += ((float)timer_delta_us(timeCore0) / 1000000.0);
     if (clockSeconds >= 60) {
@@ -837,7 +763,7 @@ void app_main(void)
 {
     motor.poles = 18;
     motor.magnetPairs = 3;
-    wheel.diameter = 63.0f;
+    wheel.diameter = 63.0f; // cm
     wheel.gear_ratio = 10.6875f; // (42/14) * (57/16)
     battery.voltage_min = 66.0f;
     battery.voltage_max = 82.0f;
@@ -846,18 +772,6 @@ void app_main(void)
     battery.amphours_min_voltage = 68.0f;
     battery.amphours_max_voltage = 82.0f;
     battery.ampHoursRated_tmp = 0.0;
-
-    // GEARS
-    gear1.level = 1;
-    gear1.maxCurrent = 200; // 160
-
-    gear2.level = 2;
-    gear2.maxCurrent = 100;
-
-    gear3.level = 3;
-    gear3.maxCurrent = 65;
-
-    gearCurrent = gear1;
 
     std::vector<Point> customThrottleCurve = {
         {0, 0},
@@ -1088,8 +1002,8 @@ void app_main(void)
                         commAddValue(&toSend, motor_rpm, 0);
                         commAddValue(&toSend, odometer.distance, 1);
                         commAddValue(&toSend, trip.distance, 2);
-                        commAddValue(&toSend, gearCurrent.level, 0);
-                        commAddValue(&toSend, gearCurrent.maxCurrent, 0);
+                        commAddValue(&toSend, -1, 0); // gearCurrent.level
+                        commAddValue(&toSend, -1, 0); // gearCurrent.maxCurrent
                         commAddValue(&toSend, -1, 0); // was selectedPowerMode
                         commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
                         commAddValue(&toSend, wh_over_km_average, 1);
@@ -1289,6 +1203,7 @@ void app_main(void)
 
         if (strlen(toSendExtra.c_str()) > 0) {
             Serial.printf(toSendExtra.c_str());
+            toSendExtra = "";
         }
         
         timeCore0 = (timer_u32() - timeStartCore0);

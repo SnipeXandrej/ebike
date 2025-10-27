@@ -1,4 +1,4 @@
-// Dear ImGui: standalone example application for SDL3 + OpenGL
+// Dear ImGui: standalone application for SDL3 + OpenGL
 // (SDL is a cross-platform general purpose library for handling windows, inputs, OpenGL/Vulkan/Metal graphics context creation, etc.)
 
 // Learn about Dear ImGui:
@@ -13,20 +13,14 @@
 #include "imgui_impl_opengl3.h"
 #include <stdio.h>
 #include <SDL3/SDL.h>
-#if defined(IMGUI_IMPL_OPENGL_ES2)
-#include <SDL3/SDL_opengles2.h>
-#else
 #include <SDL3/SDL_opengl.h>
-#endif
 
 #include <iostream>
 #include <cstring>
 #include <thread>
 #include <chrono>
 #include "toml.hpp"
-#include <functional>
 #include <print>
-#include <format>
 
 #include "serial.hpp"
 #include "other.hpp"
