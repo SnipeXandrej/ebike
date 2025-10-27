@@ -427,9 +427,9 @@ int main(int, char**)
     mcconf_performance2.l_min_duty = 0.005;
     mcconf_performance2.l_max_duty = 0.95;
     mcconf_performance2.l_watt_min = -10000;
-    mcconf_performance2.l_watt_max = 7000;
+    mcconf_performance2.l_watt_max = 10000;
     mcconf_performance2.l_in_current_min = -16;
-    mcconf_performance2.l_in_current_max = 96;
+    mcconf_performance2.l_in_current_max = 110;
     mcconf_performance2.name = "Performance2";
     mcconf_performance2.id = POWER_PROFILE::PERFORMANCE2;
 
