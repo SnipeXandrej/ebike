@@ -1,6 +1,5 @@
 #include <stdio.h>
 #include <iostream>
-#include <mutex>
 #include <print>
 #include <sstream>
 
@@ -13,7 +12,6 @@
 #include "Preferences.h"
 #include <Adafruit_ADS1X15.h>
 #include <VescUart.h>
-#include <TFT_eSPI.h>
 #include <Adafruit_SH110X.h>
 #include "Adafruit_GFX.h"
 
@@ -622,67 +620,6 @@ void clock_date_and_time() {
     }
 }
 
-class VerticalBar {
-private:
-    int previousValue = -1;
-
-public:
-    void drawVerticalBar(int x, int y, int width, int height, float value, float value_min, float value_max, char *barName, bool drawInputValue) {
-        int lastValue = -1;
-        int value_map = map_f(value, value_min, value_max, 0.0, 100.0);
-
-        if ((int)value == lastValue)
-            return; // No need to redraw
-
-        lastValue = value_map;
-
-        int filledHeight = map(value_map, 0, 100, 0, height);
-        int greenEnd  = map(60, 0, 100, 0, height);
-        int yellowEnd = map(85, 0, 100, 0, height);
-
-        int baseY = y + height;
-
-        tft.setTextSize(2);
-        tft.setCursor(x+3, y-16);
-        tft.printf("%s", barName);
-        tft.setTextSize(1);
-        tft.setCursor(x+3, baseY+2);
-        if (drawInputValue == true)
-            tft.printf("%1.0f  ", value);
-        else
-            tft.printf("%1d  ", value_map);
-
-        // Draw filled portion
-
-        // inside of border
-        // tft.fillRect(x+1, y+1, width-2, height-2, TFT_DARKGREY);
-
-        // only refill a part of the rectangle so that it doesn't flicker by clearing the whole rectangle and then again drawing over it
-        tft.fillRect(x+1, y+1, width-2, height - filledHeight, TFT_LIGHTGREY);
-
-        // // Red zone
-        // if (filledHeight > yellowEnd)
-        //     tft.fillRect(x, baseY - filledHeight, width, filledHeight - yellowEnd, TFT_RED);
-
-        // // Yellow zone
-        // if (filledHeight > greenEnd)
-        //     tft.fillRect(x, baseY - min(filledHeight, yellowEnd), width, min(filledHeight, yellowEnd) - greenEnd, TFT_YELLOW);
-
-        // // Green zone
-        // if (filledHeight > 0)
-        //     tft.fillRect(x, baseY - min(filledHeight, greenEnd), width, min(filledHeight, greenEnd), TFT_GREEN);
-
-        // Red zone all the way
-        if (filledHeight > 0)
-            tft.fillRect(x+1, baseY - filledHeight + 1, width-2, filledHeight -2, TFT_RED);
-
-        // Border
-        tft.drawRect(x, y, width, height, TFT_BLACK);
-    }
-};
-VerticalBar barAp;
-VerticalBar barW;
-
 void drawLightningBolt(int x, int y) {
     tft.drawLine(x,   y,   x+3, y+3, COLOR_WHITE);
     tft.drawLine(x+1, y+4, x+2, y+4, COLOR_WHITE);
@@ -1071,6 +1008,7 @@ void app_main(void)
         .timer_num = LEDC_TIMER_0,
         .freq_hz = 20000, //1000
         .clk_cfg = LEDC_USE_APB_CLK,
+        .deconfigure = false
     };
     ledc_timer_config(&timer_conf);
 
@@ -1082,7 +1020,11 @@ void app_main(void)
         .intr_type = LEDC_INTR_DISABLE,
         .timer_sel = LEDC_TIMER_0,
         .duty = 0,
-        .hpoint = 0
+        .hpoint = 0,
+        .sleep_mode = LEDC_SLEEP_MODE_NO_ALIVE_NO_PD,
+        .flags = {
+            .output_invert = 0
+        }
     };
     ledc_channel_config(&channel_conf);
 
