@@ -6,5 +6,5 @@ cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 set(EXTRA_COMPONENT_DIRS components/Adafruit_GFX_Library components/Adafruit_ADS1X15 components/VescUart)
-set(COMPONENT_REQUIRES "Adafruit_GFX_Library" "Adafruit_ADS1X15" "VescUart" "TFT_eSPI")
+set(COMPONENT_REQUIRES "Adafruit_GFX_Library" "Adafruit_ADS1X15" "VescUart" "Adafruit_SH110X")
 project(esp-ebike)
