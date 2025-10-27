@@ -71,7 +71,8 @@ enum COMMAND_ID {
     SET_AMPHOURS_CHARGED = 16,
     ESP32_LOG = 17,
     TOGGLE_CHARGING_STATE = 18,
-    TOGGLE_REGEN_BRAKING = 19
+    TOGGLE_REGEN_BRAKING = 19,
+    ESP32_RESTART = 20
 };
 
 struct {
@@ -1238,6 +1239,10 @@ void app_main(void)
                         }
 
                         toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), settings.regenerativeBraking));
+                        break;
+
+                    case COMMAND_ID::ESP32_RESTART:
+                        ESP.restart();
                         break;
                 }
 

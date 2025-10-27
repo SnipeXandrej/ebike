@@ -54,7 +54,8 @@ enum COMMAND_ID {
     SET_AMPHOURS_CHARGED = 16,
     ESP32_LOG = 17,
     TOGGLE_CHARGING_STATE = 18,
-    TOGGLE_REGEN_BRAKING = 19
+    TOGGLE_REGEN_BRAKING = 19,
+    ESP32_RESTART = 20
 };
 
 enum POWER_PROFILE {
@@ -1021,6 +1022,12 @@ int main(int, char**)
 
                             float buttonWidth = 260.0;
                             float buttonHeight = 80.0;
+
+                            if (ImGui::Button("Restart ESP32", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::ESP32_RESTART)));
+                            }
+
+                            ImGui::Dummy(ImVec2(0, 20));
 
                             static char newOdometerValue[30];
                             ImGui::Text("Odometer = ");
