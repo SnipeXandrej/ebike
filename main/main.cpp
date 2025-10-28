@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <stdio.h>
 #include <iostream>
 #include <print>
@@ -8,7 +9,6 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
-#include "HardwareSerial.h"
 #include "Preferences.h"
 #include <Adafruit_ADS1X15.h>
 #include <VescUart.h>
@@ -18,19 +18,27 @@
 #include "driver/adc.h"
 #include "driver/ledc.h"
 
+#include "freertos/idf_additions.h"
+#include "hal/uart_types.h"
 #include "inputOffset.h"
 #include "fastGPIO.h"
 #include "ebike-utils.h"
+#include "soc/clk_tree_defs.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
 #include "map.cpp"
 #include "../comm.h"
+// #include "myUart.hpp"
 
 #define COLOR_WHITE SH110X_WHITE
 #define COLOR_BLACK SH110X_BLACK
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
+
+MyUart SerialMonitor;
+MyUart SerialVESC;
+MyUart SerialDisplay;
 
 class Display {
 private:
@@ -249,9 +257,16 @@ MiniPID powerLimiterPID(kP, kI, kD);
 #define pinButton2  -1
 #define pinButton3  -1
 #define pinButton4  -1
-#define pinAdcRdyAlert 33 // D33
+#define pinAdcRdyAlert 33 // later set to 34
 #define pinPowerSwitch 27 // D27
 #define pinBrake       13 // D13
+
+#define SERIAL_DISPLAY_RX -1
+#define SERIAL_DISPLAY_TX -1
+#define SERIAL_VESC_RX 16
+#define SERIAL_VESC_TX 17
+#define SERIAL_MONITOR_RX 3
+#define SERIAL_MONITOR_TX 1
 
 #define ADC_ATTEN      ADC_ATTEN_DB_12  // Allows reading up to 3.3V
 #define ADC_WIDTH      ADC_WIDTH_BIT_12 // 12-bit resolution
@@ -841,11 +856,13 @@ void app_main(void)
     movingAverages.brakingCurrent.smoothingFactor = 0.025f;
 
     initArduino();
-    Serial.begin(230400);
+    SerialMonitor.begin(UART_NUM_0, SERIAL_MONITOR_TX, SERIAL_MONITOR_RX, 230400); // USB Serial
 
-    Serial2.begin(115200, SERIAL_8N1, 16, 17); // RX/TX
-    VESC.setSerialPort(&Serial2);
-    // VESC.setDebugPort(&Serial);
+    // SerialDisplay.begin(UART_NUM_1, SERIAL_DISPLAY_TX, SERIAL_DISPLAY_RX, 115200); // Another ESP32 display
+
+    SerialVESC.begin(UART_NUM_2, SERIAL_VESC_TX, SERIAL_VESC_RX, 115200); // VESC
+    VESC.setSerialPort(&SerialVESC);
+    // VESC.setDebugPort(&SerialMonitor);
 
     Wire.begin(21, 22);
     Wire.setClock(400000); // 400kHz
@@ -853,7 +870,7 @@ void app_main(void)
     if (!dedicatedADC.begin()) {
         Serial.println("Failed to initialize ADS.");
     }
-    // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noise af
+    // Up-to 64SPS is noise-free, 128SPS has a little noise, 250 and beyond is noisy af
     dedicatedADC.setDataRate(RATE_ADS1115_64SPS);
     dedicatedADC.setGain(GAIN_SIXTEEN);
     pinMode(pinAdcRdyAlert, INPUT);
@@ -955,8 +972,8 @@ void app_main(void)
         timeStartCore0 = timer_u32();
 
         // Read and store all characters into a string
-        while (Serial.available()) {
-          char c = Serial.read();
+        while (SerialMonitor.available()) {
+          char c = SerialMonitor.read();
           readString += c;
         }
 
@@ -1081,6 +1098,10 @@ void app_main(void)
                             commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
                             toSend.append(VESC.data_mcconf.name); toSend.append(";");
                             toSend.append("\n");
+
+                            toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        } else {
+                            toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
                         }
                         break;
 
@@ -1138,7 +1159,7 @@ void app_main(void)
                 }
 
                 if (strlen(toSend.c_str()) > 0) {
-                    Serial.printf(toSend.c_str());
+                    SerialMonitor.printf(toSend.c_str());
                 }
             }
 
