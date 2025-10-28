@@ -448,10 +448,13 @@ int main(int, char**)
             SerialP.timeout_ms = settings.serialWriteWaitMs;
 
             to_send = "";
+            static bool sendOnce = false;
 
             if (!SerialP.succesfulCommunication) {
                 std::string to_send = std::to_string(COMMAND_ID::ARE_YOU_ALIVE);
                 SerialP.writeSerial(to_send.c_str());
+
+                sendOnce = false;
 
                 // hol'up
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -469,17 +472,10 @@ int main(int, char**)
                     commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
                     to_send.append("\n");
 
-                    static int GET_VESC_MCCONF_COUNTER = 0;
+                    if (esp32_vesc_mcconf.name != mcconf_current.name || sendOnce == false) {
+                        sendOnce = true;
 
-                    GET_VESC_MCCONF_COUNTER++;
-                    if (GET_VESC_MCCONF_COUNTER >= 3) {
-                        GET_VESC_MCCONF_COUNTER = 0;
-
-                        if (esp32_vesc_mcconf.name != mcconf_current.name) {
-                            setPowerProfile(mcconf_current.id);
-                        }
-
-
+                        setPowerProfile(mcconf_current.id);
                         commAddValue(&to_send, COMMAND_ID::GET_VESC_MCCONF, 0);
                         to_send.append("\n");
                     }
@@ -1094,14 +1090,14 @@ int main(int, char**)
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &esp32_vesc_mcconf.l_in_current_max);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", esp32_vesc_mcconf.name.c_str());
 
-                                // if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
-                                //     to_send_extra.append(append);
-                                // }
-                                // ImGui::SameLine();
-                                // if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                //     setMcconfValues(esp32_vesc_mcconf);
-                                // }
+                                if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
+                                    to_send_extra.append(append);
+                                }
+                                ImGui::SameLine();
+                                if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                    setMcconfValues(esp32_vesc_mcconf);
+                                }
                             ImGui::EndGroup();
 
                             ImGui::EndChild();
