@@ -1,3 +1,6 @@
+#ifndef MYUART_HPP
+#define MYUART_HPP
+
 #include "driver/uart.h"
 
 class MyUart {
@@ -62,3 +65,5 @@ private:
     uart_port_t uart_num;
     QueueHandle_t uart_queue;
 };
+
+#endif
