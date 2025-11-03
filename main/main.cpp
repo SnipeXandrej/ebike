@@ -1,3 +1,4 @@
+// C / C++ Libraries
 #include <cstdint>
 #include <stdio.h>
 #include <iostream>
@@ -13,22 +14,25 @@
 #include <Adafruit_ADS1X15.h>
 #include <VescUart.h>
 #include <Adafruit_SH110X.h>
-#include "Adafruit_GFX.h"
 
+// ESP Libraries
 #include "driver/adc.h"
 #include "driver/ledc.h"
-
-#include "freertos/idf_additions.h"
+#include "soc/clk_tree_defs.h"
 #include "hal/uart_types.h"
+
+// FreeRTOS
+#include "freertos/idf_additions.h"
+
+// Other
 #include "inputOffset.h"
 #include "fastGPIO.h"
 #include "ebike-utils.h"
-#include "soc/clk_tree_defs.h"
 #include "timer_u32.h"
 #include "MiniPID.h"
 #include "map.cpp"
 #include "../comm.h"
-// #include "myUart.hpp"
+#include "myUart.hpp"
 
 #define COLOR_WHITE SH110X_WHITE
 #define COLOR_BLACK SH110X_BLACK
@@ -91,6 +95,7 @@ struct {
 struct {
     int poles;
     int magnetPairs;
+    float rpmPerKmh;
 } motor;
 
 bool firsttime_draw = 1;
@@ -377,6 +382,28 @@ float clampValue(float input, float clampTo) {
     }
 
     return output;
+}
+
+float maxCurrentAtRPM(float rpm) {
+    float RPM1 = 360.0;
+    float RPM2 = 450.0;
+    float currentBeforeRPM1 = 150.0;
+
+    if (rpm <= RPM1) {
+        return currentBeforeRPM1;
+    }
+
+    if (rpm <= RPM2) {
+        // Linear interpolation between 120A at 430 ERPM and 190A at 1000 ERPM
+        float slope = (VESC.mcconf.maxMotorCurrent - currentBeforeRPM1) / (RPM2 - RPM1);
+        return currentBeforeRPM1 + slope * (rpm - RPM1);
+    }
+
+    if (rpm > RPM2) {
+        return VESC.mcconf.maxMotorCurrent;
+    }
+
+    return 0.0;
 }
 
 volatile bool getBatteryCurrent_newData = false;
@@ -690,7 +717,11 @@ void loop_core1 (void* pvParameters) {
             // gradually increase braking current
             VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
         } else {
-            VESC.setCurrent(throttle.map(PotThrottleLevelReal));
+            float vescCurrent = clampValue(
+                                            throttle.map(PotThrottleLevelReal),
+                                            maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
+                                          );
+            VESC.setCurrent(vescCurrent);
 
             // reset regen braking
             movingAverages.brakingCurrent.setInput(0.0f);
@@ -778,6 +809,7 @@ void app_main(void)
 {
     motor.poles = 18;
     motor.magnetPairs = 3;
+    motor.rpmPerKmh = 90.04; // TODO: calculate it
     wheel.diameter = 63.0f; // cm
     wheel.gear_ratio = 10.6875f; // (42/14) * (57/16)
     battery.voltage_min = 66.0f;
@@ -787,6 +819,8 @@ void app_main(void)
     battery.amphours_min_voltage = 68.0f;
     battery.amphours_max_voltage = 82.0f;
     battery.ampHoursRated_tmp = 0.0;
+
+    VESC.mcconf.maxMotorCurrent = 250.0; // TODO: retrieve it from VESC
 
     std::vector<Point> customThrottleCurve = {
         {0, 0},
