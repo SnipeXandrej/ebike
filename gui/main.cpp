@@ -807,7 +807,7 @@ int main(int, char**)
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
-                                // ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
+                                ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
                                 if (settings.showMotorRPM)
                                     ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
 
