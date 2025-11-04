@@ -12,24 +12,26 @@
 #include <Adafruit_GFX.h>
 #include "Preferences.h"
 #include <Adafruit_ADS1X15.h>
-#include <VescUart.h>
 #include <Adafruit_SH110X.h>
 
 // ESP Libraries
 #include "driver/adc.h"
 #include "driver/ledc.h"
+#include "esp32-hal-cpu.h"
 #include "soc/clk_tree_defs.h"
 #include "hal/uart_types.h"
 
 // FreeRTOS
 #include "freertos/idf_additions.h"
+#include "freertos/projdefs.h"
 
 // Other
+#include <VescUart.h>
+#include "timer_u32.h"
+#include "MiniPID.h"
 #include "inputOffset.h"
 #include "fastGPIO.h"
 #include "ebike-utils.h"
-#include "timer_u32.h"
-#include "MiniPID.h"
 #include "map.cpp"
 #include "../comm.h"
 #include "myUart.hpp"
@@ -150,6 +152,7 @@ float motor_rpm = 0;
 
 bool BRAKING = 0;
 
+std::string toSend;
 std::string toSendExtra;
 
 uint32_t timeStartCore1 = 0, timeCore1 = 0;    
@@ -157,7 +160,7 @@ uint32_t timeStartCore0 = 0, timeCore0 = 0;
 uint32_t timeStartDisplay = 0; //timeDisplay = 0;
 uint32_t timeStartExecEverySecondCore0 = 0, timeExecEverySecondCore0 = 0;
 uint32_t timeExecEverySecondCore1 = 0;
-uint32_t timeExecEvery100millisecondsCore1 = 0;
+uint32_t timeExecEvery25millisecondsCore1 = 0;
 uint32_t timeRotorSleep = 0;
 uint32_t timeAmphoursMinVoltage = 0;
 uint32_t timeWaitBeforeChangingToCharging = 0;
@@ -209,7 +212,6 @@ MovingAverage WhOverKmMovingAverage;
 MovingAverage batteryAuxWattsMovingAverage;
 MovingAverage batteryAuxMovingAverage;
 MovingAverage batteryWattsMovingAverage;
-MovingAverage speed_kmhMovingAverage;
 MovingAverage wattageMoreSmooth_MovingAverage;
 
 struct {
@@ -227,6 +229,14 @@ Display             display;
 Preferences         preferences;
 Adafruit_ADS1115    dedicatedADC;
 VescUart            VESC;
+
+enum FNPOOL {
+    GET_MCCONF_TEMP = 1
+};
+
+QueueHandle_t core0_queue;
+const size_t FN_POOL_SIZE = sizeof(FNPOOL);
+std::array<std::function<void()>, FN_POOL_SIZE> fn_pool;
 
 class PreferencesActions {
 public:
@@ -412,37 +422,17 @@ void IRAM_ATTR ADCNewDataReadyISR() {
 }
 
 uint32_t time_getBatteryCurrent = timer_u32();
-void getBatteryCurrent() {
+bool getBatteryCurrent() {
     // If we don't have new data, skip this iteration.
     if (!getBatteryCurrent_newData) {
-        return;
+        return false;
     }
 
     int16_t results = dedicatedADC.getLastConversionResults();
 
-    // AUX CURRENT
-    battery.current = (((float)results) / 143.636); //143.636
+    battery.current = (((float)results) / 143.636);
 
-    _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
-    battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
-    if (_batteryCurrentUsedInElapsedTime >= 0.0) {
-        battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
-    }
-
-
-    _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
-    battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
-
-    if ((_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) && !battery.charging) {
-        trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
-        estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
-    }
-
-
-    getBatteryCurrent_newData = false;
-    // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - time_getBatteryCurrent));
-
-    time_getBatteryCurrent = timer_u32();
+    return true;
 }
 
 int buttonWait(int *buttonPressCounter, uint32_t *timeKeeper, int msToWaitBetweenInterrupts) {
@@ -626,25 +616,229 @@ void loop_core1 (void* pvParameters) {
     while (1) {
         timeStartCore1 = timer_u32();
 
+        static size_t idx = 0; // for fn_pool / xQueueSend
+
+        // Read and store all characters into a string
+        while (SerialMonitor.available()) {
+          char c = SerialMonitor.read();
+          readString += c;
+        }
+
+        if (!readString.empty()) {
+            auto readStringPacket = split(readString, '\n');
+
+            for (int i = 0; i < readStringPacket.size(); i++) {
+                auto packet = split(readStringPacket[i], ';');
+                int packet_command_id = std::stoi(packet[0]);
+
+                switch(packet_command_id) {
+                    case COMMAND_ID::GET_BATTERY:
+                        commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
+                        commAddValue(&toSend, battery.voltage, 2);
+                        commAddValue(&toSend, battery.current, 4);
+                        commAddValue(&toSend, battery.watts, 1);
+                        commAddValue(&toSend, battery.wattHoursUsed, 1);
+                        commAddValue(&toSend, battery.ampHoursUsed, 6);
+                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 1);
+                        commAddValue(&toSend, battery.ampHoursRated, 2);
+                        commAddValue(&toSend, battery.percentage, 1);
+                        commAddValue(&toSend, battery.voltage_min, 1);
+                        commAddValue(&toSend, battery.voltage_max, 1);
+                        commAddValue(&toSend, battery.nominalVoltage, 1);
+                        commAddValue(&toSend, battery.amphours_min_voltage, 1);
+                        commAddValue(&toSend, battery.amphours_max_voltage, 1);
+                        commAddValue(&toSend, battery.charging, 0);
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::ARE_YOU_ALIVE:
+                        commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::GET_STATS:
+                        commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
+                        commAddValue(&toSend, speed_kmh, 1);
+                        commAddValue(&toSend, motor_rpm, 0);
+                        commAddValue(&toSend, odometer.distance, 1);
+                        commAddValue(&toSend, trip.distance, 2);
+                        commAddValue(&toSend, -1, 0); // was gearCurrent.level
+                        commAddValue(&toSend, -1, 0); // was gearCurrent.maxCurrent
+                        commAddValue(&toSend, -1, 0); // was selectedPowerMode
+                        commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
+                        commAddValue(&toSend, wh_over_km_average, 1);
+                        commAddValue(&toSend, estimatedRange.WhPerKm, 1);
+                        commAddValue(&toSend, estimatedRange.range, 1);
+                        commAddValue(&toSend, VESC.data.tempMotor, 1);
+                        commAddValue(&toSend, totalSecondsSinceBoot, 0);
+                        commAddValue(&toSend, timer_delta_us(timeCore0), 0);
+                        commAddValue(&toSend, timer_delta_us(timeCore1), 0);
+                        commAddValue(&toSend, acceleration, 1);
+                        commAddValue(&toSend, POWER_ON, 0);
+                        commAddValue(&toSend, settings.regenerativeBraking, 0);
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::SET_ODOMETER:
+                        odometer.distance = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), odometer.distance));
+                        break;
+
+                    case COMMAND_ID::SAVE_PREFERENCES:
+                        preferenceActions.saveAll();
+                        toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        break;
+
+                    case COMMAND_ID::RESET_TRIP:
+                        tripReset();
+                        toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        break;
+
+                    case COMMAND_ID::RESET_ESTIMATED_RANGE:
+                        estimatedRangeReset();
+                        toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        break;
+
+                    case COMMAND_ID::READY_TO_WRITE:
+                        commAddValue(&toSend, COMMAND_ID::READY_TO_WRITE, 0);
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::GET_FW:
+                        commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
+                        toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::PING:
+                        display.ping();
+                        break;
+
+                    case COMMAND_ID::TOGGLE_FRONT_LIGHT:
+
+                        break;
+
+                    case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
+                        battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.ampHoursUsedLifetime));
+                        break;
+
+                    case COMMAND_ID::GET_VESC_MCCONF:
+                        idx = FNPOOL::GET_MCCONF_TEMP;
+                        if (xQueueSend(core0_queue, &idx, portMAX_DELAY) == pdTRUE) {
+                            toSend.append(std::format("{};xQueueSent!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        };
+
+                        break;
+
+                    case COMMAND_ID::SET_VESC_MCCONF:
+                        VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
+                        VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
+                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
+                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
+                        VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
+                        VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
+                        VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
+                        VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
+                        VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
+                        VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
+                        VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
+                        VESC.setMcconfTempValues();
+
+                        toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+                        break;
+
+                    case COMMAND_ID::SET_AMPHOURS_CHARGED:
+                        {
+                            float newValue = getValueFromPacket(packet, 1);
+
+                            battery.ampHoursRated = newValue;
+                            battery.ampHoursRated_tmp = newValue;
+
+                            toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), newValue));
+                        }
+                        break;
+
+                    case COMMAND_ID::TOGGLE_CHARGING_STATE:
+                        if (battery.charging) {
+                            battery.charging = false;
+                        } else {
+                            battery.charging = true;
+                        }
+
+                        toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.charging));
+                        break;
+
+                    case COMMAND_ID::TOGGLE_REGEN_BRAKING:
+                        if (settings.regenerativeBraking) {
+                            settings.regenerativeBraking = false;
+                        } else {
+                            settings.regenerativeBraking = true;
+                        }
+
+                        toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), settings.regenerativeBraking));
+                        break;
+
+                    case COMMAND_ID::ESP32_RESTART:
+                        ESP.restart();
+                        break;
+                }
+
+                if (strlen(toSend.c_str()) > 0) {
+                    SerialMonitor.printf(toSend.c_str());
+                    toSend.clear();
+                }
+            }
+
+            readString="";
+        }
+
         // Reset temporary values
         _batteryVoltage = 0;
         _potThrottleVoltage = 0;
 
         // measure raw battery and pot voltage from ADC
-        for (int i = 0; i < 15; i++) {
+        for (int i = 0; i < 5; i++) {
             _batteryVoltage += adc1_get_raw(pinBatteryVoltage);
             _potThrottleVoltage += adc1_get_raw(pinPotThrottle);
         }
-        _batteryVoltage = _batteryVoltage / 15;
-        _potThrottleVoltage = _potThrottleVoltage / 15;
+        _batteryVoltage = _batteryVoltage / 5;
+        _potThrottleVoltage = _potThrottleVoltage / 5;
 
         // BATTERY VOLTAGE
         battery.voltage = (36.11344125582536f * BatVoltageCorrection.correctInput(_batteryVoltage * (3.3f/4095.0f)));
         BatVoltageMovingAverage.initInput(battery.voltage);
 
         // BATTERY CURRENT
-        // Calculates wattHoursUsed, ampHoursUsed, ampHoursUsedLifetime
-        getBatteryCurrent();
+        // getBatteryCurrent sets the battery.current var to a new value
+        // Calculates wattHoursUsed, ampHoursUsed, ampHoursUsedLifetime, ...
+        if (getBatteryCurrent()) {
+            _batteryCurrentUsedInElapsedTime = battery.current / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
+            battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
+            if (_batteryCurrentUsedInElapsedTime >= 0.0) {
+                battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
+            }
+
+
+            _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1.0f / timer_delta_s(timer_u32() - time_getBatteryCurrent));
+            battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+
+            if ((_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) && !battery.charging) {
+                trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+                estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+            }
+
+
+            getBatteryCurrent_newData = false;
+            // Serial.printf("Time it took to diff: %f\n", timer_delta_ms(timer_u32() - time_getBatteryCurrent));
+
+            time_getBatteryCurrent = timer_u32();
+        }
 
         battery.watts = battery.voltage * battery.current;
         battery.wattHoursRated = battery.nominalVoltage * battery.ampHoursRated;
@@ -720,54 +914,14 @@ void loop_core1 (void* pvParameters) {
             float vescCurrent = clampValue(
                                             throttle.map(PotThrottleLevelReal),
                                             maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
-                                          );
+                                        );
             VESC.setCurrent(vescCurrent);
 
             // reset regen braking
             movingAverages.brakingCurrent.setInput(0.0f);
         }
 
-        static uint32_t timeAcceleration;
-        if (VESC.getVescValues()) {
-            // if the previous measurement is bigger than the current, that means
-            // that the VESC was probably powered off and on, so the stats got reset...
-            // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
-            // large number and therefore screw up our distance measurement
-            if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            // prevent the diff to be something extremely big
-            if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
-                trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
-                // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
-
-                trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
-                
-                // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
-                trip.distance += trip.distanceDiff;
-                odometer.distance += trip.distanceDiff;
-                estimatedRange.distance += trip.distanceDiff;
-
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
-            speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
-            speed_kmhMovingAverage.moveAverage(speed_kmh);
-            // if (timer_delta_ms(timer_u32() - timeAcceleration) >= 100) {
-                acceleration = (speed_kmhMovingAverage.output - speed_kmh_previous) * (1.0 / timer_delta_s(timer_u32() - timeAcceleration));
-
-                timeAcceleration = timer_u32();
-                speed_kmh_previous = speed_kmhMovingAverage.output;
-            // }
-
-        }
-
+        // wh_over_km
         float wh_over_km_tmp = battery.watts / speed_kmh;
         if (wh_over_km_tmp > 199.9) {
             wh_over_km = 199.9;
@@ -795,11 +949,13 @@ void loop_core1 (void* pvParameters) {
 
         }
 
-        // Execute every 100ms that elapsed
-        if (timer_delta_ms(timer_u32() - timeExecEvery100millisecondsCore1) >= 10000) {
-            timeExecEvery100millisecondsCore1 = timer_u32();
+        // Execute every 25ms that elapse (40Hz)
+        if (timer_delta_ms(timer_u32() - timeExecEvery25millisecondsCore1) >= 25) {
+            timeExecEvery25millisecondsCore1 = timer_u32();
+            // stuff to run
 
         }
+
         timeCore1 = (timer_u32() - timeStartCore1);
     }
 }
@@ -812,11 +968,11 @@ void app_main(void)
     motor.rpmPerKmh = 90.04; // TODO: calculate it
     wheel.diameter = 63.0f; // cm
     wheel.gear_ratio = 10.6875f; // (42/14) * (57/16)
-    battery.voltage_min = 66.0f;
+    battery.voltage_min = 64.0f;
     battery.voltage_max = 82.0f;
     battery.nominalVoltage = 72.0f;
 
-    battery.amphours_min_voltage = 68.0f;
+    battery.amphours_min_voltage = 66.0f;
     battery.amphours_max_voltage = 82.0f;
     battery.ampHoursRated_tmp = 0.0;
 
@@ -880,15 +1036,37 @@ void app_main(void)
     // smoothing factors
     BatVoltageMovingAverage.smoothingFactor = 0.1; //0.2
     BatWattMovingAverage.smoothingFactor = 0.1;
-    PotThrottleMovingAverage.smoothingFactor = 0.5; // 0.5
+    PotThrottleMovingAverage.smoothingFactor = 0.75; // 0.5
     WhOverKmMovingAverage.smoothingFactor = 0.05;
     batteryAuxWattsMovingAverage.smoothingFactor = 0.2;
     batteryAuxMovingAverage.smoothingFactor = 0.2;
     batteryWattsMovingAverage.smoothingFactor = 0.2;
-    speed_kmhMovingAverage.smoothingFactor = 0.02;
     wattageMoreSmooth_MovingAverage.smoothingFactor = 0.4f;
     movingAverages.brakingCurrent.smoothingFactor = 0.025f;
 
+    fn_pool[FNPOOL::GET_MCCONF_TEMP] = [] {
+        if (VESC.getMcconfTempValues()) {
+            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
+            commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
+            commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
+            toSend.append(VESC.data_mcconf.name); toSend.append(";");
+            toSend.append("\n");
+
+            toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+        } else {
+            toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
+        }
+    };
+
+    setCpuFrequencyMhz(240);
     initArduino();
     SerialMonitor.begin(UART_NUM_0, SERIAL_MONITOR_TX, SERIAL_MONITOR_RX, 230400); // USB Serial
 
@@ -992,6 +1170,8 @@ void app_main(void)
     estimatedRangeReset();
     odometer.distance_tmp = odometer.distance;
 
+    core0_queue = xQueueCreate(10, sizeof(size_t));
+
     xTaskCreatePinnedToCore (
         loop_core1,     // Function to implement the task
         "loop_core1",   // Name of the task
@@ -1005,199 +1185,48 @@ void app_main(void)
     while(1) {
         timeStartCore0 = timer_u32();
 
-        // Read and store all characters into a string
-        while (SerialMonitor.available()) {
-          char c = SerialMonitor.read();
-          readString += c;
+        size_t idx;
+        if (xQueueReceive(core0_queue, &idx, 0) == pdTRUE) {
+            fn_pool[idx]();
         }
 
-        static std::string toSend;
-        if (!readString.empty()) {
-            auto readStringPacket = split(readString, '\n');
-
-            for (int i = 0; i < readStringPacket.size(); i++) {
-                auto packet = split(readStringPacket[i], ';');
-                int packet_command_id = std::stoi(packet[0]);
-
-                toSend = "";
-                switch(packet_command_id) {
-                    case COMMAND_ID::GET_BATTERY:
-                        commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
-                        commAddValue(&toSend, battery.voltage, 1);
-                        commAddValue(&toSend, battery.current, 4);
-                        commAddValue(&toSend, battery.watts, 1);
-                        commAddValue(&toSend, battery.wattHoursUsed, 1);
-                        commAddValue(&toSend, battery.ampHoursUsed, 6);
-                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 1);
-                        commAddValue(&toSend, battery.ampHoursRated, 2);
-                        commAddValue(&toSend, battery.percentage, 1);
-                        commAddValue(&toSend, battery.voltage_min, 1);
-                        commAddValue(&toSend, battery.voltage_max, 1);
-                        commAddValue(&toSend, battery.nominalVoltage, 1);
-                        commAddValue(&toSend, battery.amphours_min_voltage, 1);
-                        commAddValue(&toSend, battery.amphours_max_voltage, 1);
-                        commAddValue(&toSend, battery.charging, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::ARE_YOU_ALIVE:
-                        commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::GET_STATS:
-                        commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
-                        commAddValue(&toSend, speed_kmh, 1);
-                        commAddValue(&toSend, motor_rpm, 0);
-                        commAddValue(&toSend, odometer.distance, 1);
-                        commAddValue(&toSend, trip.distance, 2);
-                        commAddValue(&toSend, -1, 0); // gearCurrent.level
-                        commAddValue(&toSend, -1, 0); // gearCurrent.maxCurrent
-                        commAddValue(&toSend, -1, 0); // was selectedPowerMode
-                        commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
-                        commAddValue(&toSend, wh_over_km_average, 1);
-                        commAddValue(&toSend, estimatedRange.WhPerKm, 1);
-                        commAddValue(&toSend, estimatedRange.range, 1);
-                        commAddValue(&toSend, VESC.data.tempMotor, 1);
-                        commAddValue(&toSend, totalSecondsSinceBoot, 0);
-                        commAddValue(&toSend, timer_delta_us(timeCore0), 0);
-                        commAddValue(&toSend, timer_delta_us(timeCore1), 0);
-                        commAddValue(&toSend, acceleration, 1);
-                        commAddValue(&toSend, POWER_ON, 0);
-                        commAddValue(&toSend, settings.regenerativeBraking, 0);
-                   
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::SET_ODOMETER:
-                        odometer.distance = (float)getValueFromPacket(packet, 1);
-                        toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), odometer.distance));
-                        break;
-
-                    case COMMAND_ID::SAVE_PREFERENCES:
-                        preferenceActions.saveAll();
-                        toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        break;
-                        
-                    case COMMAND_ID::RESET_TRIP:
-                        tripReset();
-                        toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        break;
-
-                    case COMMAND_ID::RESET_ESTIMATED_RANGE:
-                        estimatedRangeReset();
-                        toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        break;
-
-                    case COMMAND_ID::READY_TO_WRITE:
-                        commAddValue(&toSend, COMMAND_ID::READY_TO_WRITE, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::GET_FW:
-                        commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
-                        toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::PING:
-                        display.ping();
-                        break;
-
-                    case COMMAND_ID::TOGGLE_FRONT_LIGHT:
-
-                        break;
-
-                    case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
-                        battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
-                        toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.ampHoursUsedLifetime));
-                        break;
-
-                    case COMMAND_ID::GET_VESC_MCCONF:
-                        if (VESC.getMcconfTempValues()) {
-                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
-                            commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
-                            toSend.append(VESC.data_mcconf.name); toSend.append(";");
-                            toSend.append("\n");
-
-                            toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        } else {
-                            toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        }
-                        break;
-
-                    case COMMAND_ID::SET_VESC_MCCONF:
-                        VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
-                        VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
-                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
-                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
-                        VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
-                        VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
-                        VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
-                        VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
-                        VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
-                        VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
-                        VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
-                        VESC.setMcconfTempValues();
-
-                        toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::ESP32_LOG)));
-                        break;
-
-                    case COMMAND_ID::SET_AMPHOURS_CHARGED:
-                        {
-                            float newValue = getValueFromPacket(packet, 1);
-
-                            battery.ampHoursRated = newValue;
-                            battery.ampHoursRated_tmp = newValue;
-
-                            toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::ESP32_LOG), newValue));
-                        }
-                        break;
-
-                    case COMMAND_ID::TOGGLE_CHARGING_STATE:
-                        if (battery.charging) {
-                            battery.charging = false;
-                        } else {
-                            battery.charging = true;
-                        }
-
-                        toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), battery.charging));
-                        break;
-
-                    case COMMAND_ID::TOGGLE_REGEN_BRAKING:
-                        if (settings.regenerativeBraking) {
-                            settings.regenerativeBraking = false;
-                        } else {
-                            settings.regenerativeBraking = true;
-                        }
-
-                        toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::ESP32_LOG), settings.regenerativeBraking));
-                        break;
-
-                    case COMMAND_ID::ESP32_RESTART:
-                        ESP.restart();
-                        break;
-                }
-
-                if (strlen(toSend.c_str()) > 0) {
-                    SerialMonitor.printf(toSend.c_str());
-                }
+        static uint32_t timeAcceleration;
+        if (VESC.getVescValues()) {
+            // if the previous measurement is bigger than the current, that means
+            // that the VESC was probably powered off and on, so the stats got reset...
+            // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
+            // large number and therefore screw up our distance measurement
+            if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
             }
 
-            readString="";
+            // prevent the diff to be something extremely big
+            if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+            }
+
+            if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
+                trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
+                // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
+
+                trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+
+                // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
+                trip.distance += trip.distanceDiff;
+                odometer.distance += trip.distanceDiff;
+                estimatedRange.distance += trip.distanceDiff;
+
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+            }
+
+            motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
+            speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+            if (timer_delta_ms(timer_u32() - timeAcceleration) >= 400) {
+                acceleration = (speed_kmh - speed_kmh_previous) * (1.0 / timer_delta_s(timer_u32() - timeAcceleration));
+
+                timeAcceleration = timer_u32();
+                speed_kmh_previous = speed_kmh;
+            }
         }
 
         // totalSecondsSinceBoot += ((float)timer_delta_us(timeCore0) / 1000000);
