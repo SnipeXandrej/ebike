@@ -12,7 +12,7 @@
 
 class IPCServer {
 public:
-    void begin();
+    int begin();
     void stop();
     void write(const char *format, ...);
     std::string read();

@@ -1,8 +1,9 @@
 CXX = g++
+MAKEFLAGS += -j$(shell nproc)
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += ipcServer.cpp
+SOURCES += ipcServer.cpp utils.cpp
 
 OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 CXXFLAGS = -std=c++23 -g -Wall
