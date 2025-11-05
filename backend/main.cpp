@@ -9,9 +9,13 @@
 #include <thread>
 #include <chrono>
 #include <iostream>
+#include <signal.h>
 
 #include <wiringPi.h>
 #include <mcp23017.h>
+
+#include "ipcServer.hpp"
+IPCServer IPC;
 
 #define MCP23017_ADDRESS 0x20
 #define MCP23017_BASEPIN 100
@@ -32,6 +36,11 @@
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
+void my_handler(int s) {
+    // IPC.stop();
+    exit(1);
+}
+
 void setupGPIO() {
     // Initialize
     wiringPiSetupGpio();
@@ -43,13 +52,25 @@ void setupGPIO() {
 }
 
 int main() {
+    signal(SIGINT, my_handler);
+
     setupGPIO();
+    IPC.begin();
+
+    std::thread readThread([&] {
+        while(1) {
+            std::cout << IPC.read() << "\n";
+        }
+    });
 
     while (1) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, HIGH);
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        IPC.write("Pin is: %d\n", digitalRead(A0_EXP));
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, LOW);
+        IPC.write("Pin is: %d\n", digitalRead(A0_EXP));
     }
 
     return 0;

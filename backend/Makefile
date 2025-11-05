@@ -2,6 +2,7 @@ CXX = g++
 
 EXEC = ebike-backend
 SOURCES = main.cpp
+SOURCES += ipcServer.cpp
 
 OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 CXXFLAGS = -std=c++23 -g -Wall
