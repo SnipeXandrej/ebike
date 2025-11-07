@@ -10,6 +10,7 @@
 #include <chrono>
 #include <iostream>
 #include <vector>
+#include <format>
 #include <signal.h>
 
 #include <wiringPi.h>
@@ -19,6 +20,9 @@
 #include "utils.hpp"
 #include "../comm.h"
 IPCServer IPC;
+
+#define EBIKE_NAME "EBIKE"
+#define EBIKE_VERSION "0.0.0"
 
 #define MCP23017_ADDRESS 0x20
 #define MCP23017_BASEPIN 100
@@ -39,8 +43,14 @@ IPCServer IPC;
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
+float acceleration = 0;
+float totalSecondsSinceBoot = 0;
+float wh_over_km_average = 0;
+float motor_rpm = 0;
+float speed_kmh = 0;
+
 struct {
-    float voltage;
+    float voltage = 0.72;
     float voltage_min;
     float voltage_max;
     float current;
@@ -59,8 +69,46 @@ struct {
     float nominalVoltage;
 } battery;
 
+struct {
+    float range;
+    float wattHoursUsedOnStart;
+    float distance;
+    float wattHoursUsed;
+    float WhPerKm;
+} estimatedRange;
+
+struct {
+    double tachometer_abs_previous;
+    double tachometer_abs_diff;
+    double distance; // in km
+    double distanceDiff;
+    double wattHoursUsed;
+} trip;
+
+struct {
+    double trip_distance;    // in km
+    double distance;         // in km
+    double distance_tmp;
+} odometer;
+
+struct {
+    bool batteryPercentageVoltageBased = 0;
+    bool regenerativeBraking = 0;
+} settings;
+
+void estimatedRangeReset() {
+    estimatedRange.wattHoursUsedOnStart  = battery.wattHoursUsed;
+    estimatedRange.distance              = 0.0;
+    estimatedRange.wattHoursUsed         = 0.0;
+}
+
+void tripReset() {
+    trip.distance = 0;
+    trip.wattHoursUsed = 0;
+}
+
 void my_handler(int s) {
-    // IPC.stop();
+    IPC.stop();
     exit(1);
 }
 
@@ -87,7 +135,7 @@ int main() {
         std::printf("IPC failed to initialize, exiting...\n");
         exit(1);
     } else {
-        std::printf("IPC initialized successfully\n");
+        std::printf("IPC initialized\n");
     }
 
     std::thread readThread([&] {
@@ -96,6 +144,8 @@ int main() {
             std::string toSend;
             std::string whatWasRead;
             whatWasRead = IPC.read();
+
+            // std::cout << whatWasRead << "\n";
 
             auto readStringPacket = split(whatWasRead, '\n');
 
@@ -137,9 +187,133 @@ int main() {
 
                         toSend.append("\n");
                         break;
+
+                    case COMMAND_ID::GET_STATS:
+                        commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
+                        commAddValue(&toSend, speed_kmh, 1);
+                        commAddValue(&toSend, motor_rpm, 0);
+                        commAddValue(&toSend, odometer.distance, 1);
+                        commAddValue(&toSend, trip.distance, 2);
+                        commAddValue(&toSend, 0, 0); // was gearCurrent.level
+                        commAddValue(&toSend, 0, 0); // was gearCurrent.maxCurrent
+                        commAddValue(&toSend, 0, 0); // was selectedPowerMode
+                        commAddValue(&toSend, 0, 1); // VESC.data.avgMotorCurrent
+                        commAddValue(&toSend, wh_over_km_average, 1);
+                        commAddValue(&toSend, estimatedRange.WhPerKm, 1);
+                        commAddValue(&toSend, estimatedRange.range, 1);
+                        commAddValue(&toSend, 10, 1); // VESC.data.tempMotor
+                        commAddValue(&toSend, totalSecondsSinceBoot, 0);
+                        commAddValue(&toSend, 1000, 0); // timeCore0
+                        commAddValue(&toSend, 1100, 0); // timeCore1
+                        commAddValue(&toSend, acceleration, 1);
+                        commAddValue(&toSend, true, 0); //POWER_ON
+                        commAddValue(&toSend, settings.regenerativeBraking, 0);
+
+                        toSend.append("\n");
+                        break;
+
+                    case COMMAND_ID::SET_ODOMETER:
+                        odometer.distance = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), odometer.distance));
+                        break;
+
+                    // case COMMAND_ID::SAVE_PREFERENCES:
+                    //     preferenceActions.saveAll();
+                    //     toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                    //     break;
+
+                    case COMMAND_ID::RESET_TRIP:
+                        tripReset();
+                        toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        break;
+
+                    case COMMAND_ID::RESET_ESTIMATED_RANGE:
+                        estimatedRangeReset();
+                        toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        break;
+
+                    case COMMAND_ID::GET_FW:
+                        commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
+                        toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
+
+                        toSend.append("\n");
+                        break;
+
+                    // case COMMAND_ID::PING:
+                    //     display.ping();
+                    //     break;
+
+                    // case COMMAND_ID::TOGGLE_FRONT_LIGHT:
+
+                    //     break;
+
+                    case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
+                        battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
+                        toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.ampHoursUsedLifetime));
+                        break;
+
+                    // case COMMAND_ID::GET_VESC_MCCONF:
+                    //     idx = FNPOOL::GET_MCCONF_TEMP;
+                    //     if (xQueueSend(core0_queue, &idx, portMAX_DELAY) == pdTRUE) {
+                    //         toSend.append(std::format("{};xQueueSent!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                    //     };
+
+                    //     break;
+
+                    // case COMMAND_ID::SET_VESC_MCCONF:
+                    //     VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
+                    //     VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
+                    //     VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
+                    //     VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
+                    //     VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
+                    //     VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
+                    //     VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
+                    //     VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
+                    //     VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
+                    //     VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
+                    //     VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
+                    //     VESC.setMcconfTempValues();
+
+                    //     toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                    //     break;
+
+                    case COMMAND_ID::SET_AMPHOURS_CHARGED:
+                        {
+                            float newValue = getValueFromPacket(packet, 1);
+
+                            battery.ampHoursRated = newValue;
+                            battery.ampHoursRated_tmp = newValue;
+
+                            toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), newValue));
+                        }
+                        break;
+
+                    case COMMAND_ID::TOGGLE_CHARGING_STATE:
+                        if (battery.charging) {
+                            battery.charging = false;
+                        } else {
+                            battery.charging = true;
+                        }
+
+                        toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.charging));
+                        break;
+
+                    case COMMAND_ID::TOGGLE_REGEN_BRAKING:
+                        if (settings.regenerativeBraking) {
+                            settings.regenerativeBraking = false;
+                        } else {
+                            settings.regenerativeBraking = true;
+                        }
+
+                        toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
+                        break;
+
+                    // case COMMAND_ID::ESP32_RESTART:
+                    //     ESP.restart();
+                    //     break;
                 }
-                IPC.write(toSend.c_str());
             }
+            IPC.write(toSend.c_str());
         }
     });
 

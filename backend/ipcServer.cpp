@@ -1,7 +1,7 @@
 #include "ipcServer.hpp"
 
 int IPCServer::begin() {
-    system("test -e /tmp/ebike-ipc && touch /tmp/ebike-ipc");
+    system("/bin/bash -c '! [[ -e /tmp/ebike-ipc ]] && touch /tmp/ebike-ipc fi'");
 
     // ftok to generate unique key
     key = ftok("/tmp/ebike-ipc", 999);
