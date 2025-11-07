@@ -43,8 +43,10 @@ IPCServer IPC;
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
+bool done = false;
+
 float acceleration = 0;
-float totalSecondsSinceBoot = 0;
+float uptimeInSeconds = 0;
 float wh_over_km_average = 0;
 float motor_rpm = 0;
 float speed_kmh = 0;
@@ -109,6 +111,7 @@ void tripReset() {
 
 void my_handler(int s) {
     IPC.stop();
+    done = true;
     exit(1);
 }
 
@@ -140,7 +143,7 @@ int main() {
 
     std::thread readThread([&] {
         std::printf("Started IPC Read\n");
-        while(1) {
+        while(!done) {
             std::string toSend;
             std::string whatWasRead;
             whatWasRead = IPC.read();
@@ -202,7 +205,7 @@ int main() {
                         commAddValue(&toSend, estimatedRange.WhPerKm, 1);
                         commAddValue(&toSend, estimatedRange.range, 1);
                         commAddValue(&toSend, 10, 1); // VESC.data.tempMotor
-                        commAddValue(&toSend, totalSecondsSinceBoot, 0);
+                        commAddValue(&toSend, uptimeInSeconds, 0);
                         commAddValue(&toSend, 1000, 0); // timeCore0
                         commAddValue(&toSend, 1100, 0); // timeCore1
                         commAddValue(&toSend, acceleration, 1);
@@ -317,14 +320,27 @@ int main() {
         }
     });
 
+    std::thread uptimeThread([&] {
+        static std::chrono::duration<double, std::micro> usElapsed;
+        while (!done) {
+            auto t1 = std::chrono::high_resolution_clock::now();
+                uptimeInSeconds += usElapsed.count() / 1000000;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            usElapsed = std::chrono::high_resolution_clock::now() - t1;
+        }
+    });
+
     std::printf("Entering loop\n");
-    while (1) {
+    while (!done) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, HIGH);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, LOW);
     }
+
+    uptimeThread.join();
+    readThread.join();
 
     return 0;
 }
