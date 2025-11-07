@@ -45,8 +45,8 @@ float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
     return temp;
 }
 
-void addVUMeter(float input, float input_min, float input_max, const char *label, int precision) {
-    int LED_COUNT = 18;
+void addVUMeter(float input, float input_min, float input_max, const char *label, int precision, int LED_COUNT) {
+    // int LED_COUNT = 18;
     ImGui::PushID(label);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.0f);
     ImGui::BeginGroup();

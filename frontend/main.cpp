@@ -21,7 +21,7 @@
 #include "toml.hpp"
 #include <print>
 
-#include "serial.hpp"
+#include "ipcClient.hpp"
 #include "other.hpp"
 #include "cpuUsage.hpp"
 #include "../comm.h"
@@ -92,8 +92,7 @@ struct {
 struct {
     float TARGET_FPS;
     bool LIMIT_FRAMERATE;
-    std::string serialPortName;
-    int serialWriteWaitMs;
+    int ipcWriteWaitMs;
     int powerProfile;
     bool showMotorRPM;
 } settings;
@@ -127,7 +126,6 @@ struct {
 } movingAverages;
 
 bool done = false;
-bool ready_to_write = true;
 
 char currentTimeAndDate[100];
 
@@ -158,11 +156,11 @@ std::string to_send_extra;
 
 struct {
     CPUUsage ImGui;
-    CPUUsage SerialThread;
+    CPUUsage ipcThread;
     CPUUsage Everything;
 } cpuUsage;
 
-SerialProcessor SerialP;
+IPCClient IPC;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
@@ -220,98 +218,100 @@ void setPowerProfile(int PROFILE) {
     setMcconfValues(mcconf_current);
 }
 
-void processSerialRead(std::string line) {
+void processRead(std::string line) {
         if (!line.empty()) {
             // std::cout << "Received: " << line << "\n";
-            int index = 1;
-            int command_id;
-            auto packet = split(line, ';');
 
-            try {
-                command_id = std::stoi(packet[0]);
-            } catch(...) {
-                std::println("Failed to convert command_id stoi()");
-                command_id = -1;
-            }
+            auto readStringPacket = split(line, '\n');
 
-            if (command_id == COMMAND_ID::ARE_YOU_ALIVE) {
-                    std::cout << "[SERIAL] Succesful communication with Atmega8!" << "\n";
-                    SerialP.succesfulCommunication = true;
-            }
+            for (int i = 0; i < (int)readStringPacket.size(); i++) {
+                auto packet = split(readStringPacket[i], ';');
 
-            if (SerialP.succesfulCommunication) {
-                switch (command_id) {
-                    case COMMAND_ID::GET_BATTERY:
-                        battery.voltage = getValueFromPacket(packet, &index);
-                        battery.current = getValueFromPacket(packet, &index);
-                        battery.watts = getValueFromPacket(packet, &index);
-                        battery.wattHoursUsed = getValueFromPacket(packet, &index);
-                        battery.ampHoursUsed = getValueFromPacket(packet, &index);
-                        battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
-                        battery.ampHoursRated = getValueFromPacket(packet, &index);
-                        battery.percentage = getValueFromPacket(packet, &index);
-                        battery.voltage_min = getValueFromPacket(packet, &index);
-                        battery.voltage_max = getValueFromPacket(packet, &index);
-                        battery.nominalVoltage = getValueFromPacket(packet, &index);
-                        battery.amphours_min_voltage = getValueFromPacket(packet, &index);
-                        battery.amphours_max_voltage = getValueFromPacket(packet, &index);
-                        battery.charging = getValueFromPacket(packet, &index);
-                        break;
+                int index = 1;
+                int command_id = 0;
 
-                    case COMMAND_ID::GET_STATS:
-                        esp32.speed_kmh = getValueFromPacket(packet, &index);
-                        esp32.motor_rpm = getValueFromPacket(packet, &index);
-                        esp32.odometer_distance = getValueFromPacket(packet, &index);
-                        esp32.trip_distance = getValueFromPacket(packet, &index);
-                        esp32.gear_level = getValueFromPacket(packet, &index);
-                        esp32.gear_maxCurrent = getValueFromPacket(packet, &index);
-                        esp32.power_level = getValueFromPacket(packet, &index);
-                        esp32.phase_current = getValueFromPacket(packet, &index);
-                        esp32.wh_over_km_average = getValueFromPacket(packet, &index);
-                        esp32.wh_per_km = getValueFromPacket(packet, &index);
-                        esp32.range_left = getValueFromPacket(packet, &index);
-                        esp32.temperature_motor = getValueFromPacket(packet, &index);
-                        esp32.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
-                        esp32.timeCore0_us = getValueFromPacket(packet, &index);
-                        esp32.timeCore1_us = getValueFromPacket(packet, &index);
-                        esp32.acceleration = getValueFromPacket(packet, &index);
-                        esp32.power_on = (bool)getValueFromPacket(packet, &index);
-                        esp32.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
+                try {
+                    command_id = std::stoi(packet[0]);
+                } catch(...) {
+                    std::println("Failed to convert command_id stoi()");
+                    command_id = -1;
+                }
 
-                        esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
-                        esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
-                        esp32.clockHoursSinceBoot   = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
-                        esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
+                if (command_id == COMMAND_ID::ARE_YOU_ALIVE) {
+                        std::cout << "[IPC] Successful communication with Atmega8!" << "\n";
+                        IPC.successfulCommunication = true;
+                }
 
-                        addValueToArray(2000, temperature_last_values_array, esp32.temperature_motor);
-                        break;
+                if (IPC.successfulCommunication) {
+                    switch (command_id) {
+                        case COMMAND_ID::GET_BATTERY:
+                            battery.voltage = getValueFromPacket(packet, &index);
+                            battery.current = getValueFromPacket(packet, &index);
+                            battery.watts = getValueFromPacket(packet, &index);
+                            battery.wattHoursUsed = getValueFromPacket(packet, &index);
+                            battery.ampHoursUsed = getValueFromPacket(packet, &index);
+                            battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
+                            battery.ampHoursRated = getValueFromPacket(packet, &index);
+                            battery.percentage = getValueFromPacket(packet, &index);
+                            battery.voltage_min = getValueFromPacket(packet, &index);
+                            battery.voltage_max = getValueFromPacket(packet, &index);
+                            battery.nominalVoltage = getValueFromPacket(packet, &index);
+                            battery.amphours_min_voltage = getValueFromPacket(packet, &index);
+                            battery.amphours_max_voltage = getValueFromPacket(packet, &index);
+                            battery.charging = getValueFromPacket(packet, &index);
+                            break;
 
-                    case COMMAND_ID::GET_FW:
-                        esp32.fw_name = getValueFromPacket_string(packet, &index);
-                        esp32.fw_version = getValueFromPacket_string(packet, &index);
-                        esp32.fw_compile_date_time = getValueFromPacket_string(packet, &index);
-                        break;
+                        case COMMAND_ID::GET_STATS:
+                            esp32.speed_kmh = getValueFromPacket(packet, &index);
+                            esp32.motor_rpm = getValueFromPacket(packet, &index);
+                            esp32.odometer_distance = getValueFromPacket(packet, &index);
+                            esp32.trip_distance = getValueFromPacket(packet, &index);
+                            esp32.gear_level = getValueFromPacket(packet, &index);
+                            esp32.gear_maxCurrent = getValueFromPacket(packet, &index);
+                            esp32.power_level = getValueFromPacket(packet, &index);
+                            esp32.phase_current = getValueFromPacket(packet, &index);
+                            esp32.wh_over_km_average = getValueFromPacket(packet, &index);
+                            esp32.wh_per_km = getValueFromPacket(packet, &index);
+                            esp32.range_left = getValueFromPacket(packet, &index);
+                            esp32.temperature_motor = getValueFromPacket(packet, &index);
+                            esp32.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
+                            esp32.timeCore0_us = getValueFromPacket(packet, &index);
+                            esp32.timeCore1_us = getValueFromPacket(packet, &index);
+                            esp32.acceleration = getValueFromPacket(packet, &index);
+                            esp32.power_on = (bool)getValueFromPacket(packet, &index);
+                            esp32.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
 
-                    case COMMAND_ID::READY_TO_WRITE:
-                        ready_to_write = true;
-                        break;
+                            esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
+                            esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
+                            esp32.clockHoursSinceBoot   = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
+                            esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
 
-                    case COMMAND_ID::GET_VESC_MCCONF:
-                        esp32_vesc_mcconf.l_current_min_scale = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_current_max_scale = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_min_erpm = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_max_erpm = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_min_duty = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_max_duty = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_watt_min = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_watt_max = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_in_current_min = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
-                        esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
-                        break;
+                            addValueToArray(2000, temperature_last_values_array, esp32.temperature_motor);
+                            break;
 
-                    case COMMAND_ID::ESP32_LOG:
-                        esp32.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
+                        case COMMAND_ID::GET_FW:
+                            esp32.fw_name = getValueFromPacket_string(packet, &index);
+                            esp32.fw_version = getValueFromPacket_string(packet, &index);
+                            esp32.fw_compile_date_time = getValueFromPacket_string(packet, &index);
+                            break;
+
+                        case COMMAND_ID::GET_VESC_MCCONF:
+                            esp32_vesc_mcconf.l_current_min_scale = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_current_max_scale = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_min_erpm = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_max_erpm = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_min_duty = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_max_duty = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_watt_min = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_watt_max = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_in_current_min = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
+                            esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
+                            break;
+
+                        case COMMAND_ID::BACKEND_LOG:
+                            esp32.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
+                    }
                 }
             }
         }
@@ -328,13 +328,17 @@ int main(int, char**)
     gethostname(hostname, sizeof(hostname));
     printf("Hostname = %s\n", hostname);
 
-    desktopEnvironment = getenv("XDG_CURRENT_DESKTOP");
+
+    if (getenv("XDG_CURRENT_DESKTOP") == NULL) {
+        desktopEnvironment = (char*)"unknown";
+    } else {
+        desktopEnvironment = getenv("XDG_CURRENT_DESKTOP");
+    }
     printf("Desktop Environment = %s\n", desktopEnvironment);
 
     // ####################
     // ##### Settings #####
     // ####################
-
 
     // (42/14)*(57/16) = 10.6875 Gear ratio
     float RPM_PER_KMH = 90.04;
@@ -421,45 +425,37 @@ int main(int, char**)
     // values
     settings.TARGET_FPS         = tbl["settings"]["framerate"].value_or(60);
     settings.LIMIT_FRAMERATE    = tbl["settings"]["limit_framerate"].value_or(0);
-    settings.serialWriteWaitMs  = tbl["settings"]["serialWriteWaitMs"].value_or(50);
+    settings.ipcWriteWaitMs     = tbl["settings"]["ipcWriteWaitMs"].value_or(50);
     settings.powerProfile       = tbl["settings"]["powerProfile"].value_or(POWER_PROFILE::BALANCED);
     settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
 
-    // strings
-    if (auto val = tbl.at_path("settings.serialPortName").value<std::string>()) {
-        settings.serialPortName = *val;
-    }
-
     setPowerProfile(settings.powerProfile);
 
-    // ########################
-    // ##### Serial Port ######
-    // ########################
+    // ################
+    // ##### IPC ######
+    // ################
 
     std::thread backend([&]() -> int {
-        std::cout << "[SERIAL] Initializing" << "\n";
+        std::cout << "[IPC] Initializing" << "\n";
+        if (IPC.begin() == -1) {
+            std::printf("[IPC] Failed to initialize\n");
+        }
 
-        SerialP.init(settings.serialPortName.c_str());
-
-        std::cout << "[SERIAL] Entering main while loop\n";
+        std::cout << "[IPC] Entering main while loop\n";
         while(!done) {
-            cpuUsage.SerialThread.measureStart(1);
-            SerialP.timeout_ms = settings.serialWriteWaitMs;
+            cpuUsage.ipcThread.measureStart(1);
 
             to_send = "";
             static bool sendOnce = false;
 
-            if (!SerialP.succesfulCommunication) {
-                std::string to_send = std::to_string(COMMAND_ID::ARE_YOU_ALIVE);
-                SerialP.writeSerial(to_send.c_str());
-
+            if (!IPC.successfulCommunication) {
                 sendOnce = false;
 
                 // hol'up
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            if (SerialP.succesfulCommunication) { //  && ready_to_write
+            if (IPC.successfulCommunication) {
 
                 timePingEnd = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 750.0) {
@@ -488,14 +484,18 @@ int main(int, char**)
                 to_send.append(to_send_extra);
                 to_send_extra = "";
 
-                SerialP.writeSerial(to_send.c_str());
+                IPC.write(to_send.c_str());
+
+                std::string readFromIPC = IPC.read();
+                processRead(readFromIPC);
+
+                std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
             }
 
-            SerialP.readSerial(processSerialRead);
-            cpuUsage.SerialThread.measureEnd(1);
+            cpuUsage.ipcThread.measureEnd(1);
         }
 
-        close(SerialP.serialPort);
+        IPC.stop();
         return 0;
     });
 
@@ -584,6 +584,8 @@ int main(int, char**)
     // ImGui::StyleColorsLight();
     StyleColorsDarkBreeze(nullptr);
 
+    io.Fonts->AddFontFromFileTTF("ProggyVector-Regular.ttf", 13.0);
+
     // Setup scaling
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
@@ -665,9 +667,6 @@ int main(int, char**)
             timeDrawStart = std::chrono::steady_clock::now();
             ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
 
-            // Account for the notch on the device's left side
-            ImGui::Dummy(ImVec2(28.0, 10.0));
-            ImGui::SameLine();
             ImGui::BeginGroup();
 
             ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_FittingPolicyScroll;
@@ -698,12 +697,12 @@ int main(int, char**)
 
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
-                            static bool succesfulCommunication_avoidMutex;
-                            if (!SerialP.succesfulCommunication) {
-                                succesfulCommunication_avoidMutex = false;
+                            static bool successfulCommunication_avoidMutex;
+                            if (!IPC.successfulCommunication) {
+                                successfulCommunication_avoidMutex = false;
                                 ImGui::BeginDisabled();
                             } else {
-                                succesfulCommunication_avoidMutex = true;
+                                successfulCommunication_avoidMutex = true;
                             }
                             ImGui::Text("Power info");
                             movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
@@ -746,11 +745,11 @@ int main(int, char**)
                         ImGui::Dummy(ImVec2(0, 3));
                         ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
                         ImGui::BeginGroup();
-                            addVUMeter(esp32.phase_current, 0.0f, 250.0f, "PhA", 0);
+                            addVUMeter(esp32.phase_current, 0.0f, 250.0f, "PhA", 0, 14);
                             ImGui::SameLine();
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
-                            addVUMeter(esp32.temperature_motor, 25.0f, 100.0f, "T", 0);
+                            addVUMeter(esp32.temperature_motor, 25.0f, 100.0f, "T", 0, 14);
                         ImGui::EndGroup();
                         ImVec2 groupEnd = ImGui::GetItemRectMax();       // Bottom-right of the group
                         ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -770,12 +769,13 @@ int main(int, char**)
 
 
                     // Wh/km
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 5.9, io.DisplaySize.y / 1.7));
+                    ImGui::SetCursorPosX(io.DisplaySize.x / 2.7);
+                    ImGui::SetCursorPosY(100);
                     ImGui::BeginGroup();
-                        movingAverages.wattage.moveAverage(battery.watts);
-                        powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
+                        // movingAverages.wattage.moveAverage(battery.watts);
+                        // powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
                         // ImGui::SameLine();
-                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
+                        // ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
                         ImGui::BeginGroup();
                             float whOverKmAveraged = 0.0;
                             if (esp32.speed_kmh > 0.5) {
@@ -784,7 +784,7 @@ int main(int, char**)
                                 whOverKmAveraged = 999.0;
                             }
 
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                                 ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", esp32.wh_over_km_average, whOverKmAveraged);
                             ImGui::PopFont();
 
@@ -794,7 +794,7 @@ int main(int, char**)
 
                             {
                                 char text[128];
-                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.7);
+                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.4);
                                 if (esp32.speed_kmh >= 50.0) {
                                     sprintf(text, "%0.1fkm/h >:(", esp32.speed_kmh);
                                 } else {
@@ -805,10 +805,17 @@ int main(int, char**)
                                 ImGui::PopFont();
                             }
 
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                                 ImGui::Text("Range: %0.1f", esp32.range_left);
                                 // movingAverages.acceleration.moveAverage(esp32.acceleration);
-                                ImGui::Text("Accel: %0.1f km/h/s", esp32.acceleration);
+                                ImGui::Text("Accel: %0.1f", esp32.acceleration);
+
+                                if (ImGui::IsItemHovered()) {
+                                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
+                                    ImGui::SetTooltip("measured in km/h per second");
+                                    ImGui::PopFont();
+                                }
+
                                 if (settings.showMotorRPM)
                                     ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
 
@@ -836,11 +843,11 @@ int main(int, char**)
                                 // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
 
                                 ImVec2 cursorPos = ImGui::GetContentRegionAvail();
-                                cursorPos.x = (cursorPos.x / 2.0) - 125.0 - 8.0;
+                                cursorPos.x = (cursorPos.x / 2.0) - 145.0 - 8.0;
 
                                 ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 80.0f));
 
-                                ImGui::SetNextItemWidth(250.0);
+                                ImGui::SetNextItemWidth(230.0);
                                 if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
                                     setPowerProfile(POWER_PROFILE_CURRENT);
                                     updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
@@ -861,15 +868,15 @@ int main(int, char**)
                     ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
                     ImGui::Separator();
 
-                    if (!succesfulCommunication_avoidMutex) {
+                    if (!successfulCommunication_avoidMutex) {
                         ImGui::EndDisabled();
                     }
 
                     ImGui::SameLine();
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (float)(SerialP.succesfulCommunication ? 140.0f : 180.0f), io.DisplaySize.y - 35.0f));
-                    ImVec4 color = SerialP.succesfulCommunication ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) // Green
+                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (float)(IPC.successfulCommunication ? 140.0f : 180.0f), io.DisplaySize.y - 35.0f));
+                    ImVec4 color = IPC.successfulCommunication ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) // Green
                                                                   : ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
-                    ImGui::TextColored(color, SerialP.succesfulCommunication ? "Connected" : "Disconnected");
+                    ImGui::TextColored(color, IPC.successfulCommunication ? "Connected" : "Disconnected");
 
                     ImGui::EndTabItem();
                 }
@@ -907,25 +914,21 @@ int main(int, char**)
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("Serial");
+                            ImGui::SeparatorText("IPC");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Text("Serial write wait time ");
+                            ImGui::Text("IPC Status: %s", IPC.successfulCommunication ? "connected" : "disconnected");
+                            if (ImGui::Button("Reconnect")) {
+                                IPC.begin();
+                            }
+
+                            ImGui::Text("IPC write wait time ");
                             ImGui::SameLine();
                             ImGui::SetNextItemWidth(150.0f);
-                            if (ImGui::InputInt("ms", &settings.serialWriteWaitMs, 1, 100)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "serialWriteWaitMs", settings.serialWriteWaitMs);
+                            if (ImGui::InputInt("ms", &settings.ipcWriteWaitMs, 1, 100)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
                             }
-
-                            if (ImGui::CollapsingHeader("SerialPort Buffer")) {
-                                ImGui::Dummy(ImVec2(30, 0));
-                                ImGui::SameLine();
-                                ImGui::TextColored(ImVec4(1.0f, 0.89f, 0.32f, 1.0f), SerialP.receivedDataToRead.c_str());
-                            }
-
-                            ImGui::Text("Receive rate %0.1f ms / %0.1f Hz", SerialP.receiveRateMs, (1000.0 / SerialP.receiveRateMs));
-                            ImGui::Text("Buffer: %d (bytes)", SerialP.bytesInBuffer);
 
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -942,7 +945,7 @@ int main(int, char**)
                             ImGui::Text("CPU Usage (100%% is 1 core)");
                             ImGui::Text("       All:    %0.2f%%", cpuUsage.Everything.cpu_percent);
                             ImGui::Text("       ImGui:  %0.2f%%", cpuUsage.ImGui.cpu_percent);
-                            ImGui::Text("       Serial: %0.2f%%", cpuUsage.SerialThread.cpu_percent);
+                            ImGui::Text("       IPC:    %0.2f%%", cpuUsage.ipcThread.cpu_percent);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("Drawtime: %0.1fms", timeDrawDiff);
@@ -990,12 +993,6 @@ int main(int, char**)
 
                             float buttonWidth = 260.0;
                             float buttonHeight = 80.0;
-
-                            if (ImGui::Button("Restart ESP32", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::ESP32_RESTART)));
-                            }
-
-                            ImGui::Dummy(ImVec2(0, 20));
 
                             static char newOdometerValue[30];
                             ImGui::Text("Odometer = ");
@@ -1111,14 +1108,6 @@ int main(int, char**)
                             ImGui::EndTabItem();
                         }
 
-                        if (ImGui::BeginTabItem("Serial Log"))
-                        {
-                            std::string SerialLog;
-                            SerialLog = SerialP.log;
-
-                            ImGui::InputTextMultiline("##", (char*)SerialLog.c_str(), sizeof(SerialLog.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
-                            ImGui::EndTabItem();
-                        }
                         ImGui::EndTabBar(); //TABBAR2
                     }
                     ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
