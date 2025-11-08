@@ -335,21 +335,13 @@ int main() {
                         break;
 
                     case COMMAND_ID::TOGGLE_CHARGING_STATE:
-                        if (battery.charging) {
-                            battery.charging = false;
-                        } else {
-                            battery.charging = true;
-                        }
+                        battery.charging = !battery.charging;
 
                         toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.charging));
                         break;
 
                     case COMMAND_ID::TOGGLE_REGEN_BRAKING:
-                        if (settings.regenerativeBraking) {
-                            settings.regenerativeBraking = false;
-                        } else {
-                            settings.regenerativeBraking = true;
-                        }
+                        settings.regenerativeBraking = !settings.regenerativeBraking;
 
                         toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
                         break;
