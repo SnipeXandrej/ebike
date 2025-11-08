@@ -5,6 +5,10 @@
 #include <string>
 #include <sstream>
 #include <print>
+#include <iostream>
+#include "toml.hpp"
+
+void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, const char* setting_name, double value);
 
 float getValueFromPacket(std::vector<std::string> token, int index);
 

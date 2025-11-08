@@ -19,7 +19,6 @@
 #include "ipcServer.hpp"
 #include "utils.hpp"
 #include "../comm.h"
-IPCServer IPC;
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
@@ -43,6 +42,12 @@ IPCServer IPC;
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
+IPCServer IPC;
+toml::table tbl;
+
+// TODO: do not hardcode filepaths
+const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
+
 bool done = false;
 
 float acceleration = 0;
@@ -52,23 +57,27 @@ float motor_rpm = 0;
 float speed_kmh = 0;
 
 struct {
-    float voltage = 0.72;
+    float percentage;
+    double watts;
+    double current;
+    float voltage;
+    float voltage_nominal;
     float voltage_min;
     float voltage_max;
-    float current;
-    float ampHoursUsed;
-    float ampHoursUsedLifetime;
-    float watts;
-    float wattHoursUsed;
-    float percentage;
-    float ampHoursRated;
-    float ampHoursRated_tmp;
     float amphours_min_voltage;
     float amphours_max_voltage;
-    bool charging = false;
 
-    float wattHoursRated;
-    float nominalVoltage;
+    double ampHoursUsed;
+    double ampHoursUsedLifetime;
+    double ampHoursFullyCharged;
+    double ampHoursFullyCharged_tmp;
+    double ampHoursRated;
+
+    double wattHoursUsed;
+    double wattHoursRated;
+
+
+    bool charging = false;
 } battery;
 
 struct {
@@ -115,6 +124,30 @@ void my_handler(int s) {
     exit(1);
 }
 
+void setupTOML() {
+    // TODO: if settings.toml doesnt exist, create it
+    tbl = toml::parse_file(SETTINGS_FILEPATH);
+
+    // values
+    odometer.distance                       = tbl["odometer"]["distance"].value_or<double>(-1);
+    trip.distance                           = tbl["trip"]["distance"].value_or<double>(-1);
+    battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(-1);
+    battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(-1);
+    battery.ampHoursRated                   = tbl["battery"]["ampHoursRated"].value_or<double>(-1);
+    settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"].value_or(0);
+    settings.regenerativeBraking            = tbl["settings"]["regenerativeBraking"].value_or(0);
+}
+
+void saveAll() {
+    updateTableValue(SETTINGS_FILEPATH, "odometer", "distance", odometer.distance);
+    updateTableValue(SETTINGS_FILEPATH, "trip", "distance", trip.distance);
+    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsed", battery.ampHoursUsed);
+    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
+    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursRated", battery.ampHoursRated);
+    updateTableValue(SETTINGS_FILEPATH, "settings", "batteryPercentageVoltageBased", settings.batteryPercentageVoltageBased);
+    updateTableValue(SETTINGS_FILEPATH, "settings", "regenerativeBraking", settings.regenerativeBraking);
+}
+
 void setupGPIO() {
     // Initialize
     wiringPiSetupGpio();
@@ -128,11 +161,21 @@ void setupGPIO() {
     // Setup pins
     pinMode(        A0_EXP, OUTPUT);
     pullUpDnControl(A0_EXP, PUD_DOWN);
+
+    // PWM test
+    pinMode(12, PWM_OUTPUT);
+    pwmSetClock(1000); // 4.8MHz / divisor
 }
 
 int main() {
+    if (getuid() != 0) {
+        std::printf("Run me as root, please :(\n");
+        return -1;
+    }
+
     signal(SIGINT, my_handler);
 
+    setupTOML();
     setupGPIO();
     if (IPC.begin() == -1) {
         std::printf("IPC failed to initialize, exiting...\n");
@@ -147,7 +190,6 @@ int main() {
             std::string toSend;
             std::string whatWasRead;
             whatWasRead = IPC.read();
-
             // std::cout << whatWasRead << "\n";
 
             auto readStringPacket = split(whatWasRead, '\n');
@@ -172,12 +214,13 @@ int main() {
                         commAddValue(&toSend, battery.watts, 1);
                         commAddValue(&toSend, battery.wattHoursUsed, 1);
                         commAddValue(&toSend, battery.ampHoursUsed, 6);
-                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 1);
+                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 2);
+                        commAddValue(&toSend, battery.ampHoursFullyCharged, 2);
                         commAddValue(&toSend, battery.ampHoursRated, 2);
                         commAddValue(&toSend, battery.percentage, 1);
                         commAddValue(&toSend, battery.voltage_min, 1);
                         commAddValue(&toSend, battery.voltage_max, 1);
-                        commAddValue(&toSend, battery.nominalVoltage, 1);
+                        commAddValue(&toSend, battery.voltage_nominal, 1);
                         commAddValue(&toSend, battery.amphours_min_voltage, 1);
                         commAddValue(&toSend, battery.amphours_max_voltage, 1);
                         commAddValue(&toSend, battery.charging, 0);
@@ -220,10 +263,10 @@ int main() {
                         toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), odometer.distance));
                         break;
 
-                    // case COMMAND_ID::SAVE_PREFERENCES:
-                    //     preferenceActions.saveAll();
-                    //     toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                    //     break;
+                    case COMMAND_ID::SAVE_PREFERENCES:
+                        saveAll();
+                        toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        break;
 
                     case COMMAND_ID::RESET_TRIP:
                         tripReset();
@@ -284,8 +327,8 @@ int main() {
                         {
                             float newValue = getValueFromPacket(packet, 1);
 
-                            battery.ampHoursRated = newValue;
-                            battery.ampHoursRated_tmp = newValue;
+                            battery.ampHoursFullyCharged = newValue;
+                            battery.ampHoursFullyCharged_tmp = newValue;
 
                             toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), newValue));
                         }
@@ -310,10 +353,6 @@ int main() {
 
                         toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
                         break;
-
-                    // case COMMAND_ID::ESP32_RESTART:
-                    //     ESP.restart();
-                    //     break;
                 }
             }
             IPC.write(toSend.c_str());
@@ -321,22 +360,27 @@ int main() {
     });
 
     std::thread uptimeThread([&] {
+        std::printf("Started uptime counting\n");
         static std::chrono::duration<double, std::micro> usElapsed;
         while (!done) {
             auto t1 = std::chrono::high_resolution_clock::now();
-                uptimeInSeconds += usElapsed.count() / 1000000;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            uptimeInSeconds += usElapsed.count() / 1000000;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             usElapsed = std::chrono::high_resolution_clock::now() - t1;
         }
     });
 
-    std::printf("Entering loop\n");
+    std::printf("Enter loop\n");
     while (!done) {
+        // MCP Pin Expander pin switcing
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, HIGH);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, LOW);
+
+        // PWM
+        pwmWrite(12, 256); // 0 - 1023
     }
 
     uptimeThread.join();
