@@ -107,6 +107,7 @@ struct {
     float watts;
     float wattHoursUsed;
     float percentage;
+    float ampHoursFullyCharged;
     float ampHoursRated;
     float ampHoursRated_tmp;
     float ampHoursRatedWhenNew = 32.0;
@@ -251,6 +252,7 @@ void processRead(std::string line) {
                             battery.wattHoursUsed = getValueFromPacket(packet, &index);
                             battery.ampHoursUsed = getValueFromPacket(packet, &index);
                             battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
+                            battery.ampHoursFullyCharged = getValueFromPacket(packet, &index);
                             battery.ampHoursRated = getValueFromPacket(packet, &index);
                             battery.percentage = getValueFromPacket(packet, &index);
                             battery.voltage_min = getValueFromPacket(packet, &index);
@@ -435,6 +437,7 @@ int main(int, char**)
     // ##### IPC ######
     // ################
 
+    static std::chrono::duration<double, std::milli> msElapsed;
     std::thread backend([&]() -> int {
         std::cout << "[IPC] Initializing" << "\n";
         if (IPC.begin() == -1) {
@@ -456,6 +459,7 @@ int main(int, char**)
             }
 
             if (IPC.successfulCommunication) {
+                auto t1 = std::chrono::high_resolution_clock::now();
 
                 timePingEnd = std::chrono::steady_clock::now();
                 if (std::chrono::duration<double, std::milli>(timePingEnd - timePingStart).count() >= 750.0) {
@@ -490,6 +494,7 @@ int main(int, char**)
                 processRead(readFromIPC);
 
                 std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
+                msElapsed = std::chrono::high_resolution_clock::now() - t1;
             }
 
             cpuUsage.ipcThread.measureEnd(1);
@@ -919,6 +924,7 @@ int main(int, char**)
                             ImGui::PopFont();
 
                             ImGui::Text("IPC Status: %s", IPC.successfulCommunication ? "connected" : "disconnected");
+                            ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsed.count()), msElapsed.count());
                             if (ImGui::Button("Reconnect")) {
                                 IPC.begin();
                             }
@@ -965,7 +971,7 @@ int main(int, char**)
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("ESP32 / EBIKE");
+                            ImGui::SeparatorText("BACKEND / EBIKE");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
@@ -991,7 +997,7 @@ int main(int, char**)
 
                             ImGui::Dummy(ImVec2(0, 20));
 
-                            float buttonWidth = 260.0;
+                            float buttonWidth = 200.0;
                             float buttonHeight = 80.0;
 
                             static char newOdometerValue[30];
