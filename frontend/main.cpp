@@ -126,6 +126,15 @@ struct {
     MovingAverage whOverKm;
 } movingAverages;
 
+struct {
+    double analog1; // Input 0
+    double analog2; // Input 1
+    double analog3; // Input 2
+    double analog4; // Input 3
+    double analogDiff1; // Input 4+5
+    double analogDiff2; // Input 6+7
+} analogReadings;
+
 bool done = false;
 
 char currentTimeAndDate[100];
@@ -311,6 +320,15 @@ void processRead(std::string line) {
                             esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
                             break;
 
+                        case COMMAND_ID::GET_ANALOG_READINGS:
+                            analogReadings.analog1 = getValueFromPacket(packet, &index);
+                            analogReadings.analog2 = getValueFromPacket(packet, &index);
+                            analogReadings.analog3 = getValueFromPacket(packet, &index);
+                            analogReadings.analog4 = getValueFromPacket(packet, &index);
+                            analogReadings.analogDiff1 = getValueFromPacket(packet, &index);
+                            analogReadings.analogDiff2 = getValueFromPacket(packet, &index);
+                            break;
+
                         case COMMAND_ID::BACKEND_LOG:
                             esp32.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
                     }
@@ -483,6 +501,8 @@ int main(int, char**)
                 commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
                 to_send.append("\n");
                 commAddValue(&to_send, COMMAND_ID::GET_STATS, 0);
+                to_send.append("\n");
+                commAddValue(&to_send, COMMAND_ID::GET_ANALOG_READINGS, 0);
                 to_send.append("\n");
 
                 to_send.append(to_send_extra);
@@ -992,8 +1012,8 @@ int main(int, char**)
                             ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("Core 0 loop exec time: %0.0f us", esp32.timeCore0_us);
-                            ImGui::Text("Core 1 loop exec time: %0.0f us", esp32.timeCore1_us);
+                            ImGui::Text("main while loop: %0.0f us / %0.0f Hz", esp32.timeCore0_us, 1000000 / esp32.timeCore0_us);
+                            // ImGui::Text("Core 1 loop exec time: %0.0f us", esp32.timeCore1_us);
 
                             ImGui::Dummy(ImVec2(0, 20));
 
@@ -1102,6 +1122,25 @@ int main(int, char**)
                                 if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                     setMcconfValues(esp32_vesc_mcconf);
                                 }
+                            ImGui::EndGroup();
+
+
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::SeparatorText("Analog Readings");
+                            ImGui::PopStyleColor();
+                            ImGui::PopFont();
+
+                            ImGui::BeginGroup();
+                            {
+                                float ItemWidth = 150.0;
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %f", analogReadings.analog1);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %f", analogReadings.analog2);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %f", analogReadings.analog3);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %f", analogReadings.analog4);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff1: %f", analogReadings.analogDiff1);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff2: %f", analogReadings.analogDiff2);
+                            }
                             ImGui::EndGroup();
 
                             ImGui::EndChild();
