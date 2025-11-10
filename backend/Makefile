@@ -3,7 +3,7 @@ MAKEFLAGS += -j$(shell nproc)
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += ipcServer.cpp utils.cpp
+SOURCES += ipcServer.cpp utils.cpp ads1256.cpp
 
 OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 CXXFLAGS = -std=c++23 -g -Wall

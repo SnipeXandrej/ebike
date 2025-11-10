@@ -15,6 +15,7 @@
 
 #include <wiringPi.h>
 #include <mcp23017.h>
+#include "ads1256.hpp"
 
 #include "ipcServer.hpp"
 #include "utils.hpp"
@@ -42,13 +43,24 @@
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
+#define ADC_CS 8
+#define ADC_MISO 9
+#define ADC_MOSI 10
+#define ADC_SCLK 11
+#define ADC_DRDY 5
+#define ADC_RST 0
+#define ADC_SYNC 6
+
 IPCServer IPC;
 toml::table tbl;
+ADS1256 ADC;
+int spiHandle;
 
 // TODO: do not hardcode filepaths
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
 
 bool done = false;
+std::chrono::duration<double, std::micro> whileLoopUsElapsed;
 
 float acceleration = 0;
 float uptimeInSeconds = 0;
@@ -107,6 +119,15 @@ struct {
     bool regenerativeBraking = 0;
 } settings;
 
+struct {
+    double analog1; // Input 0
+    double analog2; // Input 1
+    double analog3; // Input 2
+    double analog4; // Input 3
+    double analogDiff1; // Input 4+5
+    double analogDiff2; // Input 6+7
+} analogReadings;
+
 void estimatedRangeReset() {
     estimatedRange.wattHoursUsedOnStart  = battery.wattHoursUsed;
     estimatedRange.distance              = 0.0;
@@ -120,6 +141,7 @@ void tripReset() {
 
 void my_handler(int s) {
     IPC.stop();
+    close(spiHandle);
     done = true;
     exit(1);
 }
@@ -167,6 +189,13 @@ void setupGPIO() {
     pwmSetClock(1000); // 4.8MHz / divisor
 }
 
+void setupADC() {
+    ADC.cfg_ADS1256_sample_rate = ADS1256_DRATE_2000SPS;
+	ADC.initPins();
+	// spiHandle = ADC.openSPI(1920000);
+	ADC.init(&spiHandle, 1920000);
+}
+
 int main() {
     if (getuid() != 0) {
         std::printf("Run me as root, please :(\n");
@@ -183,6 +212,8 @@ int main() {
     } else {
         std::printf("IPC initialized\n");
     }
+
+    setupADC();
 
     std::thread readThread([&] {
         std::printf("Started IPC Read\n");
@@ -249,7 +280,7 @@ int main() {
                         commAddValue(&toSend, estimatedRange.range, 1);
                         commAddValue(&toSend, 10, 1); // VESC.data.tempMotor
                         commAddValue(&toSend, uptimeInSeconds, 0);
-                        commAddValue(&toSend, 1000, 0); // timeCore0
+                        commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
                         commAddValue(&toSend, 1100, 0); // timeCore1
                         commAddValue(&toSend, acceleration, 1);
                         commAddValue(&toSend, true, 0); //POWER_ON
@@ -345,6 +376,17 @@ int main() {
 
                         toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
                         break;
+                    case COMMAND_ID::GET_ANALOG_READINGS:
+                        commAddValue(&toSend, COMMAND_ID::GET_ANALOG_READINGS, 0);
+                        commAddValue(&toSend, analogReadings.analog1, 10);
+                        commAddValue(&toSend, analogReadings.analog2, 10);
+                        commAddValue(&toSend, analogReadings.analog3, 10);
+                        commAddValue(&toSend, analogReadings.analog4, 10);
+                        commAddValue(&toSend, analogReadings.analogDiff1, 10);
+                        commAddValue(&toSend, analogReadings.analogDiff2, 10);
+
+                        toSend.append("\n");
+                        break;
                 }
             }
             IPC.write(toSend.c_str());
@@ -362,17 +404,42 @@ int main() {
         }
     });
 
+    double data;
     std::printf("Enter loop\n");
     while (!done) {
+		auto t1 = std::chrono::high_resolution_clock::now();
+
         // MCP Pin Expander pin switcing
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, HIGH);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        // std::this_thread::sleep_for(std::chrono::milliseconds(250));
         digitalWrite(A0_EXP, LOW);
 
         // PWM
         pwmWrite(12, 256); // 0 - 1023
+
+        // Analog reading
+		data = ADC.readChannel(0);
+		analogReadings.analogDiff2= ADC.convertToVoltage(data);
+
+		data = ADC.readChannel(1);
+		analogReadings.analog1 = ADC.convertToVoltage(data);
+
+		data = ADC.readChannel(2);
+		analogReadings.analog2 = ADC.convertToVoltage(data);
+
+		data = ADC.readChannel(3);
+		analogReadings.analog3 = ADC.convertToVoltage(data);
+
+		data = ADC.readDiffChannel(2);
+		analogReadings.analog4 = ADC.convertToVoltage(data);
+
+		data = ADC.readDiffChannel(3);
+		analogReadings.analogDiff1 = ADC.convertToVoltage(data);
+
+        whileLoopUsElapsed = std::chrono::high_resolution_clock::now() - t1;
+		// std::printf("it took %lf us\n measured value: 1: %f 2: %f 3: %f 4: %f 5: %f 6: %f\n", usElapsed.count(), analogReadings.analog1, analogReadings.analog2, analogReadings.analog3, analogReadings.analog4, analogReadings.analogDiff1, analogReadings.analogDiff2);
     }
 
     uptimeThread.join();
