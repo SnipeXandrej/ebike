@@ -356,30 +356,44 @@ int main() {
                         toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.ampHoursUsedLifetime));
                         break;
 
-                    // case COMMAND_ID::GET_VESC_MCCONF:
-                    //     idx = FNPOOL::GET_MCCONF_TEMP;
-                    //     if (xQueueSend(core0_queue, &idx, portMAX_DELAY) == pdTRUE) {
-                    //         toSend.append(std::format("{};xQueueSent!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                    //     };
+                    case COMMAND_ID::GET_VESC_MCCONF:
+                        if (VESC.getMcconfTempValues()) {
+                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
+                            commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
+                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
+                            toSend.append(VESC.data_mcconf.name); toSend.append(";");
+                            toSend.append("\n");
 
-                    //     break;
+                            toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        } else {
+                            toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        }
+                        break;
 
-                    // case COMMAND_ID::SET_VESC_MCCONF:
-                    //     VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
-                    //     VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
-                    //     VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
-                    //     VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
-                    //     VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
-                    //     VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
-                    //     VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
-                    //     VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
-                    //     VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
-                    //     VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
-                    //     VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
-                    //     VESC.setMcconfTempValues();
+                    case COMMAND_ID::SET_VESC_MCCONF:
+                        VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
+                        VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
+                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
+                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
+                        VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
+                        VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
+                        VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
+                        VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
+                        VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
+                        VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
+                        VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
+                        VESC.setMcconfTempValues();
 
-                    //     toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                    //     break;
+                        toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        break;
 
                     case COMMAND_ID::SET_AMPHOURS_CHARGED:
                         {
@@ -432,44 +446,48 @@ int main() {
         }
     });
 
+    std::thread VESCThread([&] {
+        while (!done) {
+            if (VESC.getVescValues()) {
+                // if the previous measurement is bigger than the current, that means
+                // that the VESC was probably powered off and on, so the stats got reset...
+                // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
+                // large number and therefore screw up our distance measurement
+                if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
+                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                }
+
+                // prevent the diff to be something extremely big
+                if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
+                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                }
+
+                if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
+                    trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
+                    // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
+
+                    trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+
+                    // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
+                    trip.distance += trip.distanceDiff;
+                    odometer.distance += trip.distanceDiff;
+                    estimatedRange.distance += trip.distanceDiff;
+
+                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                }
+
+                motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
+                speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+            }
+
+            VESC.setCurrent(10.0f);
+        }
+    });
+
     double data;
     std::printf("Enter loop\n");
     while (!done) {
 		auto t1 = std::chrono::high_resolution_clock::now();
-
-        if (VESC.getVescValues()) {
-            // if the previous measurement is bigger than the current, that means
-            // that the VESC was probably powered off and on, so the stats got reset...
-            // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
-            // large number and therefore screw up our distance measurement
-            if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            // prevent the diff to be something extremely big
-            if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
-                trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
-                // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
-
-                trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
-
-                // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
-                trip.distance += trip.distanceDiff;
-                odometer.distance += trip.distanceDiff;
-                estimatedRange.distance += trip.distanceDiff;
-
-                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
-            }
-
-            motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
-            speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
-        }
-
-        VESC.setCurrent(10.0f);
 
         bool powerOn_tmp = digitalRead(pinPowerswitch);
         if (powerOn_tmp != powerOn) {
@@ -541,6 +559,7 @@ int main() {
 
     uptimeThread.join();
     readThread.join();
+    VESCThread.join();
 
     return 0;
 }
