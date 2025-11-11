@@ -310,6 +310,18 @@ float getValueFromPacket(std::vector<std::string> token, int *index) {
     return -1;
 }
 
+double getValueFromPacket_double(std::vector<std::string> token, int *index) {
+    if (*index < (int)token.size()) {
+        double ret = std::stod(token[*index]);
+        *index = *index+1;
+
+        return ret;
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
 std::string getValueFromPacket_string(std::vector<std::string> token, int *index) {
     if (*index < (int)token.size()) {
         std::string ret = token[*index];

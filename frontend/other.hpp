@@ -46,6 +46,8 @@ void powerVerticalDiagonalHorizontal(float input);
 
 float getValueFromPacket(std::vector<std::string> token, int *index);
 
+double getValueFromPacket_double(std::vector<std::string> token, int *index);
+
 std::string getValueFromPacket_string(std::vector<std::string> token, int *index);
 
 uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index);

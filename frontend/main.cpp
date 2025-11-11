@@ -131,8 +131,9 @@ struct {
     double analog2; // Input 1
     double analog3; // Input 2
     double analog4; // Input 3
-    double analogDiff1; // Input 4+5
-    double analogDiff2; // Input 6+7
+    double analog5; // Input 4
+    double analog6; // Input 5
+    double analogDiff1; // Input 6+7
 } analogReadings;
 
 bool done = false;
@@ -321,12 +322,13 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::GET_ANALOG_READINGS:
-                            analogReadings.analog1 = getValueFromPacket(packet, &index);
-                            analogReadings.analog2 = getValueFromPacket(packet, &index);
-                            analogReadings.analog3 = getValueFromPacket(packet, &index);
-                            analogReadings.analog4 = getValueFromPacket(packet, &index);
-                            analogReadings.analogDiff1 = getValueFromPacket(packet, &index);
-                            analogReadings.analogDiff2 = getValueFromPacket(packet, &index);
+                            analogReadings.analog1 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog2 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog3 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog4 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog5 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog6 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analogDiff1 = getValueFromPacket_double(packet, &index);
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
@@ -1134,12 +1136,13 @@ int main(int, char**)
                             ImGui::BeginGroup();
                             {
                                 float ItemWidth = 150.0;
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %f", analogReadings.analog1);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %f", analogReadings.analog2);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %f", analogReadings.analog3);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %f", analogReadings.analog4);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff1: %f", analogReadings.analogDiff1);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff2: %f", analogReadings.analogDiff2);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.15lf", analogReadings.analog1);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.15lf", analogReadings.analog2);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.15lf", analogReadings.analog3);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.15lf", analogReadings.analog4);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.15lf", analogReadings.analog5);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.15lf", analogReadings.analog6);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff1: %0.15lf", analogReadings.analogDiff1);
                             }
                             ImGui::EndGroup();
 
