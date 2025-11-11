@@ -17,6 +17,8 @@
 #include <mcp23017.h>
 #include "ads1256.hpp"
 
+#include "myUart.hpp"
+#include "VescUart/VescUart.h"
 #include "ipcServer.hpp"
 #include "utils.hpp"
 #include "../comm.h"
@@ -58,6 +60,8 @@
 IPCServer IPC;
 toml::table tbl;
 ADS1256 ADC;
+VescUart VESC;
+MyUart uartVESC;
 int spiHandle;
 
 // TODO: do not hardcode filepaths
@@ -134,6 +138,17 @@ struct {
     double analog5; // Input 5 // Battery voltage
     double analogDiff1; // Input 6+7 // Battery Current
 } analogReadings;
+
+struct {
+    int poles = 18;
+    int magnetPairs = 3;
+    float rpmPerKmh = 90.04;
+} motor;
+
+struct {
+    float diameter = 63.0;
+    float gear_ratio = 10.6875;
+} wheel;
 
 void estimatedRangeReset() {
     estimatedRange.wattHoursUsedOnStart  = battery.wattHoursUsed;
@@ -219,11 +234,13 @@ int main() {
 
     signal(SIGINT, my_handler);
 
+    setupIPC();  // IPC
     setupTOML(); // settings
     setupGPIO(); // RPi GPIO
     setupMCP();  // Pin Expander
     setupADC();  // ADC
-    setupIPC();  // IPC
+    std::printf("UART: %d\n", uartVESC.begin(B115200));
+    VESC.setSerialPort(&uartVESC);
 
     std::thread readThread([&] {
         std::printf("Started IPC Read\n");
@@ -284,16 +301,16 @@ int main() {
                         commAddValue(&toSend, 0, 0); // was gearCurrent.level
                         commAddValue(&toSend, 0, 0); // was gearCurrent.maxCurrent
                         commAddValue(&toSend, 0, 0); // was selectedPowerMode
-                        commAddValue(&toSend, 0, 1); // VESC.data.avgMotorCurrent
+                        commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
                         commAddValue(&toSend, wh_over_km_average, 1);
                         commAddValue(&toSend, estimatedRange.WhPerKm, 1);
                         commAddValue(&toSend, estimatedRange.range, 1);
-                        commAddValue(&toSend, 10, 1); // VESC.data.tempMotor
+                        commAddValue(&toSend, VESC.data.tempMotor, 1);
                         commAddValue(&toSend, uptimeInSeconds, 0);
                         commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
                         commAddValue(&toSend, 1100, 0); // timeCore1
                         commAddValue(&toSend, acceleration, 1);
-                        commAddValue(&toSend, powerOn, 0); //POWER_ON
+                        commAddValue(&toSend, powerOn, 0);
                         commAddValue(&toSend, settings.regenerativeBraking, 0);
 
                         toSend.append("\n");
@@ -419,6 +436,40 @@ int main() {
     std::printf("Enter loop\n");
     while (!done) {
 		auto t1 = std::chrono::high_resolution_clock::now();
+
+        if (VESC.getVescValues()) {
+            // if the previous measurement is bigger than the current, that means
+            // that the VESC was probably powered off and on, so the stats got reset...
+            // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
+            // large number and therefore screw up our distance measurement
+            if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+            }
+
+            // prevent the diff to be something extremely big
+            if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+            }
+
+            if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
+                trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
+                // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
+
+                trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+
+                // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
+                trip.distance += trip.distanceDiff;
+                odometer.distance += trip.distanceDiff;
+                estimatedRange.distance += trip.distanceDiff;
+
+                trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+            }
+
+            motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
+            speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+        }
+
+        VESC.setCurrent(10.0f);
 
         bool powerOn_tmp = digitalRead(pinPowerswitch);
         if (powerOn_tmp != powerOn) {

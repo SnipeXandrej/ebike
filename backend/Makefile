@@ -3,9 +3,11 @@ MAKEFLAGS += -j$(shell nproc)
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += ipcServer.cpp utils.cpp ads1256.cpp
+SOURCES += ipcServer.cpp utils.cpp ads1256.cpp myUart.cpp
+SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
-OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
+# OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
+OBJS = $(SOURCES:.cpp=.o)
 CXXFLAGS = -std=c++23 -g -Wall
 
 LIBS = -lwiringPi
