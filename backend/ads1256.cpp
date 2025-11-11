@@ -135,7 +135,7 @@ void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256
 	digitalWrite(ADS1256_RESET, LOW);//pi.write(18, 0)    # ADS1256 /RESET low
 	usleep(1000); // wait 1 msec
 	digitalWrite(ADS1256_RESET, HIGH); //pi.write(18, 1)    # ADS1256 /RESET high
-	usleep(500 * 1000); // wait 500 msec
+	usleep(50000); // wait 50 msec
 
 	waitDRDY();
 
@@ -159,7 +159,7 @@ void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256
 	unsigned char data_sr[1];
 	data_sr[0] = '\xfe';
 	write(ADS1256_spiHandle, data_sr, 1);
-	usleep(300000);
+	usleep(10000); // wait 10 msec
 
 	// set register 00 (STATUS) reg.00,one byte,no autocal, buffer=2
 	waitDRDY();
@@ -171,7 +171,7 @@ void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256
 	data_status[3] = '\x00';
 	data_status[4] = (char)(cfg_ADS1256_input_buffer << 1); /*buffer enable*/
 	write(ADS1256_spiHandle, data_status, 5);
-	usleep(100000); // wait 0.1 msec
+	usleep(10000); // wait 10 msec
 
 	// set register 02 (ADCON)
 	waitDRDY();
@@ -183,7 +183,7 @@ void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256
 	data_adcon[3] = '\x00';
 	data_adcon[4] = cfg_ADS1256_input_gain;
 	write(ADS1256_spiHandle, data_adcon, 5);
-	usleep(100000); // wait 0.1 msec
+	usleep(10000); // wait 10 msec
 
 	// register 03 (DRATE) reg.03,one byte,10 samples per secondc
 	waitDRDY();
@@ -195,7 +195,7 @@ void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256
 	data_drate[3] = '\x00';
 	data_drate[4] = cfg_ADS1256_sample_rate;
 	write(ADS1256_spiHandle, data_drate, 5);
-	usleep(100000); // wait 0.1 msec
+	usleep(10000); // wait 10 msec
 }
 
 int ADS1256::openSPI(int spiSpeed) {

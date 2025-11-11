@@ -32,6 +32,15 @@ float getValueFromPacket(std::vector<std::string> token, int index) {
     return -1;
 }
 
+double getValueFromPacket_double(std::vector<std::string> token, int index) {
+    if (index < (int)token.size()) {
+        return std::stod(token[index]);
+    }
+
+    std::println("Index out of bounds");
+    return -1;
+}
+
 uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
     if (index < (int)token.size()) {
         std::stringstream stream(token[index]);
@@ -63,6 +72,26 @@ std::vector<std::string> split(const std::string& input, char delimiter) {
     }
 
     return result;
+}
+
+float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
+    float temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+
+    if (temp < out_min)
+        temp = out_min;
+
+    if (temp > out_max)
+        temp = out_max;
+
+    return temp;
+}
+
+float map_f_nochecks(float x, float in_min, float in_max, float out_min, float out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+}
+
+double map_d_nochecks(double x, double in_min, double in_max, double out_min, double out_max) {
+    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
 void commAddValue(std::string* string, double value, int precision) {

@@ -49,9 +49,11 @@
 #define ADC_CS          8
 #define ADC_PWDN        6
 #define ADC_SPI_SPEED   1920000
-#define ADC_GAIN        ADS1256_GAIN_1
-#define ADC_SAMPLERATE  ADS1256_DRATE_2000SPS
+#define ADC_GAIN        ADS1256_GAIN_16
+#define ADC_SAMPLERATE  ADS1256_DRATE_1000SPS
 #define ADC_INPUTBUFFER false
+
+#define pinPowerswitch A4_EXP
 
 IPCServer IPC;
 toml::table tbl;
@@ -69,17 +71,20 @@ float uptimeInSeconds = 0;
 float wh_over_km_average = 0;
 float motor_rpm = 0;
 float speed_kmh = 0;
+float throttleLevel = 0;
+float throttleBrakeLevel = 0;
+bool  powerOn = false;
 
 struct {
     float percentage;
     double watts;
     double current;
     float voltage;
-    float voltage_nominal;
-    float voltage_min;
-    float voltage_max;
-    float amphours_min_voltage;
-    float amphours_max_voltage;
+    float voltage_nominal = 72.0;
+    float voltage_min = 64.0;
+    float voltage_max = 84.0;
+    float amphours_min_voltage = 66.0;
+    float amphours_max_voltage = 82.0;
 
     double ampHoursUsed;
     double ampHoursUsedLifetime;
@@ -121,12 +126,13 @@ struct {
 } settings;
 
 struct {
-    double analog1; // Input 0
-    double analog2; // Input 1
-    double analog3; // Input 2
-    double analog4; // Input 3
-    double analogDiff1; // Input 4+5
-    double analogDiff2; // Input 6+7
+    double analog0; // Input 0 // Throttle
+    double analog1; // Input 1 // Throtle brake
+    double analog2; // Input 2
+    double analog3; // Input 3
+    double analog4; // Input 4
+    double analog5; // Input 5 // Battery voltage
+    double analogDiff1; // Input 6+7 // Battery Current
 } analogReadings;
 
 void estimatedRangeReset() {
@@ -188,8 +194,8 @@ void setupMCP() {
     }
 
     // Setup pins
-    pinMode(        A0_EXP, OUTPUT);
-    pullUpDnControl(A0_EXP, PUD_DOWN);
+    pinMode(        pinPowerswitch, INPUT);
+    // pullUpDnControl(pinPowerswitch, PUD_DOWN);
 }
 
 void setupADC() {
@@ -287,7 +293,7 @@ int main() {
                         commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
                         commAddValue(&toSend, 1100, 0); // timeCore1
                         commAddValue(&toSend, acceleration, 1);
-                        commAddValue(&toSend, true, 0); //POWER_ON
+                        commAddValue(&toSend, powerOn, 0); //POWER_ON
                         commAddValue(&toSend, settings.regenerativeBraking, 0);
 
                         toSend.append("\n");
@@ -382,12 +388,13 @@ int main() {
                         break;
                     case COMMAND_ID::GET_ANALOG_READINGS:
                         commAddValue(&toSend, COMMAND_ID::GET_ANALOG_READINGS, 0);
-                        commAddValue(&toSend, analogReadings.analog1, 10);
-                        commAddValue(&toSend, analogReadings.analog2, 10);
-                        commAddValue(&toSend, analogReadings.analog3, 10);
-                        commAddValue(&toSend, analogReadings.analog4, 10);
-                        commAddValue(&toSend, analogReadings.analogDiff1, 10);
-                        commAddValue(&toSend, analogReadings.analogDiff2, 10);
+                        commAddValue(&toSend, analogReadings.analog0, 15);
+                        commAddValue(&toSend, analogReadings.analog1, 15);
+                        commAddValue(&toSend, analogReadings.analog2, 15);
+                        commAddValue(&toSend, analogReadings.analog3, 15);
+                        commAddValue(&toSend, analogReadings.analog4, 15);
+                        commAddValue(&toSend, analogReadings.analog5, 15);
+                        commAddValue(&toSend, analogReadings.analogDiff1, 15);
 
                         toSend.append("\n");
                         break;
@@ -402,7 +409,7 @@ int main() {
         static std::chrono::duration<double, std::micro> usElapsed;
         while (!done) {
             auto t1 = std::chrono::high_resolution_clock::now();
-            uptimeInSeconds += usElapsed.count() / 1000000;
+            uptimeInSeconds += usElapsed.count() / 1000000.0;
             std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             usElapsed = std::chrono::high_resolution_clock::now() - t1;
         }
@@ -413,37 +420,72 @@ int main() {
     while (!done) {
 		auto t1 = std::chrono::high_resolution_clock::now();
 
-        // MCP Pin Expander pin switcing
-        // std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        digitalWrite(A0_EXP, HIGH);
+        bool powerOn_tmp = digitalRead(pinPowerswitch);
+        if (powerOn_tmp != powerOn) {
+            powerOn = powerOn_tmp;
+            if (powerOn) {
+                // run code when turned on
+                std::printf("Power on\n");
 
-        // std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        digitalWrite(A0_EXP, LOW);
+            }
+
+            if (!powerOn) {
+                // run code when turned off
+                std::printf("Power off\n");
+
+            }
+        }
 
         // PWM
         pwmWrite(12, 256); // 0 - 1023
 
         // Analog reading
 		data = ADC.readChannel(0);
-		analogReadings.analogDiff2= ADC.convertToVoltage(data);
-
+		analogReadings.analogDiff1 = ADC.convertToVoltage(data) - 0.000002;
 		data = ADC.readChannel(1);
-		analogReadings.analog1 = ADC.convertToVoltage(data);
-
+		analogReadings.analog0 = ADC.convertToVoltage(data) - 0.0094;
 		data = ADC.readChannel(2);
-		analogReadings.analog2 = ADC.convertToVoltage(data);
-
+		analogReadings.analog1 = ADC.convertToVoltage(data) - 0.0094;
 		data = ADC.readChannel(3);
-		analogReadings.analog3 = ADC.convertToVoltage(data);
-
-		data = ADC.readDiffChannel(2);
-		analogReadings.analog4 = ADC.convertToVoltage(data);
-
+		analogReadings.analog2 = ADC.convertToVoltage(data) - 0.00945;
+        data = ADC.readChannel(4);
+		analogReadings.analog3 = ADC.convertToVoltage(data) - 0.00945;
+        data = ADC.readChannel(5);
+		analogReadings.analog4 = ADC.convertToVoltage(data) - 0.00945;
 		data = ADC.readDiffChannel(3);
-		analogReadings.analogDiff1 = ADC.convertToVoltage(data);
+		analogReadings.analog5 = ADC.convertToVoltage(data) - 0.00941; // OK
+
+        // throttleLevel
+        static float throttleR1 = 10000;
+        static float throttleR2 = 560;
+        static float throttleVMaxInput = 5;
+        static float throttleVMax = (throttleVMaxInput * throttleR2) / (throttleR1 + throttleR2);
+
+        // throttleBrakeLevel
+        static float throttleBrakeR1 = 10000;
+        static float throttleBrakeR2 = 560;
+        static float throttleBrakeVMaxInput = 5;
+        static float throttleBrakeVMax = (throttleBrakeVMaxInput * throttleBrakeR2) / (throttleBrakeR1 + throttleBrakeR2);
+
+        // battery.voltage
+        static float batteryVoltageR1 = 220000;
+        static float batteryVoltageR2 = 560;
+        static float batteryVoltageVMaxInput = 100;
+        static float batteryVoltageVMax = (batteryVoltageVMaxInput * batteryVoltageR2) / (batteryVoltageR1 + batteryVoltageR2);
+
+        static double inputReadMaxV = (5.0 / 16.0);
+        static double mvPerAmp = 0.0015;
+
+        // map those readings
+        throttleLevel       = map_f_nochecks(analogReadings.analog0, 0.0, throttleVMax, 0.0, 100);
+        throttleBrakeLevel  = map_f_nochecks(analogReadings.analog1, 0.0, throttleBrakeVMax, 0.0, 100);
+        battery.voltage     = map_f_nochecks(analogReadings.analog5, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
+        battery.current     = map_d_nochecks(analogReadings.analogDiff1, 0.0, inputReadMaxV, 0.0, (inputReadMaxV/mvPerAmp));
+
+        // calculate other stuff
+        battery.watts = battery.voltage * battery.current;
 
         whileLoopUsElapsed = std::chrono::high_resolution_clock::now() - t1;
-		// std::printf("it took %lf us\n measured value: 1: %f 2: %f 3: %f 4: %f 5: %f 6: %f\n", usElapsed.count(), analogReadings.analog1, analogReadings.analog2, analogReadings.analog3, analogReadings.analog4, analogReadings.analogDiff1, analogReadings.analogDiff2);
     }
 
     uptimeThread.join();
