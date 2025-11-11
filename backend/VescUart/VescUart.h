@@ -32,6 +32,8 @@ class VescUart
         float pidPos;
         uint8_t id;
         mc_fault_code error; 
+
+        float maxMotorCurrent;
 	};
 
   struct dataCurrentMCCONFTemp {
