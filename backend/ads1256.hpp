@@ -15,11 +15,6 @@
 #include <string>
 #include <sstream>
 
-#define ADS1256_DRDY  5
-#define ADS1256_RESET -1
-#define ADS1256_CS 8
-#define ADS1256_PDWN 6
-
 #define SPICHANNEL 1
 
 //Differential inputs
@@ -115,9 +110,7 @@
 
 class ADS1256 {
 public:
-	void initPins();
-
-	void init(int *spiHandle, int spiSpeed);
+	void init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int ADS1256_RESET, int ADS1256_CS, int ADS1256_PDWN, char _inputgain, char _samplerate, bool _inputbuffer);
 
 	void delayDATA(void);
 
@@ -146,6 +139,11 @@ public:
 	bool cfg_ADS1256_input_buffer=false;
 
 	int ADS1256_spiHandle=-1;
+
+	int ADS1256_DRDY;
+	int ADS1256_RESET;
+	int ADS1256_CS;
+	int ADS1256_PDWN;
 };
 
 #endif

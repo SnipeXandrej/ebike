@@ -43,13 +43,15 @@
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
-#define ADC_CS 8
-#define ADC_MISO 9
-#define ADC_MOSI 10
-#define ADC_SCLK 11
-#define ADC_DRDY 5
-#define ADC_RST 0
-#define ADC_SYNC 6
+// BCM pin numbering
+#define ADC_DRDY        5
+#define ADC_RST         -1
+#define ADC_CS          8
+#define ADC_PWDN        6
+#define ADC_SPI_SPEED   1920000
+#define ADC_GAIN        ADS1256_GAIN_1
+#define ADC_SAMPLERATE  ADS1256_DRATE_2000SPS
+#define ADC_INPUTBUFFER false
 
 IPCServer IPC;
 toml::table tbl;
@@ -87,7 +89,6 @@ struct {
 
     double wattHoursUsed;
     double wattHoursRated;
-
 
     bool charging = false;
 } battery;
@@ -175,6 +176,12 @@ void setupGPIO() {
     wiringPiSetupGpio();
     std::printf("wiringPi initialized\n");
 
+    // PWM test
+    pinMode(12, PWM_OUTPUT);
+    pwmSetClock(1000); // 4.8MHz / divisor
+}
+
+void setupMCP() {
     if (!mcp23017Setup(MCP23017_BASEPIN, MCP23017_ADDRESS)) {
         std::printf("MCP23017 failed to initialize, exiting...\n");
         exit(1);
@@ -183,17 +190,19 @@ void setupGPIO() {
     // Setup pins
     pinMode(        A0_EXP, OUTPUT);
     pullUpDnControl(A0_EXP, PUD_DOWN);
-
-    // PWM test
-    pinMode(12, PWM_OUTPUT);
-    pwmSetClock(1000); // 4.8MHz / divisor
 }
 
 void setupADC() {
-    ADC.cfg_ADS1256_sample_rate = ADS1256_DRATE_2000SPS;
-	ADC.initPins();
-	// spiHandle = ADC.openSPI(1920000);
-	ADC.init(&spiHandle, 1920000);
+	ADC.init(&spiHandle, ADC_SPI_SPEED, ADC_DRDY, ADC_RST, ADC_CS, ADC_PWDN, ADC_GAIN, ADC_SAMPLERATE, ADC_INPUTBUFFER);
+}
+
+void setupIPC() {
+    if (IPC.begin() == -1) {
+        std::printf("IPC failed to initialize, exiting...\n");
+        exit(1);
+    } else {
+        std::printf("IPC initialized\n");
+    }
 }
 
 int main() {
@@ -204,16 +213,11 @@ int main() {
 
     signal(SIGINT, my_handler);
 
-    setupTOML();
-    setupGPIO();
-    if (IPC.begin() == -1) {
-        std::printf("IPC failed to initialize, exiting...\n");
-        exit(1);
-    } else {
-        std::printf("IPC initialized\n");
-    }
-
-    setupADC();
+    setupTOML(); // settings
+    setupGPIO(); // RPi GPIO
+    setupMCP();  // Pin Expander
+    setupADC();  // ADC
+    setupIPC();  // IPC
 
     std::thread readThread([&] {
         std::printf("Started IPC Read\n");

@@ -1,23 +1,5 @@
 #include "ads1256.hpp"
 
-void ADS1256::initPins() {
-	printf("Initializing pins\n");
-
-	pinMode(ADS1256_DRDY, INPUT);
-	pinMode(ADS1256_RESET, OUTPUT);
-	pinMode(ADS1256_CS, OUTPUT);
-	pinMode(ADS1256_PDWN, OUTPUT);
-
-	digitalWrite(ADS1256_CS, HIGH); // pi.write(22, 1)    // ADS1256 /CS deselected
-	digitalWrite(ADS1256_PDWN, HIGH); // pi.write(27, 1)    // ADS1256 /PDWN high
-	digitalWrite(ADS1256_RESET, HIGH); // pi.write(18, 1)    // ADS1256 /RESET high
-
-	digitalWrite(ADS1256_RESET, LOW);//pi.write(18, 0)    # ADS1256 /RESET low
-	usleep(1000); // wait 1 msec
-	digitalWrite(ADS1256_RESET, HIGH); //pi.write(18, 1)    # ADS1256 /RESET high
-	usleep(500 * 1000); // wait 500 msec
-}
-
 /**
  *  according to the datasheet t6 must be at least 50*1/CLKIN = 6.5µs
  *  at a clock rate of 200kHz the time between clock low and next clock rise would be 5µs which means we would have to wait for just 1.5µs
@@ -127,10 +109,33 @@ uint8_t ADS1256::readChipID()
 	return (id >> 4);
 }
 
-void ADS1256::init(int *spiHandle, int spiSpeed) {
+void ADS1256::init(int *spiHandle, int spiSpeed, int _ADS1256_DRDY, int _ADS1256_RESET, int _ADS1256_CS, int _ADS1256_PDWN, char _inputgain, char _samplerate, bool _inputbuffer) {
 	cfg_spiSpeed = spiSpeed;
 	ADS1256_spiHandle = *spiHandle;
+	ADS1256_DRDY = _ADS1256_DRDY;
+	ADS1256_RESET = _ADS1256_RESET;
+	ADS1256_CS = _ADS1256_CS;
+	ADS1256_PDWN = _ADS1256_PDWN;
+	cfg_ADS1256_input_gain = _inputgain;
+	cfg_ADS1256_sample_rate = _samplerate;
+	cfg_ADS1256_input_buffer = _inputbuffer;
+
 	ADS1256_spiHandle = openSPI(cfg_spiSpeed);
+
+	printf("Initializing pins\n");
+	pinMode(ADS1256_DRDY, INPUT);
+	pinMode(ADS1256_RESET, OUTPUT);
+	pinMode(ADS1256_CS, OUTPUT);
+	pinMode(ADS1256_PDWN, OUTPUT);
+
+	digitalWrite(ADS1256_CS, HIGH); // pi.write(22, 1)    // ADS1256 /CS deselected
+	digitalWrite(ADS1256_PDWN, HIGH); // pi.write(27, 1)    // ADS1256 /PDWN high
+	digitalWrite(ADS1256_RESET, HIGH); // pi.write(18, 1)    // ADS1256 /RESET high
+
+	digitalWrite(ADS1256_RESET, LOW);//pi.write(18, 0)    # ADS1256 /RESET low
+	usleep(1000); // wait 1 msec
+	digitalWrite(ADS1256_RESET, HIGH); //pi.write(18, 1)    # ADS1256 /RESET high
+	usleep(500 * 1000); // wait 500 msec
 
 	waitDRDY();
 
