@@ -55,7 +55,7 @@ struct VESC_MCCONF {
     // float gear_ratio;
     // float wheel_diameter;
 };
-VESC_MCCONF esp32_vesc_mcconf, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance, mcconf_performance2;
+VESC_MCCONF mcconf_vesc, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance, mcconf_performance2;
 
 struct {
     float totalSecondsSinceBoot = 0;
@@ -86,7 +86,7 @@ struct {
     std::string fw_name;
     std::string fw_version;
     std::string fw_compile_date_time;
-} esp32;
+} backend;
 
 // Limit FPS
 struct {
@@ -273,51 +273,51 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::GET_STATS:
-                            esp32.speed_kmh = getValueFromPacket(packet, &index);
-                            esp32.motor_rpm = getValueFromPacket(packet, &index);
-                            esp32.odometer_distance = getValueFromPacket(packet, &index);
-                            esp32.trip_distance = getValueFromPacket(packet, &index);
-                            esp32.gear_level = getValueFromPacket(packet, &index);
-                            esp32.gear_maxCurrent = getValueFromPacket(packet, &index);
-                            esp32.power_level = getValueFromPacket(packet, &index);
-                            esp32.phase_current = getValueFromPacket(packet, &index);
-                            esp32.wh_over_km_average = getValueFromPacket(packet, &index);
-                            esp32.wh_per_km = getValueFromPacket(packet, &index);
-                            esp32.range_left = getValueFromPacket(packet, &index);
-                            esp32.temperature_motor = getValueFromPacket(packet, &index);
-                            esp32.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
-                            esp32.timeCore0_us = getValueFromPacket(packet, &index);
-                            esp32.timeCore1_us = getValueFromPacket(packet, &index);
-                            esp32.acceleration = getValueFromPacket(packet, &index);
-                            esp32.power_on = (bool)getValueFromPacket(packet, &index);
-                            esp32.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
+                            backend.speed_kmh = getValueFromPacket(packet, &index);
+                            backend.motor_rpm = getValueFromPacket(packet, &index);
+                            backend.odometer_distance = getValueFromPacket(packet, &index);
+                            backend.trip_distance = getValueFromPacket(packet, &index);
+                            backend.gear_level = getValueFromPacket(packet, &index);
+                            backend.gear_maxCurrent = getValueFromPacket(packet, &index);
+                            backend.power_level = getValueFromPacket(packet, &index);
+                            backend.phase_current = getValueFromPacket(packet, &index);
+                            backend.wh_over_km_average = getValueFromPacket(packet, &index);
+                            backend.wh_per_km = getValueFromPacket(packet, &index);
+                            backend.range_left = getValueFromPacket(packet, &index);
+                            backend.temperature_motor = getValueFromPacket(packet, &index);
+                            backend.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
+                            backend.timeCore0_us = getValueFromPacket(packet, &index);
+                            backend.timeCore1_us = getValueFromPacket(packet, &index);
+                            backend.acceleration = getValueFromPacket(packet, &index);
+                            backend.power_on = (bool)getValueFromPacket(packet, &index);
+                            backend.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
 
-                            esp32.clockSecondsSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot) % 60;
-                            esp32.clockMinutesSinceBoot = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0) % 60;
-                            esp32.clockHoursSinceBoot   = (uint64_t)(esp32.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
-                            esp32.clockDaysSinceBoot    = esp32.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
+                            backend.clockSecondsSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot) % 60;
+                            backend.clockMinutesSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot / 60.0) % 60;
+                            backend.clockHoursSinceBoot   = (uint64_t)(backend.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
+                            backend.clockDaysSinceBoot    = backend.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
 
-                            addValueToArray(2000, temperature_last_values_array, esp32.temperature_motor);
+                            addValueToArray(2000, temperature_last_values_array, backend.temperature_motor);
                             break;
 
                         case COMMAND_ID::GET_FW:
-                            esp32.fw_name = getValueFromPacket_string(packet, &index);
-                            esp32.fw_version = getValueFromPacket_string(packet, &index);
-                            esp32.fw_compile_date_time = getValueFromPacket_string(packet, &index);
+                            backend.fw_name = getValueFromPacket_string(packet, &index);
+                            backend.fw_version = getValueFromPacket_string(packet, &index);
+                            backend.fw_compile_date_time = getValueFromPacket_string(packet, &index);
                             break;
 
                         case COMMAND_ID::GET_VESC_MCCONF:
-                            esp32_vesc_mcconf.l_current_min_scale = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_current_max_scale = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_min_erpm = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_max_erpm = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_min_duty = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_max_duty = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_watt_min = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_watt_max = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_in_current_min = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.l_in_current_max = getValueFromPacket(packet, &index);
-                            esp32_vesc_mcconf.name = getValueFromPacket_string(packet, &index);
+                            mcconf_vesc.l_current_min_scale = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_current_max_scale = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_min_erpm = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_max_erpm = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_min_duty = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_max_duty = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_watt_min = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_watt_max = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_in_current_min = getValueFromPacket(packet, &index);
+                            mcconf_vesc.l_in_current_max = getValueFromPacket(packet, &index);
+                            mcconf_vesc.name = getValueFromPacket_string(packet, &index);
                             break;
 
                         case COMMAND_ID::GET_ANALOG_READINGS:
@@ -330,7 +330,7 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
-                            esp32.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
+                            backend.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
                     }
                 }
             }
@@ -456,7 +456,7 @@ int main(int, char**)
     // ################
 
     static std::chrono::duration<double, std::milli> msElapsed;
-    std::thread backend([&]() -> int {
+    std::thread commThread([&]() -> int {
         std::cout << "[IPC] Initializing" << "\n";
         if (IPC.begin() == -1) {
             std::printf("[IPC] Failed to initialize\n");
@@ -489,7 +489,7 @@ int main(int, char**)
                     commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
                     to_send.append("\n");
 
-                    if (esp32_vesc_mcconf.name != mcconf_current.name || sendOnce == false) {
+                    if (mcconf_vesc.name != mcconf_current.name || sendOnce == false) {
                         sendOnce = true;
 
                         setPowerProfile(mcconf_current.id);
@@ -632,13 +632,13 @@ int main(int, char**)
         cpuUsage.Everything.measureStart(0);
 
         static bool power_on_old = false;
-        if (esp32.power_on && power_on_old != esp32.power_on) {
-            power_on_old = esp32.power_on;
+        if (backend.power_on && power_on_old != backend.power_on) {
+            power_on_old = backend.power_on;
 
             // Run this when the bike gets powered on
             std::thread(setBrightnessHigh).detach();
-        } else if (!esp32.power_on && power_on_old != esp32.power_on) {
-            power_on_old = esp32.power_on;
+        } else if (!backend.power_on && power_on_old != backend.power_on) {
+            power_on_old = backend.power_on;
 
             // Run this when the bike gets powered off
             std::thread(setBrightnessLow).detach();
@@ -738,13 +738,13 @@ int main(int, char**)
 
                             ImGui::Dummy(ImVec2(0.0, 40.0));
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.75);
-                                ImGui::TextColored(esp32.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
+                                ImGui::TextColored(backend.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
                             ImGui::PopFont();
                             if (ImGui::IsItemClicked())
                                 to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
 
                             if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", esp32.regenerativeBraking ? "on" : "off");
+                                ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", backend.regenerativeBraking ? "on" : "off");
 
                         ImGui::EndGroup();
                         //
@@ -770,11 +770,11 @@ int main(int, char**)
                         ImGui::Dummy(ImVec2(0, 3));
                         ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
                         ImGui::BeginGroup();
-                            addVUMeter(esp32.phase_current, 0.0f, 250.0f, "PhA", 0, 14);
+                            addVUMeter(backend.phase_current, 0.0f, 250.0f, "PhA", 0, 14);
                             ImGui::SameLine();
                             ImGui::Dummy(ImVec2(2, 0));
                             ImGui::SameLine();
-                            addVUMeter(esp32.temperature_motor, 25.0f, 100.0f, "T", 0, 14);
+                            addVUMeter(backend.temperature_motor, 25.0f, 100.0f, "T", 0, 14);
                         ImGui::EndGroup();
                         ImVec2 groupEnd = ImGui::GetItemRectMax();       // Bottom-right of the group
                         ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -803,14 +803,14 @@ int main(int, char**)
                         // ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
                         ImGui::BeginGroup();
                             float whOverKmAveraged = 0.0;
-                            if (esp32.speed_kmh > 0.5) {
-                                whOverKmAveraged = movingAverages.whOverKm.moveAverage(battery.watts / esp32.speed_kmh);
+                            if (backend.speed_kmh > 0.5) {
+                                whOverKmAveraged = movingAverages.whOverKm.moveAverage(battery.watts / backend.speed_kmh);
                             } else {
                                 whOverKmAveraged = 999.0;
                             }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                                ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", esp32.wh_over_km_average, whOverKmAveraged);
+                                ImGui::Text("Wh/km: %0.1f¹\n       %0.1f²", backend.wh_over_km_average, whOverKmAveraged);
                             ImGui::PopFont();
 
                             if (ImGui::IsItemHovered()) {
@@ -820,10 +820,10 @@ int main(int, char**)
                             {
                                 char text[128];
                                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.4);
-                                if (esp32.speed_kmh >= 50.0) {
-                                    sprintf(text, "%0.1fkm/h >:(", esp32.speed_kmh);
+                                if (backend.speed_kmh >= 50.0) {
+                                    sprintf(text, "%0.1fkm/h >:(", backend.speed_kmh);
                                 } else {
-                                    sprintf(text, "%0.1fkm/h", esp32.speed_kmh);
+                                    sprintf(text, "%0.1fkm/h", backend.speed_kmh);
                                 }
                                 ImGui::Text(text);
                                 // TextCenteredOnLine(text, -0.5f, false);
@@ -831,9 +831,9 @@ int main(int, char**)
                             }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                                ImGui::Text("Range: %0.1f", esp32.range_left);
-                                // movingAverages.acceleration.moveAverage(esp32.acceleration);
-                                ImGui::Text("Accel: %0.1f", esp32.acceleration);
+                                ImGui::Text("Range: %0.1f", backend.range_left);
+                                // movingAverages.acceleration.moveAverage(backend.acceleration);
+                                ImGui::Text("Accel: %0.1f", backend.acceleration);
 
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
@@ -842,7 +842,7 @@ int main(int, char**)
                                 }
 
                                 if (settings.showMotorRPM)
-                                    ImGui::Text("Motor RPM: %4.0f", esp32.motor_rpm);
+                                    ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
 
                             ImGui::PopFont();
                         ImGui::EndGroup();
@@ -857,9 +857,9 @@ int main(int, char**)
                         ImGui::BeginGroup();
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
                             ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
-                                sprintf(text, "O: %0.0f", esp32.odometer_distance);
+                                sprintf(text, "O: %0.0f", backend.odometer_distance);
                                 TextCenteredOnLine(text, 0.0f, false);
-                                sprintf(text, "T: %4.1f", esp32.trip_distance);
+                                sprintf(text, "T: %4.1f", backend.trip_distance);
                             ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
                                 TextCenteredOnLine(text, 1.0f, false);
                             ImGui::PopFont();
@@ -995,25 +995,25 @@ int main(int, char**)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Text("Powered on: %s", esp32.power_on ? "True" : "False");
+                            ImGui::Text("Powered on: %s", backend.power_on ? "True" : "False");
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
 
                             ImGui::Text("Firmware");
                             char text[50];
-                            sprintf(text, "   Name: %s", esp32.fw_name.c_str());
+                            sprintf(text, "   Name: %s", backend.fw_name.c_str());
                             ImGui::Text(text);
 
-                            sprintf(text, "   Version: %s", esp32.fw_version.c_str());
+                            sprintf(text, "   Version: %s", backend.fw_version.c_str());
                             ImGui::Text(text);
 
-                            sprintf(text, "   Compile Time: %s", esp32.fw_compile_date_time.c_str());
+                            sprintf(text, "   Compile Time: %s", backend.fw_compile_date_time.c_str());
                             ImGui::Text(text);
 
-                            ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", esp32.clockDaysSinceBoot, esp32.clockHoursSinceBoot, esp32.clockMinutesSinceBoot, esp32.clockSecondsSinceBoot);
+                            ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("main while loop: %0.0f us / %0.0f Hz", esp32.timeCore0_us, 1000000 / esp32.timeCore0_us);
-                            // ImGui::Text("Core 1 loop exec time: %0.0f us", esp32.timeCore1_us);
+                            ImGui::Text("main while loop: %0.0f us / %0.0f Hz", backend.timeCore0_us, 1000000 / backend.timeCore0_us);
+                            // ImGui::Text("Core 1 loop exec time: %0.0f us", backend.timeCore1_us);
 
                             ImGui::Dummy(ImVec2(0, 20));
 
@@ -1102,17 +1102,17 @@ int main(int, char**)
 
                             ImGui::BeginGroup();
                                 float ItemWidth = 150.0;
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &esp32_vesc_mcconf.l_current_min_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &esp32_vesc_mcconf.l_current_max_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &esp32_vesc_mcconf.l_min_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &esp32_vesc_mcconf.l_max_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &esp32_vesc_mcconf.l_min_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &esp32_vesc_mcconf.l_max_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &esp32_vesc_mcconf.l_watt_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &esp32_vesc_mcconf.l_watt_max);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &esp32_vesc_mcconf.l_in_current_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &esp32_vesc_mcconf.l_in_current_max);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", esp32_vesc_mcconf.name.c_str());
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
 
                                 if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
@@ -1120,7 +1120,7 @@ int main(int, char**)
                                 }
                                 ImGui::SameLine();
                                 if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    setMcconfValues(esp32_vesc_mcconf);
+                                    setMcconfValues(mcconf_vesc);
                                 }
                             ImGui::EndGroup();
 
@@ -1149,7 +1149,7 @@ int main(int, char**)
 
                         if (ImGui::BeginTabItem("E-BIKE Log"))
                         {
-                            ImGui::InputTextMultiline("##", (char*)esp32.log.c_str(), sizeof(esp32.log.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+                            ImGui::InputTextMultiline("##", (char*)backend.log.c_str(), sizeof(backend.log.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                             ImGui::EndTabItem();
                         }
 
@@ -1215,7 +1215,7 @@ int main(int, char**)
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    backend.join();
+    commThread.join();
 
     return 0;
 }
