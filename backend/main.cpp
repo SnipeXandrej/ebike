@@ -359,7 +359,7 @@ int main() {
                         commAddValue(&toSend, battery.voltage, 2);
                         commAddValue(&toSend, battery.currentForFrontend, 4);
                         commAddValue(&toSend, battery.watts, 1);
-                        commAddValue(&toSend, battery.wattHoursUsed, 1);
+                        commAddValue(&toSend, battery.wattHoursUsed, 5);
                         commAddValue(&toSend, battery.ampHoursUsed, 6);
                         commAddValue(&toSend, battery.ampHoursUsedLifetime, 2);
                         commAddValue(&toSend, battery.ampHoursFullyCharged, 2);
