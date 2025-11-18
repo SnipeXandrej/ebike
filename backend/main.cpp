@@ -577,7 +577,7 @@ int main() {
                 speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     });
 
@@ -613,17 +613,15 @@ int main() {
         analogReadings.analog5 = ((float)analogRead(A5_ADC) / 1023.0) * 3.3;
         analogReadings.analog6 = ((float)analogRead(A6_ADC) / 1023.0) * 3.3;
         analogReadings.analog7 = ((float)analogRead(A7_ADC) / 1023.0) * 3.3;
-
         double batteryCurrentRaw = -analogRead(ADS1115_BASEPIN+5);
 
         static double mvPerAmp = 1.186;
         double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */;
         battery.current = batteryCurrentMv / mvPerAmp;
-
         battery.currentForFrontend = movingAverages.batteryCurrent.moveAverage(batteryCurrentMv / mvPerAmp);
 
         // throttleLevel
-        static float throttleMinVoltage = 0.9;
+        static float throttleMinVoltage = 0.95;
         static float throttleMaxVoltage = 2.5;
 
         // throttleBrakeLevel
@@ -631,7 +629,7 @@ int main() {
         // static float throttleBrakeMaxVoltage = 2.5;
 
         // battery.voltage
-        static float batteryVoltageR1 = 220000 + 3500 /* Correction value */;
+        static float batteryVoltageR1 = 220000 + 3500 /* +3500 is the correction value */;
         static float batteryVoltageR2 = 4700+1000+1000+1000;
         static float batteryVoltageVMaxInput = 100;
         static float batteryVoltageVMax = (batteryVoltageVMaxInput * batteryVoltageR2) / (batteryVoltageR1 + batteryVoltageR2);
