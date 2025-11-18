@@ -551,6 +551,8 @@ unsigned int VescUart::millis (void) {
   now  = (uint64_t)ts.tv_sec * (uint64_t)1000 + (uint64_t)(ts.tv_nsec / 1000000L) ;
 #endif
 
+std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
   return (uint32_t)(now - epochMilli) ;
 }
 

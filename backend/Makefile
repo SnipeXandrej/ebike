@@ -3,7 +3,7 @@ MAKEFLAGS += -j$(shell nproc)
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += ipcServer.cpp utils.cpp ads1256.cpp myUart.cpp
+SOURCES += ipcServer.cpp utils.cpp myUart.cpp ads1115.cpp
 SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
 # OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))

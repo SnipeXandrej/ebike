@@ -108,9 +108,7 @@ struct {
     float wattHoursUsed;
     float percentage;
     float ampHoursFullyCharged;
-    float ampHoursRated;
-    float ampHoursRated_tmp;
-    float ampHoursRatedWhenNew = 32.0;
+    float ampHoursFullyChargedWhenNew;
     float amphours_min_voltage;
     float amphours_max_voltage;
     bool charging = 0;
@@ -127,13 +125,14 @@ struct {
 } movingAverages;
 
 struct {
-    double analog1; // Input 0
-    double analog2; // Input 1
-    double analog3; // Input 2
-    double analog4; // Input 3
-    double analog5; // Input 4
-    double analog6; // Input 5
-    double analogDiff1; // Input 6+7
+    double analog0;
+    double analog1;
+    double analog2;
+    double analog3;
+    double analog4;
+    double analog5;
+    double analog6;
+    double analog7;
 } analogReadings;
 
 bool done = false;
@@ -177,6 +176,8 @@ void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
     if (strcmp(desktopEnvironment, "KDE") == 0) {
         std::system("kscreen-doctor --dpms off");
+    } else {
+        std::system("wlr-randr --output HDMI-A-1 --off");
     }
 }
 
@@ -184,6 +185,8 @@ void setBrightnessHigh() {
     // std::system("brightnessctl set 100%");
     if (strcmp(desktopEnvironment, "KDE") == 0) {
         std::system("kscreen-doctor --dpms on");
+    } else {
+        std::system("wlr-randr --output HDMI-A-1 --on");
     }
 }
 
@@ -263,7 +266,7 @@ void processRead(std::string line) {
                             battery.ampHoursUsed = getValueFromPacket(packet, &index);
                             battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
                             battery.ampHoursFullyCharged = getValueFromPacket(packet, &index);
-                            battery.ampHoursRated = getValueFromPacket(packet, &index);
+                            battery.ampHoursFullyChargedWhenNew = getValueFromPacket(packet, &index);
                             battery.percentage = getValueFromPacket(packet, &index);
                             battery.voltage_min = getValueFromPacket(packet, &index);
                             battery.voltage_max = getValueFromPacket(packet, &index);
@@ -322,13 +325,14 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::GET_ANALOG_READINGS:
+                            analogReadings.analog0 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog1 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog2 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog3 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog4 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog5 = getValueFromPacket_double(packet, &index);
                             analogReadings.analog6 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analogDiff1 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog7 = getValueFromPacket_double(packet, &index);
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
@@ -576,7 +580,7 @@ int main(int, char**)
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN;
     // SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
     SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
     if (window == nullptr)
@@ -920,6 +924,10 @@ int main(int, char**)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
+                            if(ImGui::Button("SHUTDOWN")) {
+                                std::system("sudo /sbin/shutdown -h now");
+                            }
+
                             if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
                             }
@@ -1059,11 +1067,11 @@ int main(int, char**)
                             ImGui::Text("Charging: %s", battery.charging ? "true": "false");
                             // TODO: amphours when new is hardcoded
                             ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
-                            ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursRated / 32.0) * 100.0);
-                            ImGui::Text("Wh Capacity: %0.1f Wh", (battery.nominalVoltage * battery.ampHoursRated));
+                            ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
+                            ImGui::Text("Wh Capacity: %0.1f Wh", (battery.nominalVoltage * battery.ampHoursFullyCharged));
                             ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursRatedWhenNew);
-                            ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursRated);
+                            ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
+                            ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursFullyCharged);
                             ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
                             // Amphours used lifetime since 22.09.2025
                             ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
@@ -1136,13 +1144,14 @@ int main(int, char**)
                             ImGui::BeginGroup();
                             {
                                 float ItemWidth = 150.0;
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.15lf", analogReadings.analog0);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.15lf", analogReadings.analog1);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.15lf", analogReadings.analog2);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.15lf", analogReadings.analog3);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.15lf", analogReadings.analog4);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.15lf", analogReadings.analog5);
                                 ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.15lf", analogReadings.analog6);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("AnalogDiff1: %0.15lf", analogReadings.analogDiff1);
+                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.15lf", analogReadings.analog7);
                             }
                             ImGui::EndGroup();
 
@@ -1152,7 +1161,9 @@ int main(int, char**)
 
                         if (ImGui::BeginTabItem("E-BIKE Log"))
                         {
-                            ImGui::InputTextMultiline("##", (char*)backend.log.c_str(), sizeof(backend.log.c_str()), ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+			    std::string log_tmp = backend.log;
+
+                            ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                             ImGui::EndTabItem();
                         }
 

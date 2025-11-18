@@ -1,0 +1,17 @@
+[
+  {
+    "arguments": [
+      "/usr/bin/g++",
+      "-std=c++23",
+      "-g",
+      "-Wall",
+      "-c",
+      "-o",
+      "main.o",
+      "main.cpp"
+    ],
+    "directory": "/home/snipex/ebike-rpi/backend",
+    "file": "/home/snipex/ebike-rpi/backend/main.cpp",
+    "output": "/home/snipex/ebike-rpi/backend/main.o"
+  }
+]

@@ -27,8 +27,8 @@ private:
     };
 
     SharedMemory* shm;
-    int shmid;
-    key_t key;
+    // int shmid;
+    // key_t key;
 };
 
 #endif

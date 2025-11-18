@@ -1,23 +1,30 @@
 #include "ipcClient.hpp"
 
 int IPCClient::begin() {
+    shmdt(shm);
+    shm = nullptr;
+
+    // std::printf("shm3: %d\n", (void*)shm);
     // ftok to generate unique key
-    key = ftok("/tmp/ebike-ipc", 999);
+    int key = ftok("/tmp/ebike-ipc", 999);
     if (key == (key_t)-1) {
         std::printf("ftok failed\n");
+        successfulCommunication = false;
         return -1;
     }
 
     // shmget returns an identifier in shmid
-    shmid = shmget(key, 0, 0);
+    key_t shmid = shmget(key, 1024, 0666);
     if (shmid == -1) {
         std::printf("shmget failed\n");
+        successfulCommunication = false;
         return -1;
     }
 
     struct shmid_ds info;
     if (shmctl(shmid, IPC_STAT, &info) == -1) {
         std::printf("shmctl failed\n");
+        successfulCommunication = false;
         return -1;
     }
 
@@ -26,6 +33,7 @@ int IPCClient::begin() {
         time_t age = time(NULL) - info.shm_ctime;
         if (age > 1 /*second*/) {
             std::printf("shm is old\n");
+            successfulCommunication = false;
             return -1;
         }
     }
@@ -34,8 +42,15 @@ int IPCClient::begin() {
     shm = (SharedMemory*)shmat(shmid, NULL, 0);
     if (shm == (void*)-1) {
         std::printf("shmat failed\n");
+        successfulCommunication = false;
         return -1;
     }
+
+    sem_post(&shm->dataClientRead);
+    sem_post(&shm->dataServerRead);
+    // std::printf("Server: %s\n", shm->dataForServer);
+    // std::printf("Client: %s\n", shm->dataForClient);
+    // strcpy(shm->dataForClient, "");
 
     successfulCommunication = true;
     return 0;

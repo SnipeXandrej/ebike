@@ -14,9 +14,11 @@
 #include <signal.h>
 
 #include <wiringPi.h>
+#include <wiringPiI2C.h>
 #include <mcp23017.h>
-#include "ads1256.hpp"
+#include <mcp3004.h>
 
+#include "ads1115.hpp"
 #include "myUart.hpp"
 #include "VescUart/VescUart.h"
 #include "ipcServer.hpp"
@@ -47,21 +49,24 @@
 #define B6_EXP MCP23017_BASEPIN+14
 #define B7_EXP MCP23017_BASEPIN+15
 
-// BCM pin numbering
-#define ADC_DRDY        5
-#define ADC_RST         -1
-#define ADC_CS          8
-#define ADC_PWDN        6
-#define ADC_SPI_SPEED   1920000
-#define ADC_GAIN        ADS1256_GAIN_16
-#define ADC_SAMPLERATE  ADS1256_DRATE_1000SPS
-#define ADC_INPUTBUFFER false
+#define MCP3008_SPICHAN 0
+#define MCP3008_BASEPIN 200
+#define A0_ADC MCP3008_BASEPIN+0
+#define A1_ADC MCP3008_BASEPIN+1
+#define A2_ADC MCP3008_BASEPIN+2
+#define A3_ADC MCP3008_BASEPIN+3
+#define A4_ADC MCP3008_BASEPIN+4
+#define A5_ADC MCP3008_BASEPIN+5
+#define A6_ADC MCP3008_BASEPIN+6
+#define A7_ADC MCP3008_BASEPIN+7
 
-#define pinPowerswitch A4_EXP
+#define ADS1115_ADDRESS 0x4a
+#define ADS1115_BASEPIN 300
+
+#define pinPowerswitch A0_EXP
 
 IPCServer IPC;
 toml::table tbl;
-ADS1256 ADC;
 VescUart VESC;
 MyUart uartVESC;
 int spiHandle;
@@ -78,6 +83,7 @@ MovingAverage batteryWattsMovingAverage;
 MovingAverage wattageMoreSmooth_MovingAverage;
 struct {
     MovingAverage brakingCurrent;
+    MovingAverage batteryCurrent;
 } movingAverages;
 
 // TODO: do not hardcode filepaths
@@ -96,6 +102,7 @@ float throttleLevel = 0;
 float throttleBrakeLevel = 0;
 bool  powerOn = false;
 bool  BRAKING = false;
+std::string toSendExtra;
 
 struct {
     float percentage;
@@ -108,12 +115,13 @@ struct {
     float amphours_min_voltage = 66.0;
     float amphours_max_voltage = 82.0;
 
+    double currentForFrontend;
+
     double ampHoursUsed;
     double ampHoursUsedLifetime;
     double ampHoursFullyCharged;
     double ampHoursFullyCharged_tmp;
-    double ampHoursRated;
-    double ampHoursRated_tmp;
+    double ampHoursFullyChargedWhenNew;
 
     double wattHoursUsed;
     double wattHoursRated;
@@ -149,13 +157,14 @@ struct {
 } settings;
 
 struct {
-    double analog0; // Input 0 // Throttle
-    double analog1; // Input 1 // Throtle brake
-    double analog2; // Input 2
-    double analog3; // Input 3
-    double analog4; // Input 4
-    double analog5; // Input 5 // Battery voltage
-    double analogDiff1; // Input 6+7 // Battery Current
+    double analog0; // Throttle
+    double analog1; // Throtle brake
+    double analog2;
+    double analog3;
+    double analog4;
+    double analog5;
+    double analog6;
+    double analog7;
 } analogReadings;
 
 struct {
@@ -232,7 +241,8 @@ void setupTOML() {
     trip.distance                           = tbl["trip"]["distance"].value_or<double>(-1);
     battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(-1);
     battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(-1);
-    battery.ampHoursRated                   = tbl["battery"]["ampHoursRated"].value_or<double>(-1);
+    battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(-1);
+    battery.ampHoursUsedLifetime            = tbl["battery"]["ampHoursUsedLifetime"].value_or<double>(-1);
     settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"].value_or(0);
     settings.regenerativeBraking            = tbl["settings"]["regenerativeBraking"].value_or(0);
 }
@@ -242,9 +252,12 @@ void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "trip", "distance", trip.distance);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsed", battery.ampHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
-    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursRated", battery.ampHoursRated);
+    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
+    updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsedLifetime", battery.ampHoursUsedLifetime);
     updateTableValue(SETTINGS_FILEPATH, "settings", "batteryPercentageVoltageBased", settings.batteryPercentageVoltageBased);
     updateTableValue(SETTINGS_FILEPATH, "settings", "regenerativeBraking", settings.regenerativeBraking);
+
+    toSendExtra.append(std::format("{};Settings and variables were automatically saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
 }
 
 void setupGPIO() {
@@ -269,7 +282,14 @@ void setupMCP() {
 }
 
 void setupADC() {
-	ADC.init(&spiHandle, ADC_SPI_SPEED, ADC_DRDY, ADC_RST, ADC_CS, ADC_PWDN, ADC_GAIN, ADC_SAMPLERATE, ADC_INPUTBUFFER);
+	mcp3004Setup(MCP3008_BASEPIN, MCP3008_SPICHAN);
+}
+
+void setupADC2() {
+    int dev0 = wiringPiI2CSetupInterface("/dev/i2c-0", ADS1115_ADDRESS);
+	ads1115Setup_fd(ADS1115_BASEPIN, dev0);
+    digitalWrite(ADS1115_BASEPIN, 5);
+    digitalWrite(ADS1115_BASEPIN+1, ADS1115_DR_250);
 }
 
 void setupIPC() {
@@ -303,11 +323,15 @@ int main() {
     };
     throttle.setCurve(customThrottleCurve);
 
+    PotThrottleMovingAverage.smoothingFactor = 0.7;
+    movingAverages.batteryCurrent.smoothingFactor = 0.2;
+
     setupIPC();  // IPC
     setupTOML(); // settings
     setupGPIO(); // RPi GPIO
     setupMCP();  // Pin Expander
     setupADC();  // ADC
+    setupADC2(); // ADC2
     uartVESC.begin(B115200);
     VESC.setSerialPort(&uartVESC);
 
@@ -337,13 +361,13 @@ int main() {
                     case COMMAND_ID::GET_BATTERY:
                         commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
                         commAddValue(&toSend, battery.voltage, 2);
-                        commAddValue(&toSend, battery.current, 4);
+                        commAddValue(&toSend, battery.currentForFrontend, 4);
                         commAddValue(&toSend, battery.watts, 1);
                         commAddValue(&toSend, battery.wattHoursUsed, 1);
                         commAddValue(&toSend, battery.ampHoursUsed, 6);
                         commAddValue(&toSend, battery.ampHoursUsedLifetime, 2);
                         commAddValue(&toSend, battery.ampHoursFullyCharged, 2);
-                        commAddValue(&toSend, battery.ampHoursRated, 2);
+                        commAddValue(&toSend, battery.ampHoursFullyChargedWhenNew, 2);
                         commAddValue(&toSend, battery.percentage, 1);
                         commAddValue(&toSend, battery.voltage_min, 1);
                         commAddValue(&toSend, battery.voltage_max, 1);
@@ -494,12 +518,16 @@ int main() {
                         commAddValue(&toSend, analogReadings.analog3, 15);
                         commAddValue(&toSend, analogReadings.analog4, 15);
                         commAddValue(&toSend, analogReadings.analog5, 15);
-                        commAddValue(&toSend, analogReadings.analogDiff1, 15);
+                        commAddValue(&toSend, analogReadings.analog6, 15);
+                        commAddValue(&toSend, analogReadings.analog7, 15);
 
                         toSend.append("\n");
                         break;
                 }
             }
+
+            toSend.append(toSendExtra);
+            toSendExtra = "";
             IPC.write(toSend.c_str());
         }
     });
@@ -548,10 +576,11 @@ int main() {
                 motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
                 speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
             }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     });
 
-    double data;
     std::printf("[Main] Enter loop\n");
     while (!done) {
 		auto t1 = std::chrono::high_resolution_clock::now();
@@ -575,52 +604,46 @@ int main() {
         // PWM
         pwmWrite(12, 256); // 0 - 1023
 
-        // Analog reading
-		data = ADC.readChannel(0);
-		analogReadings.analogDiff1 = ADC.convertToVoltage(data) - 0.000002;
-		data = ADC.readChannel(1);
-		analogReadings.analog0 = ADC.convertToVoltage(data) - 0.0094;
-		data = ADC.readChannel(2);
-		analogReadings.analog1 = ADC.convertToVoltage(data) - 0.0094;
-		data = ADC.readChannel(3);
-		analogReadings.analog2 = ADC.convertToVoltage(data) - 0.00945;
-        data = ADC.readChannel(4);
-		analogReadings.analog3 = ADC.convertToVoltage(data) - 0.00945;
-        data = ADC.readChannel(5);
-		analogReadings.analog4 = ADC.convertToVoltage(data) - 0.00945;
-		data = ADC.readDiffChannel(3);
-		analogReadings.analog5 = ADC.convertToVoltage(data) - 0.00941; // OK
+        // Analog readings
+        analogReadings.analog0 = ((float)analogRead(A0_ADC) / 1023.0) * 3.3;
+        analogReadings.analog1 = ((float)analogRead(A1_ADC) / 1023.0) * 3.3;
+        analogReadings.analog2 = ((float)analogRead(A2_ADC) / 1023.0) * 3.3;
+        analogReadings.analog3 = ((float)analogRead(A3_ADC) / 1023.0) * 3.3;
+        analogReadings.analog4 = ((float)analogRead(A4_ADC) / 1023.0) * 3.3;
+        analogReadings.analog5 = ((float)analogRead(A5_ADC) / 1023.0) * 3.3;
+        analogReadings.analog6 = ((float)analogRead(A6_ADC) / 1023.0) * 3.3;
+        analogReadings.analog7 = ((float)analogRead(A7_ADC) / 1023.0) * 3.3;
+
+        double batteryCurrentRaw = -analogRead(ADS1115_BASEPIN+5);
+
+        static double mvPerAmp = 1.186;
+        double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */;
+        battery.current = batteryCurrentMv / mvPerAmp;
+
+        battery.currentForFrontend = movingAverages.batteryCurrent.moveAverage(batteryCurrentMv / mvPerAmp);
 
         // throttleLevel
-        static float throttleR1 = 10000;
-        static float throttleR2 = 560;
-        static float throttleVMaxInput = 5;
-        static float throttleVMax = (throttleVMaxInput * throttleR2) / (throttleR1 + throttleR2);
+        static float throttleMinVoltage = 0.9;
+        static float throttleMaxVoltage = 2.5;
 
         // throttleBrakeLevel
-        static float throttleBrakeR1 = 10000;
-        static float throttleBrakeR2 = 560;
-        static float throttleBrakeVMaxInput = 5;
-        static float throttleBrakeVMax = (throttleBrakeVMaxInput * throttleBrakeR2) / (throttleBrakeR1 + throttleBrakeR2);
+        // static float throttleBrakeMinVoltage = 0.9;
+        // static float throttleBrakeMaxVoltage = 2.5;
 
         // battery.voltage
-        static float batteryVoltageR1 = 220000;
-        static float batteryVoltageR2 = 560;
+        static float batteryVoltageR1 = 220000 + 3500 /* Correction value */;
+        static float batteryVoltageR2 = 4700+1000+1000+1000;
         static float batteryVoltageVMaxInput = 100;
         static float batteryVoltageVMax = (batteryVoltageVMaxInput * batteryVoltageR2) / (batteryVoltageR1 + batteryVoltageR2);
 
-        static double inputReadMaxV = (5.0 / 16.0);
-        static double mvPerAmp = 0.0015;
-
         // map those readings
-        throttleLevel       = 7; //map_f_nochecks(analogReadings.analog0, 0.0, throttleVMax, 0.0, 100);
-        throttleBrakeLevel  = map_f_nochecks(analogReadings.analog1, 0.0, throttleBrakeVMax, 0.0, 100);
-        battery.voltage     = map_f_nochecks(analogReadings.analog5, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
-        battery.current     = map_d_nochecks(analogReadings.analogDiff1, 0.0, inputReadMaxV, 0.0, (inputReadMaxV/mvPerAmp));
+        throttleLevel       = map_f(PotThrottleMovingAverage.moveAverage(analogReadings.analog0), throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
+        // throttleBrakeLevel  = map_f(analogReadings.analog1, throttleBrakeMinVoltage, throttleBrakeMaxVoltage, 0.0, 100.0);
+        battery.voltage     = map_f_nochecks(analogReadings.analog7, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
 
         // calculate other stuff
         battery.watts = battery.voltage * battery.current;
-        battery.wattHoursRated = battery.voltage_nominal* battery.ampHoursRated;
+        battery.wattHoursRated = battery.voltage_nominal* battery.ampHoursFullyCharged;
 
         // BATTERY VOLTAGE
         BatVoltageMovingAverage.initInput(battery.voltage);
@@ -672,14 +695,14 @@ int main() {
         if (settings.batteryPercentageVoltageBased) {
             battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
         } else {
-            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursRated, 100.0, 0.0);
+            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursFullyCharged, 100.0, 0.0);
         }
 
         BatVoltageMovingAverage.moveAverage(battery.voltage);
         if (!battery.charging && (BatVoltageMovingAverage.output <= battery.amphours_min_voltage) && (battery.current <= 3.0 && battery.current >= 0.0)) {
             timeAmphoursMinVoltageMsElapsed = std::chrono::high_resolution_clock::now() - timeAmphoursMinVoltage;
             if (timeAmphoursMinVoltageMsElapsed.count() >= 5000) {
-                battery.ampHoursRated_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
+                battery.ampHoursFullyCharged_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
                                                                 // this temporary value will later get applied to the actual
                                                                 // ampHourRated variable when the battery is done charging so
                                                                 // the estimated range and other stuff doesn't suddenly get screwed
@@ -693,8 +716,8 @@ int main() {
             if (battery.charging && (battery.current <= 0.0 && battery.current >= -0.5)) {
                 battery.ampHoursUsed = 0;
                 battery.wattHoursUsed = 0;
-                if (battery.ampHoursRated_tmp != 0.0) {
-                    battery.ampHoursRated = battery.ampHoursRated_tmp;
+                if (battery.ampHoursFullyCharged_tmp != 0.0) {
+                    battery.ampHoursFullyCharged = battery.ampHoursFullyCharged_tmp;
                 }
             }
         }
@@ -711,7 +734,8 @@ int main() {
             float vescCurrent = clampValue(
                                             throttle.map(throttleLevel),
                                             maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
-                                        );
+                                          );
+
             VESC.setCurrent(vescCurrent);
 
             // reset regen braking
@@ -738,6 +762,14 @@ int main() {
         estimatedRange.WhPerKm = estimatedRange.wattHoursUsed / estimatedRange.distance;
         tmp = (battery.wattHoursRated - battery.wattHoursUsed) / estimatedRange.WhPerKm;
         tmp != tmp ? estimatedRange.range = -1 : estimatedRange.range = tmp;
+
+        static double uptimeInSeconds_tmp = 0;
+        if ((uptimeInSeconds - uptimeInSeconds_tmp) >= 1800) { // 30 minutes
+            uptimeInSeconds_tmp = uptimeInSeconds;
+
+            saveAll();
+        }
+
 
         whileLoopUsElapsed = std::chrono::high_resolution_clock::now() - t1;
     }

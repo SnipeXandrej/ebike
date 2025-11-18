@@ -6,6 +6,7 @@
 #include "buffer.h"
 #include "crc.h"
 #include <string>
+#include <thread>
 #include <mutex>
 
 // this header is located in the ebike repository
