@@ -642,28 +642,31 @@ int main() {
         battery.voltage     = map_f_nochecks(analogReadings.analog7, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
 
         // calculate other stuff
-        battery.watts = battery.voltage * battery.current;
-        battery.wattHoursRated = battery.voltage_nominal* battery.ampHoursFullyCharged;
+        battery.watts           = battery.voltage * battery.current;
+        battery.wattHoursRated  = battery.voltage_nominal * battery.ampHoursFullyCharged;
 
         // BATTERY VOLTAGE
         BatVoltageMovingAverage.initInput(battery.voltage);
 
         // BATTERY CURRENT
-        // getBatteryCurrent sets the battery.current var to a new value
-        // Calculates wattHoursUsed, ampHoursUsed, ampHoursUsedLifetime, ...
-        static float _batteryCurrentUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
+        static double _batteryAmpsUsedInElapsedTime,     _batteryWattsUsedUsedInElapsedTime;
+        static double _batteryAmpHoursUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
 
-        _batteryCurrentUsedInElapsedTime = battery.current / (1000000 / whileLoopUsElapsed.count());
-        battery.ampHoursUsed            += _batteryCurrentUsedInElapsedTime / 3600.0;
-        if (_batteryCurrentUsedInElapsedTime >= 0.0) {
-            battery.ampHoursUsedLifetime    += _batteryCurrentUsedInElapsedTime / 3600.0;
+        _batteryAmpsUsedInElapsedTime = battery.current / (1000000.0 / whileLoopUsElapsed.count());
+        _batteryAmpHoursUsedInElapsedTime = _batteryAmpsUsedInElapsedTime / 3600.0;
+
+        _batteryWattsUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1000000.0 / whileLoopUsElapsed.count());
+        _batteryWattHoursUsedUsedInElapsedTime = _batteryWattsUsedUsedInElapsedTime / 3600.0;
+
+        battery.ampHoursUsed += _batteryAmpHoursUsedInElapsedTime;
+        if (_batteryAmpHoursUsedInElapsedTime >= 0.0) {
+            battery.ampHoursUsedLifetime    += _batteryAmpHoursUsedInElapsedTime;
         }
 
-        _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1000000 / whileLoopUsElapsed.count());
-        battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+        battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
         if ((_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) && !battery.charging) {
-            trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
-            estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime / 3600.0;
+            trip.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
+            estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
         }
 
         // BRAKING = digitalRead(pinBrake);
