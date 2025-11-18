@@ -138,17 +138,13 @@ struct {
 } estimatedRange;
 
 struct {
-    double tachometer_abs_previous;
-    double tachometer_abs_diff;
     double distance; // in km
-    double distanceDiff;
     double wattHoursUsed;
 } trip;
 
 struct {
     double trip_distance;    // in km
     double distance;         // in km
-    double distance_tmp;
 } odometer;
 
 struct {
@@ -546,31 +542,35 @@ int main() {
     std::thread VESCThread([&] {
         while (!done) {
             if (VESC.getVescValues()) {
+                static double tachometer_abs_previous;
+                static double tachometer_abs_diff;
+                static double distanceDiff;
+
                 // if the previous measurement is bigger than the current, that means
                 // that the VESC was probably powered off and on, so the stats got reset...
                 // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
                 // large number and therefore screw up our distance measurement
-                if (trip.tachometer_abs_previous > VESC.data.tachometerAbs) {
-                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                if (tachometer_abs_previous > VESC.data.tachometerAbs) {
+                    tachometer_abs_previous = VESC.data.tachometerAbs;
                 }
 
                 // prevent the diff to be something extremely big
-                if ((VESC.data.tachometerAbs - trip.tachometer_abs_previous) >= 1000) {
-                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                if ((VESC.data.tachometerAbs - tachometer_abs_previous) >= 1000) {
+                    tachometer_abs_previous = VESC.data.tachometerAbs;
                 }
 
-                if (trip.tachometer_abs_previous < VESC.data.tachometerAbs) {
-                    trip.tachometer_abs_diff = VESC.data.tachometerAbs - trip.tachometer_abs_previous;
-                    // Serial.printf("Trip tacho diff: %f\n", trip.tachometer_abs_diff); // ~90 for 80km/h
+                if (tachometer_abs_previous < VESC.data.tachometerAbs) {
+                    tachometer_abs_diff = VESC.data.tachometerAbs - tachometer_abs_previous;
+                    // Serial.printf("Trip tacho diff: %f\n", tachometer_abs_diff); // ~90 for 80km/h
 
-                    trip.distanceDiff = ((trip.tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+                    distanceDiff = ((tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
 
                     // TODO: reset the trip after pressing a button? reset the trip after certain amount of time has passed?
-                    trip.distance += trip.distanceDiff;
-                    odometer.distance += trip.distanceDiff;
-                    estimatedRange.distance += trip.distanceDiff;
+                    trip.distance += distanceDiff;
+                    odometer.distance += distanceDiff;
+                    estimatedRange.distance += distanceDiff;
 
-                    trip.tachometer_abs_previous = VESC.data.tachometerAbs;
+                    tachometer_abs_previous = VESC.data.tachometerAbs;
                 }
 
                 motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
