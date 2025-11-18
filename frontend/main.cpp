@@ -1069,6 +1069,7 @@ int main(int, char**)
                             ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
                             ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
                             ImGui::Text("Wh Capacity: %0.1f Wh", (battery.nominalVoltage * battery.ampHoursFullyCharged));
+                            ImGui::Text("Wh Used: %0.5f Wh", battery.wattHoursUsed);
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
                             ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursFullyCharged);
