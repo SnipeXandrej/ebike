@@ -27,8 +27,6 @@
 #include "cpuUsage.hpp"
 #include "../comm.h"
 
-float MAX_WATTAGE = 7500.0;
-
 enum POWER_PROFILE {
     LEGAL = 0,
     ECO = 1,
