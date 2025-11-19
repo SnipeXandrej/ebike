@@ -11,12 +11,14 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
 
     constexpr float ONE_DIV_360f = 1.0f / 360.0f;   // Performance tweak
 
-    float a_min_factor, a_max_factor, a_max_factor_100percentage;
-    a_min_factor = -1.5f + ((360 - max_angle_factor) * ONE_DIV_360f);    // Angle PI*-1.5f resides in the bottom point of circle
-    a_max_factor_100percentage = (a_min_factor + 1.0f) * -1.0f;       // Arc max factor on 100% percentage state
+    float a_min_factor = -1.5f + ((360 - max_angle_factor) * ONE_DIV_360f);    // Angle PI*-1.5f resides in the bottom point of circle
+    float a_max_factor_100percentage = (a_min_factor + 1.0f) * -1.0f;       // Arc max factor on 100% percentage state
 
-    float a_factor_delta = (a_max_factor_100percentage - a_min_factor) * (inputMapped * 0.01f);
-    a_max_factor = a_min_factor + a_factor_delta;
+    float a_factor_delta = (a_max_factor_100percentage - a_min_factor) * ((inputMapped-3) * 0.01f);
+    float a_max_factor = a_min_factor + a_factor_delta;
+
+    float a_factor_delta_green = (a_max_factor_100percentage - a_min_factor) * ((inputMapped) * 0.01f);
+    float a_max_factor_green = a_min_factor + a_factor_delta_green;
 
     ImGui::SetCursorPos(ImVec2(x - 7.0, y + size * 0.5f));
     ImGui::Text("%0.0f", min_input);
@@ -40,11 +42,20 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
         ImGui::Text("%s", name.data());
     }
 
+    ImColor green = ImVec4(0.0f, 0.85f, 0.0f, 1.0f);
+
     // Path for background arc (dimmed arc)
+    // ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.85f, 0.0f, 1.0f));
+    // draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
+    // draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness);
+    // ImGui::PopStyleColor();
     draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
     draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness);
 
     // Path for progress filling (highlighted arc)
+    draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_green);
+    draw_list->PathStroke(green, ImDrawFlags_None, thickness);
+
     draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
     draw_list->PathStroke(ColorInside, ImDrawFlags_None, thickness);
 }
