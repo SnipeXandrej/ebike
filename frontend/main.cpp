@@ -19,6 +19,7 @@
 #include <thread>
 #include <chrono>
 #include "toml.hpp"
+#include "arc_progress_bar.hpp"
 #include <print>
 
 #include "ipcClient.hpp"
@@ -171,6 +172,9 @@ struct {
 } cpuUsage;
 
 IPCClient IPC;
+
+ArcProgressBar ArcBar_phaseCurrent;
+ArcProgressBar ArcBar_motorTemp;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
@@ -436,7 +440,6 @@ int main(int, char**)
 
     movingAverages.current.smoothingFactor = 0.7f;
     movingAverages.acceleration.smoothingFactor = 0.5f;
-    movingAverages.wattage.smoothingFactor = 0.6f;
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.1f;
 
@@ -456,6 +459,9 @@ int main(int, char**)
     settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
 
     setPowerProfile(settings.powerProfile);
+
+    ArcBar_phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, "Phase");
+    ArcBar_motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, "Temp");
 
     // ################
     // ##### IPC ######
@@ -768,45 +774,28 @@ int main(int, char**)
                         ImGui::EndGroup();
                     ImGui::EndGroup(); // Ends here
 
-                    // VU METERS
-                    // VU METERS
+                    // METERS
+                    // METERS
                     ImGui::SameLine();
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 140.0f, 45.0f));
                     ImGui::BeginGroup();
-                        ImGui::Dummy(ImVec2(0, 3));
-                        ImVec2 groupStart = ImGui::GetCursorScreenPos(); // Top-left of the group
-                        ImGui::BeginGroup();
-                            addVUMeter(backend.phase_current, 0.0f, 250.0f, "PhA", 0, 14);
-                            ImGui::SameLine();
-                            ImGui::Dummy(ImVec2(2, 0));
-                            ImGui::SameLine();
-                            addVUMeter(backend.temperature_motor, 25.0f, 100.0f, "T", 0, 14);
-                        ImGui::EndGroup();
-                        ImVec2 groupEnd = ImGui::GetItemRectMax();       // Bottom-right of the group
-                        ImDrawList* drawList = ImGui::GetWindowDrawList();
+                        ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
+                        ArcBar_phaseCurrent.ProgressBarArc(backend.phase_current);
+
+                        ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0));
+                        ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
                     ImGui::EndGroup();
-                    groupStart.x -= 4;
-                    groupStart.y -= 5;
-                    groupEnd.x += 4;
-                    groupEnd.y += 5;
-                    drawList->AddRect(
-                        groupStart,
-                        groupEnd,
-                        IM_COL32(90, 90, 90, 255), // Yellow color (RGBA)
-                        2.0f,                       // Rounding
-                        0,                          // Flags
-                        2.0f                        // Thickness
-                    );
 
 
                     // Wh/km
-                    ImGui::SetCursorPosX(io.DisplaySize.x / 2.7);
-                    ImGui::SetCursorPosY(100);
+                    ImGui::SetCursorPosX(200);
+                    ImGui::SetCursorPosY(75);
                     ImGui::BeginGroup();
-                        // movingAverages.wattage.moveAverage(battery.watts);
-                        // powerVerticalDiagonalHorizontal(movingAverages.wattage.output);
-                        // ImGui::SameLine();
-                        // ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 260.0, ImGui::GetCursorPosY() - 215.0));
+                        int numOfBars = 100;
+                        float maxWatts = 9000;
+                        float indicateEveryWatts = 1000;
+                        powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
+
+                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
                         ImGui::BeginGroup();
                             float whOverKmAveraged = 0.0;
                             if (backend.speed_kmh > 0.5) {
@@ -862,11 +851,12 @@ int main(int, char**)
                         char text[128];
                         ImGui::BeginGroup();
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                            ImGui::SetCursorPosY(io.DisplaySize.y - 55.0f);
+                                ImGui::Separator();
                                 sprintf(text, "O: %0.0f", backend.odometer_distance);
                                 TextCenteredOnLine(text, 0.0f, false);
                                 sprintf(text, "T: %4.1f", backend.trip_distance);
-                            ImGui::SetCursorPosY(io.DisplaySize.y - 90.0f);
+                            ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
                                 TextCenteredOnLine(text, 1.0f, false);
                             ImGui::PopFont();
 
@@ -876,7 +866,7 @@ int main(int, char**)
                                 ImVec2 cursorPos = ImGui::GetContentRegionAvail();
                                 cursorPos.x = (cursorPos.x / 2.0) - 145.0 - 8.0;
 
-                                ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 80.0f));
+                                ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
 
                                 ImGui::SetNextItemWidth(230.0);
                                 if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
@@ -896,18 +886,9 @@ int main(int, char**)
                         ImGui::EndGroup();
                     }
 
-                    ImGui::SetCursorPos(ImVec2(0.0f, io.DisplaySize.y - 40.0f));
-                    ImGui::Separator();
-
                     if (!successfulCommunication_avoidMutex) {
                         ImGui::EndDisabled();
                     }
-
-                    ImGui::SameLine();
-                    ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (float)(IPC.successfulCommunication ? 140.0f : 180.0f), io.DisplaySize.y - 35.0f));
-                    ImVec4 color = IPC.successfulCommunication ? ImVec4(0.0f, 1.0f, 0.0f, 1.0f) // Green
-                                                                  : ImVec4(1.0f, 0.0f, 0.0f, 1.0f); // Red
-                    ImGui::TextColored(color, IPC.successfulCommunication ? "Connected" : "Disconnected");
 
                     ImGui::EndTabItem();
                 }

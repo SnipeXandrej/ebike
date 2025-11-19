@@ -57,10 +57,8 @@ int IPCClient::begin() {
 };
 
 void IPCClient::stop() {
-    sem_post(&shm->dataClientRead);
-
     // // Detach from shared memory
-    // shmdt(shm);
+    shmdt(shm);
 
     // // Destroy the shared memory
     // shmctl(shmid, IPC_RMID, NULL);

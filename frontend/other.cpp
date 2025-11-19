@@ -218,30 +218,27 @@ void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float an
     draw_list->AddConvexPolyFilled(corners, 4, color);
 }
 
-void powerVerticalDiagonalHorizontal(float input) {
+void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input) {
     ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
+    ImVec2 pos2 = ImGui::GetCursorScreenPos();  // Reference point
     // ImVec2 pos = ImVec2(ImGui::GetWindowSize().x/2.0, ImGui::GetWindowSize().y/2.0);
     ImU32 color = IM_COL32(0, 255, 0, 255); // Green
-    ImVec2 size = ImVec2(100, 10); // Width x Height
 
     ImU32 greenDark     = IM_COL32(0, 45, 0, 255); // Green
     ImU32 greenBright   = IM_COL32(0, 255, 0, 255); // Green
-
-    float MAX_WATTAGE = 7500.0f;
-    float mapped = map_f(input, 0.0, MAX_WATTAGE, 1.0, 75.0);
-
-    int BAR_COUNT_DIAGONAL = 25;
-    int BAR_COUNT_HORIZONTAL = BAR_COUNT_DIAGONAL + 50;
-
     ImDrawList* draw_list = ImGui::GetWindowDrawList();
 
-    int kw_point = 0;
+    float mapped = map_f(input, 0.0, maxWatts, 0.0, numOfBars);
+    float kw_point = 0.0;
 
-    for (float i = 1; i <= BAR_COUNT_DIAGONAL; i += 1) {
-        pos.y -= 13.0f;
-        pos.x += 5.0f;
-        ImVec2 center = ImVec2(pos.x + 100, pos.y + 100);
+    float numberOfIndicators = (maxWatts / indicatorEveryWatts);
+    float modulusNumber = ((float)numOfBars / numberOfIndicators);
+    modulusNumber = modulusNumber < 1 ? 1: modulusNumber;
 
+    float modulusCounter = 0;
+
+    ImVec2 size = ImVec2(45, 4); // Width x Height
+    for (int i = 0; i < numOfBars+1; i++) {
         if (mapped < i) {
             color = greenDark;
         } else {
@@ -253,48 +250,28 @@ void powerVerticalDiagonalHorizontal(float input) {
             }
         }
 
-        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
-        if (((int)i+1) % 10 == 1) {
-            ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
-            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+        drawRotatedRect(draw_list, pos, size, 65.0f, color, 2.0f); // the actual bar
 
-            ImGui::BeginGroup();
-                ImGui::SetCursorPos(ImVec2(center.x - 35.0, center.y - 70.0));
-                kw_point++;
-                ImGui::Text("%d", kw_point);
-            ImGui::EndGroup();
-        }
+        pos.x += 4.0f;
     }
 
-    size = ImVec2(80, 10); // Width x Height
-    for (int i = BAR_COUNT_DIAGONAL+1; i < BAR_COUNT_HORIZONTAL; i++) {
-        // pos.y -= 8.0f;
-        pos.x += 11.0f;
+    for (int i = 0; i <= numOfBars; i++) {
+        if (i % (int)modulusNumber == 1) {
+            modulusCounter += modulusNumber;
+        };
 
-        ImVec2 center = ImVec2(pos.x + 95, pos.y + 90.0);
-
-        if (mapped < i) {
-            color = greenDark;
-        } else {
-            if ((mapped - i) < 1.0) {
-                int color_brightness = (int)map_f((mapped - i), 0.0, 1.0, 45, 255);
-                color = IM_COL32(0, color_brightness, 0 , 255);
-            } else {
-                color = greenBright;
-            }
-        }
-
-        drawRotatedRect(draw_list, center, size, 65.0f, color, 2.0f);
-        if (((int)i+1) % 10 == 1) {
+        if (i == (int)modulusCounter || i == 0 || i == numOfBars) {
             ImU32 colorPoints = IM_COL32(255, 0, 0 , 100);
-            drawRotatedRect(draw_list, center, size, 65.0f, colorPoints, 2.0f);
+            drawRotatedRect(draw_list, pos2, size, 65.0f, colorPoints, 2.0f);
 
             ImGui::BeginGroup();
-                ImGui::SetCursorPos(ImVec2(center.x - 30.0, center.y - 65.0));
-                kw_point++;
-                ImGui::Text("%d", kw_point);
+                ImGui::SetCursorPos(ImVec2(pos2.x + 5.0, pos2.y + 20));
+                ImGui::Text("%0.0f", kw_point);
+                kw_point += indicatorEveryWatts / 1000.0;
             ImGui::EndGroup();
         }
+
+        pos2.x += 4.0f;
     }
 }
 

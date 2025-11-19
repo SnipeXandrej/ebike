@@ -1,3 +1,6 @@
+#ifndef OTHER_HPP
+#define OTHER_HPP
+
 #include "toml.hpp"
 #include "imgui.h"
 #include <fstream>
@@ -42,7 +45,7 @@ void TextCenteredOnLine(const char* label, float alignment, bool contentRegionFr
 
 void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness);
 
-void powerVerticalDiagonalHorizontal(float input);
+void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input);
 
 float getValueFromPacket(std::vector<std::string> token, int *index);
 
@@ -53,3 +56,5 @@ std::string getValueFromPacket_string(std::vector<std::string> token, int *index
 uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index);
 
 void StyleColorsDarkBreeze(ImGuiStyle* dst);
+
+#endif
