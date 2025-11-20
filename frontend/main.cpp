@@ -19,13 +19,13 @@
 #include <thread>
 #include <chrono>
 #include "toml.hpp"
-#include "arc_progress_bar.hpp"
 #include <print>
 
 #include "ipcClient.hpp"
 #include "other.hpp"
 #include "cpuUsage.hpp"
 #include "../comm.h"
+#include "arc_progress_bar.hpp"
 
 enum POWER_PROFILE {
     LEGAL = 0,
@@ -94,6 +94,7 @@ struct {
     int ipcWriteWaitMs;
     int powerProfile;
     bool showMotorRPM;
+    bool showAcceleration;
 } settings;
 
 struct {
@@ -116,7 +117,6 @@ struct {
 } battery;
 
 struct {
-    MovingAverage current;
     MovingAverage acceleration;
     MovingAverage wattage;
     MovingAverage wattageMoreSmooth;
@@ -232,6 +232,18 @@ void setPowerProfile(int PROFILE) {
             break;
     }
     setMcconfValues(mcconf_current);
+}
+
+void writeClock() {
+    time_t currentTime;
+    struct tm *localTime;
+
+    time( &currentTime );
+    localTime = localtime( &currentTime );
+
+    char text[100];
+    sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon+1, localTime->tm_year+1900);
+    std::strcpy(currentTimeAndDate, text);
 }
 
 void processRead(std::string line) {
@@ -364,6 +376,8 @@ int main(int, char**)
     }
     printf("Desktop Environment = %s\n", desktopEnvironment);
 
+    writeClock();
+
     // ####################
     // ##### Settings #####
     // ####################
@@ -387,7 +401,7 @@ int main(int, char**)
     mcconf_eco.l_current_min_scale = 1.0;
     mcconf_eco.l_current_max_scale = 0.3;
     mcconf_eco.l_min_erpm = -(500*3);
-    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 26) * 3); // 25km/h
+    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 21) * 3); // 20km/h
     mcconf_eco.l_min_duty = 0.005;
     mcconf_eco.l_max_duty = 0.95;
     mcconf_eco.l_watt_min = -10000;
@@ -398,7 +412,7 @@ int main(int, char**)
     mcconf_eco.id = POWER_PROFILE::ECO;
 
     mcconf_balanced.l_current_min_scale = 1.0;
-    mcconf_balanced.l_current_max_scale = 0.6;
+    mcconf_balanced.l_current_max_scale = 0.5;
     mcconf_balanced.l_min_erpm = -(500*3);
     mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 41) * 3); // 40km/h
     mcconf_balanced.l_min_duty = 0.005;
@@ -426,7 +440,7 @@ int main(int, char**)
     mcconf_performance2.l_current_min_scale = 1.0;
     mcconf_performance2.l_current_max_scale = 1.0;
     mcconf_performance2.l_min_erpm = -(500*3);
-    mcconf_performance2.l_max_erpm = ((RPM_PER_KMH * 72.2) * 3); // 72.2km/h // Max RPM limit (6500RPM)
+    mcconf_performance2.l_max_erpm = (6500 * 3); // 72.2km/h // Max RPM limit (6500RPM)
     mcconf_performance2.l_min_duty = 0.005;
     mcconf_performance2.l_max_duty = 0.95;
     mcconf_performance2.l_watt_min = -10000;
@@ -436,7 +450,6 @@ int main(int, char**)
     mcconf_performance2.name = "Performance2";
     mcconf_performance2.id = POWER_PROFILE::PERFORMANCE2;
 
-    movingAverages.current.smoothingFactor = 0.7f;
     movingAverages.acceleration.smoothingFactor = 0.5f;
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.1f;
@@ -455,6 +468,7 @@ int main(int, char**)
     settings.ipcWriteWaitMs     = tbl["settings"]["ipcWriteWaitMs"].value_or(50);
     settings.powerProfile       = tbl["settings"]["powerProfile"].value_or(POWER_PROFILE::BALANCED);
     settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
+    settings.showAcceleration   = tbl["settings"]["showAcceleration"].value_or(1);
 
     setPowerProfile(settings.powerProfile);
 
@@ -676,18 +690,8 @@ int main(int, char**)
             continue;
         }
 
-        {
-            // Clock
-            time_t currentTime;
-            struct tm *localTime;
-
-            time( &currentTime );
-            localTime = localtime( &currentTime );
-
-            char text[100];
-            sprintf(text, "%02d:%02d:%02d  %02d.%02d.%d", localTime->tm_hour, localTime->tm_min, localTime->tm_sec, localTime->tm_mday, localTime->tm_mon+1, localTime->tm_year+1900);
-            std::strcpy(currentTimeAndDate, text);
-        }
+        // Clock
+        writeClock();
 
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -732,13 +736,6 @@ int main(int, char**)
 
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
-                            static bool successfulCommunication_avoidMutex;
-                            if (!IPC.successfulCommunication) {
-                                successfulCommunication_avoidMutex = false;
-                                ImGui::BeginDisabled();
-                            } else {
-                                successfulCommunication_avoidMutex = true;
-                            }
                             ImGui::Text("Power info");
                             movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
 
@@ -814,11 +811,17 @@ int main(int, char**)
                                 char text[128];
                                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.4);
                                 if (backend.speed_kmh >= 50.0) {
-                                    sprintf(text, "%0.1fkm/h >:(", backend.speed_kmh);
+                                    sprintf(text, "%0.1f >:(", backend.speed_kmh);
                                 } else {
-                                    sprintf(text, "%0.1fkm/h", backend.speed_kmh);
+                                    sprintf(text, "%0.1f", backend.speed_kmh);
                                 }
+                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 40.0);
                                 ImGui::Text(text);
+                                ImGui::SameLine();
+                                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
+                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.2);
+                                ImGui::Text("km/h");
+                                ImGui::PopFont();
                                 // TextCenteredOnLine(text, -0.5f, false);
                                 ImGui::PopFont();
                             }
@@ -826,7 +829,8 @@ int main(int, char**)
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                                 ImGui::Text("Range: %0.1f", backend.range_left);
                                 // movingAverages.acceleration.moveAverage(backend.acceleration);
-                                ImGui::Text("Accel: %0.1f", backend.acceleration);
+                                if (settings.showAcceleration)
+                                    ImGui::Text("Accel: %0.1f", backend.acceleration);
 
                                 if (ImGui::IsItemHovered()) {
                                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
@@ -884,10 +888,6 @@ int main(int, char**)
                         ImGui::EndGroup();
                     }
 
-                    if (!successfulCommunication_avoidMutex) {
-                        ImGui::EndDisabled();
-                    }
-
                     ImGui::EndTabItem();
                 }
 
@@ -920,10 +920,14 @@ int main(int, char**)
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
                             }
 
+                            if (ImGui::Checkbox("Show acceleration", &settings.showAcceleration)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "showAcceleration", settings.showAcceleration);
+                            }
 
                             if (ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorRPM", settings.showMotorRPM);
                             }
+
 
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
