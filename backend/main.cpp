@@ -407,6 +407,7 @@ int main() {
                         commAddValue(&toSend, estimatedRange.distance, 15);
                         commAddValue(&toSend, estimatedRange.range, 15);
                         commAddValue(&toSend, VESC.data.tempMotor, 1);
+                        commAddValue(&toSend, VESC.data.tempMosfet, 1);
                         commAddValue(&toSend, uptimeInSeconds, 0);
                         commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
                         commAddValue(&toSend, 1100, 0); // timeCore1

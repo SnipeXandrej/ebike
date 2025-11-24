@@ -21,8 +21,8 @@ You will also need to have the WiringPi library installed, as thats used for the
 Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 
 ## Status of features
-- [x] Teplota motora
-- [ ] Teplota ESC
+- [x] Motor temperature
+- [x] VESC MOSFET temperature
 - [x] Speed (calculated from the motor speed)
 - [x] Odometer
 - [x] Trip A / Trip B with Wh/km usage separate for both trips

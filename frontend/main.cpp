@@ -82,6 +82,7 @@ struct {
     float trip_distance;
     float phase_current;
     float temperature_motor;
+    float temperature_vesc;
     float timeCore0_us;
     float timeCore1_us;
     float acceleration;
@@ -311,6 +312,7 @@ void processRead(std::string line) {
                             backend.estimatedRange.distance = getValueFromPacket(packet, &index);
                             backend.estimatedRange.range = getValueFromPacket(packet, &index);
                             backend.temperature_motor = getValueFromPacket(packet, &index);
+                            backend.temperature_vesc = getValueFromPacket(packet, &index);
                             backend.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
                             backend.timeCore0_us = getValueFromPacket(packet, &index);
                             backend.timeCore1_us = getValueFromPacket(packet, &index);
@@ -1163,6 +1165,9 @@ int main(int, char**)
                             ImGui::SeparatorText("VESC");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
+
+                            ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.temperature_vesc);
+                            ImGui::Text(" ");
 
                             ImGui::BeginGroup();
                                 float ItemWidth = 150.0;
