@@ -8,7 +8,7 @@ SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
 # OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 OBJS = $(SOURCES:.cpp=.o)
-CXXFLAGS = -std=c++23 -g -Wall
+CXXFLAGS = -std=c++23 -g -Wall -Wextra
 
 LIBS = -lwiringPi
 

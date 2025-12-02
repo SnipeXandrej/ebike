@@ -3,35 +3,37 @@
 int IPCServer::begin() {
     system("/bin/bash -c '! [[ -e /tmp/ebike-ipc ]] && touch /tmp/ebike-ipc fi'");
 
-    // ftok to generate unique key
     key = ftok("/tmp/ebike-ipc", 999);
-    if (key == -1) {
+    if (key == (key_t)-1) {
         perror("ftok failed");
         return -1;
     }
 
-    // shmget returns an identifier in shmid
-    shmid = shmget(key, 1024, 0666 | IPC_CREAT);
+    shmid = shmget(key, sizeof(SharedMemory), 0666 | IPC_CREAT);
     if (shmid == -1) {
         perror("shmget failed");
         return -1;
     }
 
-    // shmat to attach to shared memory
     shm = (SharedMemory*)shmat(shmid, NULL, 0);
     if (shm == (void*)-1) {
         perror("shmat failed");
         return -1;
     }
 
-    strcpy(shm->dataForServer, "");
-    strcpy(shm->dataForClient, "");
+    // initialize contents and semaphores only once
+    memset(shm, 0, sizeof(SharedMemory));
 
-    sem_init(&shm->dataServerRead, 1, 0);
-    sem_init(&shm->dataClientRead, 1, 0);
+    sem_init(&shm->dataServerWrite, 1, 1);
+    sem_init(&shm->clientCanRead,   1, 0);
 
-    sem_post(&shm->dataClientRead);
-    sem_post(&shm->dataServerRead);
+    sem_init(&shm->dataClientWrite, 1, 1);
+    sem_init(&shm->serverCanRead,   1, 0);
+
+    shm->dataForServerLen.store(0, std::memory_order_relaxed);
+    shm->dataForClientLen.store(0, std::memory_order_relaxed);
+
+    shm->initialized.store(1, std::memory_order_release);
 
     return 0;
 };
@@ -44,18 +46,33 @@ void IPCServer::stop() {
     shmctl(shmid, IPC_RMID, NULL);
 }
 
-void IPCServer::write(const char *format, ...) {
-    char buffer[1024];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
+void IPCServer::write(const char* data, size_t size) {
+    if (size > (sizeof(shm->dataForClient)))
+        size = sizeof(shm->dataForClient);
 
-    strcpy(shm->dataForClient, buffer);
-    sem_post(&shm->dataClientRead);
+    sem_wait(&shm->dataServerWrite);
+
+    memcpy(shm->dataForClient, data, size);
+
+    shm->dataForClientLen.store((int)size, std::memory_order_relaxed);
+
+    sem_post(&shm->clientCanRead);
 }
 
 std::string IPCServer::read() {
-    sem_wait(&shm->dataServerRead);
-    return (std::string)shm->dataForServer;
+    sem_wait(&shm->serverCanRead);
+
+    int len = shm->dataForServerLen.load(std::memory_order_acquire);
+
+    if (len < 0)
+        len = 0;
+
+    if ((size_t)len > sizeof(shm->dataForServer))
+        len = sizeof(shm->dataForServer);
+
+    std::string out(shm->dataForServer, (size_t)len);
+
+    sem_post(&shm->dataClientWrite);
+
+    return out;
 }

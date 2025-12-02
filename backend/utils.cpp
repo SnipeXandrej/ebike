@@ -1,21 +1,18 @@
 #include "utils.hpp"
 
 void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, const char* setting_name, double value) {
-    // // Update the value
-    // if (auto settings = tbl[table_name].as_table()) {
-    //     (*settings)[setting_name] = value;  // Set to your desired value
-    // } else {
-    //     std::cerr << "No [settings] table found.\n";
-    // }
-
     toml::table tbl = toml::parse_file(SETTINGS_FILEPATH);
+    toml::table* settings = tbl[table_name].as_table();
 
-    // Access the [settings] table
-    if (toml::table* settings = tbl[table_name].as_table()) {
-        // Assign or update the value
-        settings->insert_or_assign(setting_name, value); // or any desired value
-        std::cout << "saved: " << table_name << "." << setting_name << "=" << value << "\n";
+    // if the table doesn't exist - create it
+    if (!settings) {
+        tbl.insert_or_assign(table_name, toml::table{});
+        settings = tbl[table_name].as_table();
     }
+
+    settings->insert_or_assign(setting_name, value);
+    std::cout << "saved: " << table_name << "." << setting_name << "=" << value << "\n";
+
 
     // Write back to file
     std::ofstream file(SETTINGS_FILEPATH);
@@ -28,7 +25,7 @@ float getValueFromPacket(std::vector<std::string> token, int index) {
         return std::stof(token[index]);
     }
 
-    std::println("Index out of bounds");
+    std::print("Index out of bounds: {}\n", token[index-1]);
     return -1;
 }
 
@@ -37,7 +34,7 @@ double getValueFromPacket_double(std::vector<std::string> token, int index) {
         return std::stod(token[index]);
     }
 
-    std::println("Index out of bounds");
+    std::print("Index out of bounds: {}\n", token[index-1]);
     return -1;
 }
 
@@ -49,7 +46,7 @@ uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int index) {
         return result;
     }
 
-    std::println("Index out of bounds");
+    std::print("Index out of bounds: {}\n", token[index-1]);
     return -1;
 }
 
@@ -58,7 +55,7 @@ std::string getValueFromPacket_string(std::vector<std::string> token, int index)
         return token[index];
     }
 
-    std::println("Index out of bounds");
+    std::print("Index out of bounds: {}\n", token[index-1]);
     return "-1";
 }
 
@@ -100,5 +97,10 @@ void commAddValue(std::string* string, double value, int precision) {
     out << std::fixed << value;
 
     string->append(out.str());
+    string->append(";");
+}
+
+void commAddValue_string(std::string* string, std::string value) {
+    string->append(value);
     string->append(";");
 }

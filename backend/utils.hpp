@@ -22,6 +22,8 @@ std::vector<std::string> split(const std::string& input, char delimiter);
 
 void commAddValue(std::string* string, double value, int precision);
 
+void commAddValue_string(std::string* string, std::string value);
+
 float map_f(float x, float in_min, float in_max, float out_min, float out_max);
 
 float map_f_nochecks(float x, float in_min, float in_max, float out_min, float out_max);

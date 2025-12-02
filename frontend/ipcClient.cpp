@@ -1,56 +1,30 @@
 #include "ipcClient.hpp"
 
 int IPCClient::begin() {
-    shmdt(shm);
-    shm = nullptr;
-
-    // std::printf("shm3: %d\n", (void*)shm);
-    // ftok to generate unique key
-    int key = ftok("/tmp/ebike-ipc", 999);
+    key_t key = ftok("/tmp/ebike-ipc", 999);
     if (key == (key_t)-1) {
-        std::printf("ftok failed\n");
+        perror("ftok failed");
         successfulCommunication = false;
         return -1;
     }
 
-    // shmget returns an identifier in shmid
-    key_t shmid = shmget(key, 1024, 0666);
+    int shmid = shmget(key, sizeof(SharedMemory), 0666);
     if (shmid == -1) {
-        std::printf("shmget failed\n");
+        perror("shmget failed");
         successfulCommunication = false;
         return -1;
     }
 
-    struct shmid_ds info;
-    if (shmctl(shmid, IPC_STAT, &info) == -1) {
-        std::printf("shmctl failed\n");
-        successfulCommunication = false;
-        return -1;
-    }
-
-    /* Optional: check age or attachments count */
-    if (info.shm_nattch == 0) {
-        time_t age = time(NULL) - info.shm_ctime;
-        if (age > 1 /*second*/) {
-            std::printf("shm is old\n");
-            successfulCommunication = false;
-            return -1;
-        }
-    }
-
-    // shmat to attach to shared memory
     shm = (SharedMemory*)shmat(shmid, NULL, 0);
     if (shm == (void*)-1) {
-        std::printf("shmat failed\n");
+        perror("shmat failed");
         successfulCommunication = false;
         return -1;
     }
 
-    sem_post(&shm->dataClientRead);
-    sem_post(&shm->dataServerRead);
-    // std::printf("Server: %s\n", shm->dataForServer);
-    // std::printf("Client: %s\n", shm->dataForClient);
-    // strcpy(shm->dataForClient, "");
+    while (shm->initialized.load(std::memory_order_acquire) == 0) {
+        usleep(1000);
+    }
 
     successfulCommunication = true;
     return 0;
@@ -64,20 +38,33 @@ void IPCClient::stop() {
     // shmctl(shmid, IPC_RMID, NULL);
 }
 
-void IPCClient::write(const char *format, ...) {
-    char buffer[1024];
-    va_list args;
-    va_start(args, format);
-    vsnprintf(buffer, sizeof(buffer), format, args);
-    va_end(args);
+void IPCClient::write(const char *data, size_t size) {
+    if (size > (sizeof(shm->dataForServer)))
+        size = sizeof(shm->dataForServer);
 
-    strcpy(shm->dataForServer, buffer);
-    sem_post(&shm->dataServerRead);
+    sem_wait(&shm->dataClientWrite);
+
+    memcpy(shm->dataForServer, data, size);
+
+    shm->dataForServerLen.store((int)size, std::memory_order_relaxed);
+
+    sem_post(&shm->serverCanRead);
 }
 
 std::string IPCClient::read() {
-    sem_wait(&shm->dataClientRead);
+    sem_wait(&shm->clientCanRead);
 
-    // std::cout << "What was read: " << (std::string)shm->dataForClient << "\n";
-    return (std::string)shm->dataForClient;
+    int len = shm->dataForClientLen.load(std::memory_order_acquire);
+
+    if (len < 0)
+        len = 0;
+
+    if ((size_t)len > sizeof(shm->dataForClient))
+        len = sizeof(shm->dataForClient);
+
+    std::string out(shm->dataForClient, (size_t)len);
+
+    sem_post(&shm->dataServerWrite);
+
+    return out;
 }

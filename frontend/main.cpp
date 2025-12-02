@@ -29,16 +29,6 @@
 #include "arc_progress_bar.hpp"
 #include "timer.hpp"
 
-enum POWER_PROFILE {
-    LEGAL = 0,
-    ECO = 1,
-    BALANCED = 2,
-    PERFORMANCE = 3,
-    PERFORMANCE2 = 4
-};
-
-int POWER_PROFILE_CURRENT;
-
 struct VESC_MCCONF {
     float l_current_min_scale;
     float l_current_max_scale;
@@ -56,11 +46,13 @@ struct VESC_MCCONF {
     // float gear_ratio;
     // float wheel_diameter;
 };
-VESC_MCCONF mcconf_vesc, mcconf_current, mcconf_legal, mcconf_eco, mcconf_balanced, mcconf_performance, mcconf_performance2;
+VESC_MCCONF mcconf_vesc;
 
 struct trip {
     double distance; // in km
     double wattHoursUsed;
+    double wattHoursConsumed;
+    double wattHoursRegenerated;
 };
 
 struct estRange {
@@ -81,6 +73,7 @@ struct {
     float odometer_distance;
     float trip_distance;
     float phase_current;
+    float duty_cycle;
     float temperature_motor;
     float temperature_vesc;
     float timeCore0_us;
@@ -89,6 +82,7 @@ struct {
     bool power_on = false;
     std::string log;
     bool regenerativeBraking;
+    int currentPowerProfile;
 
     std::string fw_name;
     std::string fw_version;
@@ -108,6 +102,7 @@ struct {
     bool showMotorRPM;
     bool showAcceleration;
     bool showTripA;
+    bool showMotorDutyInsteadOfMotorTemp;
 } settings;
 
 struct {
@@ -163,9 +158,8 @@ struct {
     Timer ping;
 } timer;
 
-float voltage_last_values_array[140];
-float current_last_values_array[140];
-float temperature_last_values_array[2000];
+std::string availablePowerProfiles;
+bool successfulCommunication = false;
 
 std::string to_send;
 std::string to_send_extra;
@@ -181,6 +175,7 @@ IPCClient IPC;
 ArcProgressBar ArcBar_WhKmNow;
 ArcProgressBar ArcBar_phaseCurrent;
 ArcProgressBar ArcBar_motorTemp;
+ArcProgressBar ArcBar_motorDutyCycle;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
@@ -200,9 +195,9 @@ void setBrightnessHigh() {
     }
 }
 
-void setMcconfValues(VESC_MCCONF mcconf) {
-    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};{};\n"
-                                        ,static_cast<int>(COMMAND_ID::SET_VESC_MCCONF)
+void setMcconfCustomValues(VESC_MCCONF mcconf) {
+    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
+                                        ,static_cast<int>(COMMAND_ID::SET_POWER_PROFILE_CUSTOM)
                                         ,mcconf.l_current_min_scale
                                         ,mcconf.l_current_max_scale
                                         ,mcconf.l_min_erpm
@@ -213,33 +208,16 @@ void setMcconfValues(VESC_MCCONF mcconf) {
                                         ,mcconf.l_watt_max
                                         ,mcconf.l_in_current_min
                                         ,mcconf.l_in_current_max
-                                        ,mcconf.name
     );
     to_send_extra.append(append);
 }
 
 void setPowerProfile(int PROFILE) {
-    POWER_PROFILE_CURRENT = PROFILE;
-    settings.powerProfile = PROFILE;
-
-    switch (PROFILE) {
-        case POWER_PROFILE::LEGAL:
-            mcconf_current = mcconf_legal;
-            break;
-        case POWER_PROFILE::ECO:
-            mcconf_current = mcconf_eco;
-            break;
-        case POWER_PROFILE::BALANCED:
-            mcconf_current = mcconf_balanced;
-            break;
-        case POWER_PROFILE::PERFORMANCE:
-            mcconf_current = mcconf_performance;
-            break;
-        case POWER_PROFILE::PERFORMANCE2:
-            mcconf_current = mcconf_performance2;
-            break;
-    }
-    setMcconfValues(mcconf_current);
+    std::string append = std::format("{};{};\n"
+                                        ,static_cast<int>(COMMAND_ID::SET_POWER_PROFILE)
+                                        ,PROFILE
+    );
+    to_send_extra.append(append);
 }
 
 void writeClock() {
@@ -256,12 +234,14 @@ void writeClock() {
 
 void processRead(std::string line) {
         if (!line.empty()) {
-            // std::cout << "Received: " << line << "\n";
+            // std::print("\n{}\n", line);
 
             auto readStringPacket = split(line, '\n');
 
+            if (!readStringPacket.empty())
             for (int i = 0; i < (int)readStringPacket.size(); i++) {
                 auto packet = split(readStringPacket[i], ';');
+                if (!packet.empty()) {
 
                 int index = 1;
                 int command_id = 0;
@@ -275,10 +255,10 @@ void processRead(std::string line) {
 
                 if (command_id == COMMAND_ID::ARE_YOU_ALIVE) {
                         std::cout << "[IPC] Successful communication with Atmega8!" << "\n";
-                        IPC.successfulCommunication = true;
+                        successfulCommunication = true;
                 }
 
-                if (IPC.successfulCommunication) {
+                if (successfulCommunication) {
                     switch (command_id) {
                         case COMMAND_ID::GET_BATTERY:
                             battery.voltage = getValueFromPacket(packet, &index);
@@ -305,9 +285,14 @@ void processRead(std::string line) {
                             backend.odometer_distance = getValueFromPacket(packet, &index);
                             backend.trip_A.distance = getValueFromPacket(packet, &index);
                             backend.trip_A.wattHoursUsed = getValueFromPacket(packet, &index);
+                            backend.trip_A.wattHoursConsumed = getValueFromPacket(packet, &index);
+                            backend.trip_A.wattHoursRegenerated = getValueFromPacket(packet, &index);
                             backend.trip_B.distance = getValueFromPacket(packet, &index);
                             backend.trip_B.wattHoursUsed = getValueFromPacket(packet, &index);
+                            backend.trip_B.wattHoursConsumed = getValueFromPacket(packet, &index);
+                            backend.trip_B.wattHoursRegenerated = getValueFromPacket(packet, &index);
                             backend.phase_current = getValueFromPacket(packet, &index);
+                            backend.duty_cycle = getValueFromPacket(packet, &index);
                             backend.estimatedRange.WhPerKm = getValueFromPacket(packet, &index);
                             backend.estimatedRange.distance = getValueFromPacket(packet, &index);
                             backend.estimatedRange.range = getValueFromPacket(packet, &index);
@@ -319,13 +304,13 @@ void processRead(std::string line) {
                             backend.acceleration = getValueFromPacket(packet, &index);
                             backend.power_on = (bool)getValueFromPacket(packet, &index);
                             backend.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
+                            backend.currentPowerProfile = (int)getValueFromPacket(packet, &index);
 
                             backend.clockSecondsSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot) % 60;
                             backend.clockMinutesSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot / 60.0) % 60;
                             backend.clockHoursSinceBoot   = (uint64_t)(backend.totalSecondsSinceBoot / 60.0 / 60.0) % 24;
                             backend.clockDaysSinceBoot    = backend.totalSecondsSinceBoot / 60.0 / 60.0 / 24;
 
-                            addValueToArray(2000, temperature_last_values_array, backend.temperature_motor);
                             break;
 
                         case COMMAND_ID::GET_FW:
@@ -361,9 +346,20 @@ void processRead(std::string line) {
 
                         case COMMAND_ID::BACKEND_LOG:
                             backend.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
+                            break;
+
+                        case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
+                            availablePowerProfiles = getValueFromPacket_string(packet, &index);
+
+                            break;
+
+                        default:
+                            // std::cout << "Received: " << line << "\n";
+                            break;
                     }
                 }
             }
+            } // !packet.empty()
         }
 }
 
@@ -392,74 +388,6 @@ int main(int, char**)
     // ##### Settings #####
     // ####################
 
-    // (42/14)*(57/16) = 10.6875 Gear ratio
-    float RPM_PER_KMH = 90.04;
-
-    mcconf_legal.l_current_min_scale = 1.0;
-    mcconf_legal.l_current_max_scale = 1.0;
-    mcconf_legal.l_min_erpm = -(500*3);
-    mcconf_legal.l_max_erpm = ((RPM_PER_KMH * 25 + 2.5) * 3); // 25km/h
-    mcconf_legal.l_min_duty = 0.005;
-    mcconf_legal.l_max_duty = 0.95;
-    mcconf_legal.l_watt_min = -10000;
-    mcconf_legal.l_watt_max = 250;
-    mcconf_legal.l_in_current_min = -16;
-    mcconf_legal.l_in_current_max = 96;
-    mcconf_legal.name = "Legal";
-    mcconf_legal.id = POWER_PROFILE::LEGAL;
-
-    mcconf_eco.l_current_min_scale = 1.0;
-    mcconf_eco.l_current_max_scale = 0.2; // 60A
-    mcconf_eco.l_min_erpm = -(500*3);
-    mcconf_eco.l_max_erpm = ((RPM_PER_KMH * 25 + 2.5) * 3); // 20km/h
-    mcconf_eco.l_min_duty = 0.005;
-    mcconf_eco.l_max_duty = 0.95;
-    mcconf_eco.l_watt_min = -10000;
-    mcconf_eco.l_watt_max = 1000;
-    mcconf_eco.l_in_current_min = -16;
-    mcconf_eco.l_in_current_max = 96;
-    mcconf_eco.name = "Eco";
-    mcconf_eco.id = POWER_PROFILE::ECO;
-
-    mcconf_balanced.l_current_min_scale = 1.0;
-    mcconf_balanced.l_current_max_scale = 0.4;
-    mcconf_balanced.l_min_erpm = -(500*3);
-    mcconf_balanced.l_max_erpm = ((RPM_PER_KMH * 40 + 2.5) * 3); // 40km/h
-    mcconf_balanced.l_min_duty = 0.005;
-    mcconf_balanced.l_max_duty = 0.95;
-    mcconf_balanced.l_watt_min = -10000;
-    mcconf_balanced.l_watt_max = 2250;
-    mcconf_balanced.l_in_current_min = -16;
-    mcconf_balanced.l_in_current_max = 96;
-    mcconf_balanced.name = "Balanced";
-    mcconf_balanced.id = POWER_PROFILE::BALANCED;
-
-    mcconf_performance.l_current_min_scale = 1.0;
-    mcconf_performance.l_current_max_scale = 1.0;
-    mcconf_performance.l_min_erpm = -(500*3);
-    mcconf_performance.l_max_erpm = ((RPM_PER_KMH * 60 + 2.5) * 3); // 60km/h
-    mcconf_performance.l_min_duty = 0.005;
-    mcconf_performance.l_max_duty = 0.95;
-    mcconf_performance.l_watt_min = -10000;
-    mcconf_performance.l_watt_max = 6000;
-    mcconf_performance.l_in_current_min = -16;
-    mcconf_performance.l_in_current_max = 96;
-    mcconf_performance.name = "Performance";
-    mcconf_performance.id = POWER_PROFILE::PERFORMANCE;
-
-    mcconf_performance2.l_current_min_scale = 1.0;
-    mcconf_performance2.l_current_max_scale = 1.0;
-    mcconf_performance2.l_min_erpm = -(500*3);
-    mcconf_performance2.l_max_erpm = (6500 * 3); // 72.2km/h // Max RPM limit (6500RPM)
-    mcconf_performance2.l_min_duty = 0.005;
-    mcconf_performance2.l_max_duty = 0.95;
-    mcconf_performance2.l_watt_min = -10000;
-    mcconf_performance2.l_watt_max = 10000;
-    mcconf_performance2.l_in_current_min = -16;
-    mcconf_performance2.l_in_current_max = 110;
-    mcconf_performance2.name = "Performance2";
-    mcconf_performance2.id = POWER_PROFILE::PERFORMANCE2;
-
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.05f;
 
@@ -475,16 +403,15 @@ int main(int, char**)
     settings.TARGET_FPS         = tbl["settings"]["framerate"].value_or(60);
     settings.LIMIT_FRAMERATE    = tbl["settings"]["limit_framerate"].value_or(0);
     settings.ipcWriteWaitMs     = tbl["settings"]["ipcWriteWaitMs"].value_or(50);
-    settings.powerProfile       = tbl["settings"]["powerProfile"].value_or(POWER_PROFILE::BALANCED);
     settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
     settings.showAcceleration   = tbl["settings"]["showAcceleration"].value_or(1);
     settings.showTripA          = tbl["settings"]["showTripA"].value_or(1);
-
-    setPowerProfile(settings.powerProfile);
+    settings.showMotorDutyInsteadOfMotorTemp = tbl["settings"]["showMotorDutyInsteadOfMotorTemp"].value_or(0);
 
     ArcBar_WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, "Wh/km");
     ArcBar_phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, "Phase");
     ArcBar_motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, "Temp");
+    ArcBar_motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, "Duty");
 
     // ################
     // ##### IPC ######
@@ -497,6 +424,13 @@ int main(int, char**)
             std::printf("[IPC] Failed to initialize\n");
         }
 
+        std::jthread commThreadRead([&] {
+            while(!done) {
+                std::string readFromIPC = IPC.read();
+                processRead(readFromIPC);
+            }
+        });
+
         std::cout << "[IPC] Entering main while loop\n";
         while(!done) {
             cpuUsage.ipcThread.measureStart(1);
@@ -504,31 +438,39 @@ int main(int, char**)
             to_send = "";
             static bool sendOnce = false;
 
-            if (!IPC.successfulCommunication) {
+            if (!successfulCommunication) {
                 sendOnce = false;
+
+                commAddValue(&to_send, COMMAND_ID::ARE_YOU_ALIVE, 0);
+                to_send.append("\n");
+
+                IPC.write(to_send.data(), to_send.size());
 
                 // hol'up
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
             }
 
-            if (IPC.successfulCommunication) {
+            if (successfulCommunication) {
                 auto t1 = std::chrono::high_resolution_clock::now();
 
                 timer.ping.end();
                 if (timer.ping.getTime_ms() >= 750.0) {
                     timer.ping.start();
 
+
                     commAddValue(&to_send, COMMAND_ID::PING, 0);
                     to_send.append("\n");
 
-                    commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
-                    to_send.append("\n");
-
-                    if (mcconf_vesc.name != mcconf_current.name || sendOnce == false) {
+                    if (sendOnce == false) {
                         sendOnce = true;
 
-                        setPowerProfile(mcconf_current.id);
+                        commAddValue(&to_send, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES, 0);
+                        to_send.append("\n");
+
                         commAddValue(&to_send, COMMAND_ID::GET_VESC_MCCONF, 0);
+                        to_send.append("\n");
+
+                        commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
                         to_send.append("\n");
                     }
                 }
@@ -543,11 +485,7 @@ int main(int, char**)
                 to_send.append(to_send_extra);
                 to_send_extra = "";
 
-                IPC.write(to_send.c_str());
-
-                std::string readFromIPC = IPC.read();
-                processRead(readFromIPC);
-
+                IPC.write(to_send.data(), to_send.size());
                 std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
                 msElapsed = std::chrono::high_resolution_clock::now() - t1;
             }
@@ -555,6 +493,8 @@ int main(int, char**)
             cpuUsage.ipcThread.measureEnd(1);
         }
 
+        commThreadRead.request_stop();
+        commThreadRead.join();
         IPC.stop();
         return 0;
     });
@@ -747,15 +687,16 @@ int main(int, char**)
 
                     ImGui::BeginGroup(); // Starts here
                         ImGui::BeginGroup();
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+
                             ImGui::Text("Power info");
                             movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
 
                             ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
-                            ImGui::TextColored(ImVec4(1.0, 0.0, 0.0, 1.0), "%7.2f A", battery.current);
+                            ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%7.2f A", battery.current);
                             ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
 
                             ImGui::Dummy(ImVec2(0.0, 40.0));
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.75);
                                 ImGui::TextColored(backend.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
                             ImGui::PopFont();
                             if (ImGui::IsItemClicked())
@@ -797,7 +738,16 @@ int main(int, char**)
                         ArcBar_phaseCurrent.ProgressBarArc(backend.phase_current);
 
                         ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
-                        ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
+                        if (settings.showMotorDutyInsteadOfMotorTemp) {
+                            ArcBar_motorDutyCycle.ProgressBarArc(backend.duty_cycle);
+                        } else {
+                            ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
+                        }
+
+                        if (ImGui::IsItemClicked()) {
+                            settings.showMotorDutyInsteadOfMotorTemp = !settings.showMotorDutyInsteadOfMotorTemp;
+                            updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+                        }
                     ImGui::EndGroup();
 
 
@@ -905,9 +855,9 @@ int main(int, char**)
                                 ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
 
                                 ImGui::SetNextItemWidth(230.0);
-                                if (ImGui::Combo("##v", &POWER_PROFILE_CURRENT, "Legal\0Eco\0Balanced\0Performance 1\0Performance 2\0")) {
-                                    setPowerProfile(POWER_PROFILE_CURRENT);
-                                    updateTableValue(SETTINGS_FILEPATH, "settings", "powerProfile", settings.powerProfile);
+                                if (ImGui::Combo("##v", &backend.currentPowerProfile, availablePowerProfiles.data())) {
+                                    setPowerProfile(backend.currentPowerProfile);
+                                    to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF)));
                                 }
 
                                 // ImGui::PopFont();
@@ -962,6 +912,10 @@ int main(int, char**)
 
                             if (ImGui::Checkbox("Show trip A", &settings.showTripA)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
+                            }
+
+                            if (ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
                             }
 
 
@@ -1061,16 +1015,24 @@ int main(int, char**)
 
                             ImGui::Text("Trip A\n"
                                         "   Distance:       %0.3f km\n"
-                                        "   Watthours used: %0.3f\n\n"
+                                        "   Wh used:        %0.3f\n"
+                                        "   Wh Consumed:    %0.3f\n"
+                                        "   Wh Regenerated: %0.3f\n\n"
                                         , backend.trip_A.distance
                                         , backend.trip_A.wattHoursUsed
+                                        , backend.trip_A.wattHoursConsumed
+                                        , backend.trip_A.wattHoursRegenerated
                                        );
 
                             ImGui::Text("Trip B\n"
                                         "   Distance:       %0.3f km\n"
-                                        "   Watthours used: %0.3f\n\n"
+                                        "   Wh used:        %0.3f\n"
+                                        "   Wh Consumed:    %0.3f\n"
+                                        "   Wh Regenerated: %0.3f\n\n"
                                         , backend.trip_B.distance
                                         , backend.trip_B.wattHoursUsed
+                                        , backend.trip_B.wattHoursConsumed
+                                        , backend.trip_B.wattHoursRegenerated
                                        );
 
                             if (ImGui::Button("Reset\nTrip A    ", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1189,7 +1151,7 @@ int main(int, char**)
                                 }
                                 ImGui::SameLine();
                                 if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    setMcconfValues(mcconf_vesc);
+                                    setMcconfCustomValues(mcconf_vesc);
                                 }
                             ImGui::EndGroup();
 
@@ -1286,7 +1248,9 @@ int main(int, char**)
     SDL_DestroyWindow(window);
     SDL_Quit();
 
-    commThread.join();
+    done = true;
+
+    // commThread.join();
 
     return 0;
 }

@@ -174,6 +174,11 @@ void commAddValue(std::string* string, double value, int precision) {
     string->append(";");
 }
 
+void commAddValue_string(std::string* string, std::string value) {
+    string->append(value);
+    string->append(";");
+}
+
 void TextCenteredOnLine(const char* label, float alignment, bool contentRegionFromWindow) {
     ImGuiStyle& style = ImGui::GetStyle();
 
@@ -277,25 +282,31 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
 
 float getValueFromPacket(std::vector<std::string> token, int *index) {
     if (*index < (int)token.size()) {
-        float ret = std::stof(token[*index]);
+        std::stringstream ss(token[*index]);
+        float number;
+        ss >> number;
+
+        float ret = number;
         *index = *index+1;
 
         return ret;
     }
 
-    std::println("Index out of bounds");
+    std::print("[getValueFromPacket] Index out of bounds: {}\n", *index);
     return -1;
 }
 
 double getValueFromPacket_double(std::vector<std::string> token, int *index) {
     if (*index < (int)token.size()) {
-        double ret = std::stod(token[*index]);
-        *index = *index+1;
+        std::stringstream ss(token[*index]);
+        double result;
+        ss >> result;
 
-        return ret;
+        *index = *index+1;
+        return result;
     }
 
-    std::println("Index out of bounds");
+    std::print("[getValueFromPacket_double] Index out of bounds: {}\n", *index);
     return -1;
 }
 
@@ -307,7 +318,7 @@ std::string getValueFromPacket_string(std::vector<std::string> token, int *index
         return ret;
     }
 
-    std::println("Index out of bounds");
+    std::print("[getValueFromPacket_string] Index out of bounds: {}\n", *index);
     return "Error";
 }
 
@@ -319,7 +330,7 @@ uint64_t getValueFromPacket_uint64(std::vector<std::string> token, int *index) {
         return result;
     }
 
-    std::println("Index out of bounds");
+    std::print("[getValueFromPacket_uint64] Index out of bounds: {}\n", *index);
     return -1;
 }
 

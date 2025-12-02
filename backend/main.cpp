@@ -26,6 +26,7 @@
 #include "../comm.h"
 #include "inputOffset.h"
 #include "map.hpp"
+#include "profiles.hpp"
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
@@ -76,6 +77,7 @@ VescUart    VESC;
 MyUart      uartVESC;
 int         spiHandle;
 ThrottleMap throttle;
+PowerProfiles PP;
 
 struct {
     MovingAverage potThrottle;
@@ -134,6 +136,8 @@ struct {
 struct {
     double distance; // in km
     double wattHoursUsed;
+    double wattHoursConsumed;
+    double wattHoursRegenerated;
 } trip_A, trip_B;
 
 struct {
@@ -160,12 +164,13 @@ struct {
 struct {
     int poles = 18;
     int magnetPairs = 3;
-    float rpmPerKmh = 90.04;
+    float rpmPerKmh = 0;
 } motor;
 
 struct {
     float diameter = 63.0;
-    float gear_ratio = 10.6875;
+    float gear_ratio = 10.6875; // (42/14)*(57/16)
+    float rpmPerKmh = 0;
 } wheel;
 
 void estimatedRangeReset() {
@@ -234,9 +239,11 @@ void setupTOML() {
     // values
     odometer.distance                       = tbl["odometer"]["distance"].value_or<double>(-1);
     trip_A.distance                         = tbl["trip"]["distance"].value_or<double>(-1);
-    trip_A.wattHoursUsed                    = tbl["trip"]["wattHoursUsed"].value_or<double>(-1);
+    trip_A.wattHoursConsumed                = tbl["trip"]["wattHoursConsumed"].value_or<double>(-1);
+    trip_A.wattHoursRegenerated             = tbl["trip"]["wattHoursRegenerated"].value_or<double>(-1);
     trip_B.distance                         = tbl["trip_B"]["distance"].value_or<double>(-1);
-    trip_B.wattHoursUsed                    = tbl["trip_B"]["wattHoursUsed"].value_or<double>(-1);
+    trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"].value_or<double>(-1);
+    trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"].value_or<double>(-1);
     battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(-1);
     battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(-1);
     battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(-1);
@@ -245,14 +252,34 @@ void setupTOML() {
     battery.wattHoursFullyDischarged        = tbl["battery"]["wattHoursFullyDischarged"].value_or<double>(-1);
     settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"].value_or(0);
     settings.regenerativeBraking            = tbl["settings"]["regenerativeBraking"].value_or(0);
+    PP.setProfile(tbl["PP"]["setProfile"].value_or(0));
+
+    for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+        std::print("{}\n", PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+
+        for (int var = 0; var < PP_VALS::VALS_COUNT; var++) {
+            double ret = tbl
+                            [PROFILE_TO_STRING.at(static_cast<PROFILE>(profile))]
+                            [PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var))]
+                            .value_or<double>(-1);
+
+            PP.set(profile, var, ret);
+
+            std::print("i={} -> {} -> {}\n", var, PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var)), PP.get(profile, var));
+        }
+
+        std::print("\n");
+    }
 }
 
 void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "odometer", "distance", odometer.distance);
     updateTableValue(SETTINGS_FILEPATH, "trip", "distance", trip_A.distance);
-    updateTableValue(SETTINGS_FILEPATH, "trip", "wattHoursUsed", trip_A.wattHoursUsed);
+    updateTableValue(SETTINGS_FILEPATH, "trip", "wattHoursConsumed", trip_A.wattHoursConsumed);
+    updateTableValue(SETTINGS_FILEPATH, "trip", "wattHoursRegenerated", trip_A.wattHoursRegenerated);
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "distance", trip_B.distance);
-    updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursUsed", trip_B.wattHoursUsed);
+    updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursConsumed", trip_B.wattHoursConsumed);
+    updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursRegenerated", trip_B.wattHoursRegenerated);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsed", battery.ampHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
@@ -261,8 +288,39 @@ void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "battery", "wattHoursFullyDischarged", battery.wattHoursFullyDischarged);
     updateTableValue(SETTINGS_FILEPATH, "settings", "batteryPercentageVoltageBased", settings.batteryPercentageVoltageBased);
     updateTableValue(SETTINGS_FILEPATH, "settings", "regenerativeBraking", settings.regenerativeBraking);
+    updateTableValue(SETTINGS_FILEPATH, "PP", "setProfile", PP.getProfile());
+
+    for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+        std::print("{}\n", PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+
+        for (int var = 0; var < PP_VALS::VALS_COUNT; var++) {
+            double ret = PP.get(profile, var);
+
+            updateTableValue(SETTINGS_FILEPATH,
+                             PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)).c_str(),
+                             PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var)).c_str(),
+                             ret);
+        }
+
+        std::print("\n");
+    }
 
     toSendExtra.append(std::format("{};Settings and variables were saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+}
+
+void setMcconfFromCurrentProfile() {
+    VESC.data_mcconf.l_current_min_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE);
+    VESC.data_mcconf.l_current_max_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE);
+    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0;
+    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0;
+    VESC.data_mcconf.l_min_duty = PP.get(PP.getProfile(), PP_VALS::L_MIN_DUTY);
+    VESC.data_mcconf.l_max_duty = PP.get(PP.getProfile(), PP_VALS::L_MAX_DUTY);
+    VESC.data_mcconf.l_watt_min = PP.get(PP.getProfile(), PP_VALS::L_WATT_MIN);
+    VESC.data_mcconf.l_watt_max = PP.get(PP.getProfile(), PP_VALS::L_WATT_MAX);
+    VESC.data_mcconf.l_in_current_min = PP.get(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN);
+    VESC.data_mcconf.l_in_current_max = PP.get(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX);
+    VESC.data_mcconf.name = PROFILE_TO_STRING.at(static_cast<PROFILE>(PP.getProfile()));
+    VESC.setMcconfTempValues();
 }
 
 void setupGPIO() {
@@ -335,6 +393,9 @@ int main() {
     movingAverages.potThrottle.smoothingFactor = 0.7;
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
 
+    wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/);
+    motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
+
     setupIPC();  // IPC
     setupTOML(); // settings
     setupGPIO(); // RPi GPIO
@@ -343,206 +404,243 @@ int main() {
     setupADC2(); // ADC2 1ch 16bit (15bit)
     setupVESC(); // VESC
 
+    setMcconfFromCurrentProfile();
+
     std::thread readThread([&] {
         std::printf("[readThread] Started IPC Read\n");
         while(!done) {
             std::string toSend;
             std::string whatWasRead;
+            std::string listOfProfiles;
             whatWasRead = IPC.read();
 
-            auto readStringPacket = split(whatWasRead, '\n');
+            if (sizeof(whatWasRead.data()) > 1) {
+                auto readStringPacket = split(whatWasRead, '\n');
 
-            for (int i = 0; i < (int)readStringPacket.size(); i++) {
-                auto packet = split(readStringPacket[i], ';');
+                if (!readStringPacket.empty())
+                for (int i = 0; i < (int)readStringPacket.size(); i++) {
+                    auto packet = split(readStringPacket[i], ';');
 
-                bool isItStoiSafe = true;
-                for (char c : packet[0]) {
-                    if (!isdigit(c)) isItStoiSafe = false;
-                }
+                    if (!packet.empty()) {
+                        bool isItStoiSafe = true;
 
-                int packet_command_id = -1;
-                if (isItStoiSafe)
-                    packet_command_id = std::stoi(packet[0]);
-
-                switch(packet_command_id) {
-                    case COMMAND_ID::GET_BATTERY:
-                        commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
-                        commAddValue(&toSend, battery.voltage, 2);
-                        commAddValue(&toSend, battery.currentForFrontend, 4);
-                        commAddValue(&toSend, battery.watts, 1);
-                        commAddValue(&toSend, battery.wattHoursUsed, 15);
-                        commAddValue(&toSend, battery.wattHoursFullyDischarged, 15);
-                        commAddValue(&toSend, battery.ampHoursUsed, 6);
-                        commAddValue(&toSend, battery.ampHoursUsedLifetime, 2);
-                        commAddValue(&toSend, battery.ampHoursFullyCharged, 2);
-                        commAddValue(&toSend, battery.ampHoursFullyChargedWhenNew, 2);
-                        commAddValue(&toSend, battery.percentage, 1);
-                        commAddValue(&toSend, battery.voltage_min, 1);
-                        commAddValue(&toSend, battery.voltage_max, 1);
-                        commAddValue(&toSend, battery.voltage_nominal, 1);
-                        commAddValue(&toSend, battery.amphours_min_voltage, 1);
-                        commAddValue(&toSend, battery.amphours_max_voltage, 1);
-                        commAddValue(&toSend, battery.charging, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::ARE_YOU_ALIVE:
-                        commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::GET_STATS:
-                        commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
-                        commAddValue(&toSend, speed_kmh, 1);
-                        commAddValue(&toSend, motor_rpm, 0);
-                        commAddValue(&toSend, odometer.distance, 1);
-                        commAddValue(&toSend, trip_A.distance, 15);
-                        commAddValue(&toSend, trip_A.wattHoursUsed, 15);
-                        commAddValue(&toSend, trip_B.distance, 15);
-                        commAddValue(&toSend, trip_B.wattHoursUsed, 15);
-                        commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
-                        commAddValue(&toSend, estimatedRange.WhPerKm, 15);
-                        commAddValue(&toSend, estimatedRange.distance, 15);
-                        commAddValue(&toSend, estimatedRange.range, 15);
-                        commAddValue(&toSend, VESC.data.tempMotor, 1);
-                        commAddValue(&toSend, VESC.data.tempMosfet, 1);
-                        commAddValue(&toSend, uptimeInSeconds, 0);
-                        commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
-                        commAddValue(&toSend, 1100, 0); // timeCore1
-                        commAddValue(&toSend, acceleration, 1);
-                        commAddValue(&toSend, powerOn, 0);
-                        commAddValue(&toSend, settings.regenerativeBraking, 0);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::SET_ODOMETER:
-                        odometer.distance = (float)getValueFromPacket(packet, 1);
-                        toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), odometer.distance));
-                        break;
-
-                    case COMMAND_ID::SAVE_PREFERENCES:
-                        saveAll();
-                        toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        break;
-
-                    case COMMAND_ID::RESET_TRIP_A:
-                        tripAReset();
-                        toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        break;
-
-                    case COMMAND_ID::RESET_ESTIMATED_RANGE:
-                        estimatedRangeReset();
-                        toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        break;
-
-                    case COMMAND_ID::GET_FW:
-                        commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
-                        toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
-
-                        toSend.append("\n");
-                        break;
-
-                    // case COMMAND_ID::PING:
-                    //     display.ping();
-                    //     break;
-
-                    // case COMMAND_ID::TOGGLE_FRONT_LIGHT:
-
-                    //     break;
-
-                    case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
-                        battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
-                        toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.ampHoursUsedLifetime));
-                        break;
-
-                    case COMMAND_ID::GET_VESC_MCCONF:
-                        if (VESC.getMcconfTempValues()) {
-                            commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
-                            commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
-                            commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
-                            toSend.append(VESC.data_mcconf.name); toSend.append(";");
-                            toSend.append("\n");
-
-                            toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        } else {
-                            toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        for (char c : packet[0]) {
+                            if (!isdigit(c)) isItStoiSafe = false;
                         }
-                        break;
 
-                    case COMMAND_ID::SET_VESC_MCCONF:
-                        VESC.data_mcconf.l_current_min_scale = (float)getValueFromPacket(packet, 1);
-                        VESC.data_mcconf.l_current_max_scale = (float)getValueFromPacket(packet, 2);
-                        VESC.data_mcconf.l_min_erpm = (float)getValueFromPacket(packet, 3) / 1000.00;
-                        VESC.data_mcconf.l_max_erpm = (float)getValueFromPacket(packet, 4) / 1000.00;
-                        VESC.data_mcconf.l_min_duty = (float)getValueFromPacket(packet, 5);
-                        VESC.data_mcconf.l_max_duty = (float)getValueFromPacket(packet, 6);
-                        VESC.data_mcconf.l_watt_min = (float)getValueFromPacket(packet, 7);
-                        VESC.data_mcconf.l_watt_max = (float)getValueFromPacket(packet, 8);
-                        VESC.data_mcconf.l_in_current_min = (float)getValueFromPacket(packet, 9);
-                        VESC.data_mcconf.l_in_current_max = (float)getValueFromPacket(packet, 10);
-                        VESC.data_mcconf.name = getValueFromPacket_string(packet, 11);
-                        VESC.setMcconfTempValues();
+                        int packet_command_id = -1;
+                        if (isItStoiSafe)
+                            packet_command_id = std::stoi(packet[0]);
 
-                        toSend.append(std::format("{};VESC McConf was sent;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        break;
+                        switch(packet_command_id) {
+                            case COMMAND_ID::GET_BATTERY:
+                                commAddValue(&toSend, COMMAND_ID::GET_BATTERY, 0);
+                                commAddValue(&toSend, battery.voltage, 2);
+                                commAddValue(&toSend, battery.currentForFrontend, 4);
+                                commAddValue(&toSend, battery.watts, 1);
+                                commAddValue(&toSend, battery.wattHoursUsed, 15);
+                                commAddValue(&toSend, battery.wattHoursFullyDischarged, 15);
+                                commAddValue(&toSend, battery.ampHoursUsed, 6);
+                                commAddValue(&toSend, battery.ampHoursUsedLifetime, 2);
+                                commAddValue(&toSend, battery.ampHoursFullyCharged, 2);
+                                commAddValue(&toSend, battery.ampHoursFullyChargedWhenNew, 2);
+                                commAddValue(&toSend, battery.percentage, 1);
+                                commAddValue(&toSend, battery.voltage_min, 1);
+                                commAddValue(&toSend, battery.voltage_max, 1);
+                                commAddValue(&toSend, battery.voltage_nominal, 1);
+                                commAddValue(&toSend, battery.amphours_min_voltage, 1);
+                                commAddValue(&toSend, battery.amphours_max_voltage, 1);
+                                commAddValue(&toSend, battery.charging, 0);
 
-                    case COMMAND_ID::SET_AMPHOURS_CHARGED:
-                        {
-                            float newValue = getValueFromPacket(packet, 1);
+                                toSend.append("\n");
+                                break;
 
-                            battery.ampHoursFullyCharged = newValue;
-                            battery.ampHoursFullyCharged_tmp = newValue;
+                            case COMMAND_ID::ARE_YOU_ALIVE:
+                                commAddValue(&toSend, COMMAND_ID::ARE_YOU_ALIVE, 0);
 
-                            toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), newValue));
+                                toSend.append("\n");
+                                break;
+
+                            case COMMAND_ID::GET_STATS:
+                                commAddValue(&toSend, COMMAND_ID::GET_STATS, 0);
+                                commAddValue(&toSend, speed_kmh, 1);
+                                commAddValue(&toSend, motor_rpm, 0);
+                                commAddValue(&toSend, odometer.distance, 7);
+                                commAddValue(&toSend, trip_A.distance, 15);
+                                commAddValue(&toSend, trip_A.wattHoursUsed, 15);
+                                commAddValue(&toSend, trip_A.wattHoursConsumed, 15);
+                                commAddValue(&toSend, -(trip_A.wattHoursRegenerated), 15);
+                                commAddValue(&toSend, trip_B.distance, 15);
+                                commAddValue(&toSend, trip_B.wattHoursUsed, 15);
+                                commAddValue(&toSend, trip_B.wattHoursConsumed, 15);
+                                commAddValue(&toSend, -(trip_B.wattHoursRegenerated), 15);
+                                commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
+                                commAddValue(&toSend, VESC.data.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+                                commAddValue(&toSend, estimatedRange.WhPerKm, 15);
+                                commAddValue(&toSend, estimatedRange.distance, 15);
+                                commAddValue(&toSend, estimatedRange.range, 15);
+                                commAddValue(&toSend, VESC.data.tempMotor, 1);
+                                commAddValue(&toSend, VESC.data.tempMosfet, 1);
+                                commAddValue(&toSend, uptimeInSeconds, 0);
+                                commAddValue(&toSend, whileLoopUsElapsed.count(), 0);
+                                commAddValue(&toSend, 1100, 0); // timeCore1
+                                commAddValue(&toSend, acceleration, 1);
+                                commAddValue(&toSend, powerOn, 0);
+                                commAddValue(&toSend, settings.regenerativeBraking, 0);
+                                commAddValue(&toSend, PP.getProfile(), 0);
+
+                                toSend.append("\n");
+                                break;
+
+                            case COMMAND_ID::SET_ODOMETER:
+                                odometer.distance = (float)getValueFromPacket(packet, 1);
+                                toSend.append(std::format("{};Odometer was set to: {} km;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), odometer.distance));
+                                break;
+
+                            case COMMAND_ID::SAVE_PREFERENCES:
+                                saveAll();
+                                toSend.append(std::format("{};Preferences were manually saved;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
+
+                            case COMMAND_ID::RESET_TRIP_A:
+                                tripAReset();
+                                toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
+
+                            case COMMAND_ID::RESET_ESTIMATED_RANGE:
+                                estimatedRangeReset();
+                                toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
+
+                            case COMMAND_ID::GET_FW:
+                                commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
+                                toSend.append(std::format("{};{}; {} {};", EBIKE_NAME, EBIKE_VERSION, __DATE__, __TIME__)); // NAME, VERSION, COMPILE DATE/TIME
+
+                                toSend.append("\n");
+                                break;
+
+                            // case COMMAND_ID::PING:
+                            //     display.ping();
+                            //     break;
+
+                            // case COMMAND_ID::TOGGLE_FRONT_LIGHT:
+
+                            //     break;
+
+                            case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
+                                battery.ampHoursUsedLifetime = (float)getValueFromPacket(packet, 1);
+                                toSend.append(std::format("{};Amphours used (Lifetime) was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.ampHoursUsedLifetime));
+                                break;
+
+                            case COMMAND_ID::GET_VESC_MCCONF:
+                                if (VESC.getMcconfTempValues()) {
+                                    commAddValue(&toSend, COMMAND_ID::GET_VESC_MCCONF, 0);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_current_min_scale, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_current_max_scale, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_min_erpm, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_max_erpm, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_min_duty, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_max_duty, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_watt_min, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_watt_max, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_in_current_min, 4);
+                                    commAddValue(&toSend, VESC.data_mcconf.l_in_current_max, 4);
+                                    commAddValue_string(&toSend, VESC.data_mcconf.name);
+                                    toSend.append("\n");
+
+                                    toSend.append(std::format("{};Latest McConf values retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                } else {
+                                    toSend.append(std::format("{};Latest McConf values did NOT get retrieved!;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                }
+                                break;
+
+                            case COMMAND_ID::SET_POWER_PROFILE_CUSTOM:
+                                PP.setProfile(PROFILE::CUSTOM);
+
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_CURRENT_MIN_SCALE, getValueFromPacket(packet, 1));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_CURRENT_MAX_SCALE, getValueFromPacket(packet, 2));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_MIN_ERPM, getValueFromPacket(packet, 3));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_MAX_ERPM, getValueFromPacket(packet, 4));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_MIN_DUTY, getValueFromPacket(packet, 5));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_MAX_DUTY, getValueFromPacket(packet, 6));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_WATT_MIN, getValueFromPacket(packet, 7));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_WATT_MAX, getValueFromPacket(packet, 8));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MIN, getValueFromPacket(packet, 9));
+                                PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MAX, getValueFromPacket(packet, 10));
+
+                                setMcconfFromCurrentProfile();
+
+                                toSend.append(std::format("{};Custom McConf was set;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
+
+                            case COMMAND_ID::SET_AMPHOURS_CHARGED:
+                                {
+                                    float newValue = getValueFromPacket(packet, 1);
+
+                                    battery.ampHoursFullyCharged = newValue;
+                                    battery.ampHoursFullyCharged_tmp = newValue;
+
+                                    toSend.append(std::format("{};Amphours charged was set to: {} Ah;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), newValue));
+                                }
+                                break;
+
+                            case COMMAND_ID::TOGGLE_CHARGING_STATE:
+                                battery.charging = !battery.charging;
+
+                                toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.charging));
+                                break;
+
+                            case COMMAND_ID::TOGGLE_REGEN_BRAKING:
+                                settings.regenerativeBraking = !settings.regenerativeBraking;
+
+                                toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
+                                break;
+                            case COMMAND_ID::GET_ANALOG_READINGS:
+                                commAddValue(&toSend, COMMAND_ID::GET_ANALOG_READINGS, 0);
+                                commAddValue(&toSend, analogReadings.analog0, 15);
+                                commAddValue(&toSend, analogReadings.analog1, 15);
+                                commAddValue(&toSend, analogReadings.analog2, 15);
+                                commAddValue(&toSend, analogReadings.analog3, 15);
+                                commAddValue(&toSend, analogReadings.analog4, 15);
+                                commAddValue(&toSend, analogReadings.analog5, 15);
+                                commAddValue(&toSend, analogReadings.analog6, 15);
+                                commAddValue(&toSend, analogReadings.analog7, 15);
+
+                                toSend.append("\n");
+                                break;
+
+                            case COMMAND_ID::RESET_TRIP_B:
+                                tripBReset();
+                                toSend.append(std::format("{};Trip B was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
+
+                            case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
+                                commAddValue(&toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES, 0);
+
+                                listOfProfiles.clear();
+                                for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+                                    listOfProfiles.append(PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+                                    listOfProfiles += '\0';
+                                }
+
+                                toSend.append(listOfProfiles);
+                                toSend.append("\n");
+                                break;
+
+                            case COMMAND_ID::SET_POWER_PROFILE:
+                                PP.setProfile((int)getValueFromPacket(packet, 1));
+                                setMcconfFromCurrentProfile();
+
+                                toSend.append(std::format("{};Power profile was set;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                                break;
                         }
-                        break;
-
-                    case COMMAND_ID::TOGGLE_CHARGING_STATE:
-                        battery.charging = !battery.charging;
-
-                        toSend.append(std::format("{};Charging state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), battery.charging));
-                        break;
-
-                    case COMMAND_ID::TOGGLE_REGEN_BRAKING:
-                        settings.regenerativeBraking = !settings.regenerativeBraking;
-
-                        toSend.append(std::format("{};Regenerative braking state was toggled, now set to: {};\n", static_cast<int>(COMMAND_ID::BACKEND_LOG), settings.regenerativeBraking));
-                        break;
-                    case COMMAND_ID::GET_ANALOG_READINGS:
-                        commAddValue(&toSend, COMMAND_ID::GET_ANALOG_READINGS, 0);
-                        commAddValue(&toSend, analogReadings.analog0, 15);
-                        commAddValue(&toSend, analogReadings.analog1, 15);
-                        commAddValue(&toSend, analogReadings.analog2, 15);
-                        commAddValue(&toSend, analogReadings.analog3, 15);
-                        commAddValue(&toSend, analogReadings.analog4, 15);
-                        commAddValue(&toSend, analogReadings.analog5, 15);
-                        commAddValue(&toSend, analogReadings.analog6, 15);
-                        commAddValue(&toSend, analogReadings.analog7, 15);
-
-                        toSend.append("\n");
-                        break;
-
-                    case COMMAND_ID::RESET_TRIP_B:
-                        tripBReset();
-                        toSend.append(std::format("{};Trip B was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                        break;
-                }
+                    }
+                }// !if packet.empty()
             }
 
             toSend.append(toSendExtra);
             toSendExtra = "";
-            IPC.write(toSend.c_str());
+            IPC.write(toSend.c_str(), toSend.size());
         }
     });
 
@@ -596,6 +694,7 @@ int main() {
     });
 
     std::printf("[Main] Enter loop\n");
+
     while (!done) {
 		auto t1 = std::chrono::high_resolution_clock::now();
 
@@ -677,11 +776,24 @@ int main() {
         }
 
         battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
-        if ((_batteryWattHoursUsedUsedInElapsedTime >= 0.0 || BRAKING) && !battery.charging) {
-            trip_A.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
-            trip_B.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
+
+        if (!battery.charging) {
             estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
+
+            if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
+                trip_A.wattHoursConsumed += _batteryWattHoursUsedUsedInElapsedTime;
+                trip_B.wattHoursConsumed += _batteryWattHoursUsedUsedInElapsedTime;
+            }
+
+            if (_batteryWattHoursUsedUsedInElapsedTime < 0.0) {
+                trip_A.wattHoursRegenerated += _batteryWattHoursUsedUsedInElapsedTime;
+                trip_B.wattHoursRegenerated += _batteryWattHoursUsedUsedInElapsedTime;
+            }
         }
+
+        trip_A.wattHoursUsed = trip_A.wattHoursConsumed + trip_A.wattHoursRegenerated;
+        trip_B.wattHoursUsed = trip_B.wattHoursConsumed + trip_B.wattHoursRegenerated;
+
 
         // BRAKING = digitalRead(pinBrake);
         // TODO: feature idea: when we manually start to roll the bike from a standstill, dont activate braking until some throttle is applied

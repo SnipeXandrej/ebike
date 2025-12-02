@@ -41,6 +41,8 @@ void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, con
 
 void commAddValue(std::string* string, double value, int precision);
 
+void commAddValue_string(std::string* string, std::string value);
+
 void TextCenteredOnLine(const char* label, float alignment, bool contentRegionFromWindow);
 
 void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness);
