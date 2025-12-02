@@ -22,7 +22,7 @@
 #include "toml.hpp"
 #include <print>
 
-#include "ipcClient.hpp"
+#include "client.hpp"
 #include "other.hpp"
 #include "cpuUsage.hpp"
 #include "../comm.h"
@@ -149,8 +149,8 @@ char currentTimeAndDate[100];
 // TODO: do not hardcode filepaths :trol:
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
 char hostname[1024];
-
 char *desktopEnvironment;
+std::string serverAddress;
 
 struct {
     Timer draw;
@@ -167,10 +167,11 @@ std::string to_send_extra;
 struct {
     CPUUsage ImGui;
     CPUUsage ipcThread;
+    CPUUsage ipcThreadRead;
     CPUUsage Everything;
 } cpuUsage;
 
-IPCClient IPC;
+ClientSocket IPC;
 
 ArcProgressBar ArcBar_WhKmNow;
 ArcProgressBar ArcBar_phaseCurrent;
@@ -364,7 +365,7 @@ void processRead(std::string line) {
 }
 
 // Main code
-int main(int, char**)
+int main(int argc, char** argv)
 {
     setenv("SDL_VIDEODRIVER", "wayland", 1);
 
@@ -374,6 +375,12 @@ int main(int, char**)
     gethostname(hostname, sizeof(hostname));
     printf("Hostname = %s\n", hostname);
 
+    if (argc == 2) {
+        serverAddress = argv[1];
+    } else {
+        serverAddress = "0.0.0.0";
+    }
+    std::print("Server address: {}\n", serverAddress);
 
     if (getenv("XDG_CURRENT_DESKTOP") == NULL) {
         desktopEnvironment = (char*)"unknown";
@@ -420,14 +427,17 @@ int main(int, char**)
     static std::chrono::duration<double, std::milli> msElapsed;
     std::thread commThread([&]() -> int {
         std::cout << "[IPC] Initializing" << "\n";
-        if (IPC.begin() == -1) {
+        if (IPC.createClientSocket(8080, serverAddress.c_str()) != 0) {
             std::printf("[IPC] Failed to initialize\n");
         }
 
         std::jthread commThreadRead([&] {
             while(!done) {
+                cpuUsage.ipcThreadRead.measureStart(1);
                 std::string readFromIPC = IPC.read();
+
                 processRead(readFromIPC);
+                cpuUsage.ipcThreadRead.measureEnd(1);
             }
         });
 
@@ -926,11 +936,11 @@ int main(int, char**)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Text("IPC Status: %s", IPC.successfulCommunication ? "connected" : "disconnected");
+                            ImGui::Text("IPC Status: %s", successfulCommunication ? "connected" : "disconnected");
                             ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsed.count()), msElapsed.count());
-                            if (ImGui::Button("Reconnect")) {
-                                IPC.begin();
-                            }
+                            // if (ImGui::Button("Reconnect")) {
+                            //     IPC.begin();
+                            // }
 
                             ImGui::Text("IPC write wait time ");
                             ImGui::SameLine();
@@ -952,9 +962,10 @@ int main(int, char**)
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("CPU Usage (100%% is 1 core)");
-                            ImGui::Text("       All:    %0.2f%%", cpuUsage.Everything.cpu_percent);
-                            ImGui::Text("       ImGui:  %0.2f%%", cpuUsage.ImGui.cpu_percent);
-                            ImGui::Text("       IPC:    %0.2f%%", cpuUsage.ipcThread.cpu_percent);
+                            ImGui::Text("       All:       %0.2f%%", cpuUsage.Everything.cpu_percent);
+                            ImGui::Text("       ImGui:     %0.2f%%", cpuUsage.ImGui.cpu_percent);
+                            ImGui::Text("       IPC Read:  %0.2f%%", cpuUsage.ipcThreadRead.cpu_percent);
+                            ImGui::Text("       IPC Write: %0.2f%%", cpuUsage.ipcThread.cpu_percent);
 
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
                             ImGui::Text("Drawtime: %0.1fms", timer.draw.getTime_ms());
@@ -1250,7 +1261,7 @@ int main(int, char**)
 
     done = true;
 
-    // commThread.join();
+    commThread.join();
 
     return 0;
 }

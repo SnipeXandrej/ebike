@@ -21,7 +21,7 @@
 #include "ads1115.hpp"
 #include "myUart.hpp"
 #include "VescUart/VescUart.h"
-#include "ipcServer.hpp"
+#include "server.hpp"
 #include "utils.hpp"
 #include "../comm.h"
 #include "inputOffset.h"
@@ -71,7 +71,7 @@
 #define pinPowerswitch  A0_EXP
 #define pinPWM_fan      12
 
-IPCServer   IPC;
+ServerSocket IPC;
 toml::table tbl;
 VescUart    VESC;
 MyUart      uartVESC;
@@ -360,12 +360,7 @@ void setupVESC() {
 }
 
 void setupIPC() {
-    if (IPC.begin() == -1) {
-        std::printf("[IPC] failed to initialize, exiting...\n");
-        exit(1);
-    } else {
-        std::printf("[IPC] initialized\n");
-    }
+    IPC.createServerSocket(8080);
 }
 
 int main() {
@@ -407,7 +402,12 @@ int main() {
     setMcconfFromCurrentProfile();
 
     std::thread readThread([&] {
-        std::printf("[readThread] Started IPC Read\n");
+        std::print("[readThread] Started IPC\n");
+        std::print("[IPC] Waiting for client to connect\n");
+        if (IPC.createClientSocket() != 0) {
+            std::print("[IPC] Client failed to connect!\n");
+        }
+
         while(!done) {
             std::string toSend;
             std::string whatWasRead;
