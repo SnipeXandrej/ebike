@@ -169,7 +169,7 @@ struct {
 
 struct {
     float diameter = 63.0;
-    float gear_ratio = 10.6875; // (42/14)*(57/16)
+    float gear_ratio = 12.1125; // (34/10)*(57/16)
     float rpmPerKmh = 0;
 } wheel;
 
