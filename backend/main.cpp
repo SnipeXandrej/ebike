@@ -181,12 +181,14 @@ void estimatedRangeReset() {
 
 void tripAReset() {
     trip_A.distance = 0;
-    trip_A.wattHoursUsed = 0;
+    trip_A.wattHoursConsumed = 0;
+    trip_A.wattHoursRegenerated = 0;
 }
 
 void tripBReset() {
     trip_B.distance = 0;
-    trip_B.wattHoursUsed = 0;
+    trip_B.wattHoursConsumed = 0;
+    trip_B.wattHoursRegenerated = 0;
 }
 
 void my_handler(int s) {
