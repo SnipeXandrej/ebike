@@ -133,12 +133,13 @@ struct {
     float WhPerKm;
 } estimatedRange;
 
-struct {
+struct Trip {
     double distance; // in km
     double wattHoursUsed;
     double wattHoursConsumed;
     double wattHoursRegenerated;
-} trip_A, trip_B;
+};
+Trip trip_A, trip_B;
 
 struct {
     double trip_distance;    // in km
@@ -179,16 +180,10 @@ void estimatedRangeReset() {
     estimatedRange.wattHoursUsed         = 0.0;
 }
 
-void tripAReset() {
-    trip_A.distance = 0;
-    trip_A.wattHoursConsumed = 0;
-    trip_A.wattHoursRegenerated = 0;
-}
-
-void tripBReset() {
-    trip_B.distance = 0;
-    trip_B.wattHoursConsumed = 0;
-    trip_B.wattHoursRegenerated = 0;
+void tripReset(Trip *trip) {
+    trip->distance = 0;
+    trip->wattHoursConsumed = 0;
+    trip->wattHoursRegenerated = 0;
 }
 
 void my_handler(int s) {
@@ -313,8 +308,8 @@ void saveAll() {
 void setMcconfFromCurrentProfile() {
     VESC.data_mcconf.l_current_min_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE);
     VESC.data_mcconf.l_current_max_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE);
-    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0;
-    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0;
+    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0 * 1.028777545848526;
+    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0 * 1.028777545848526;
     VESC.data_mcconf.l_min_duty = PP.get(PP.getProfile(), PP_VALS::L_MIN_DUTY);
     VESC.data_mcconf.l_max_duty = PP.get(PP.getProfile(), PP_VALS::L_MAX_DUTY);
     VESC.data_mcconf.l_watt_min = PP.get(PP.getProfile(), PP_VALS::L_WATT_MIN);
@@ -505,7 +500,7 @@ int main() {
                                 break;
 
                             case COMMAND_ID::RESET_TRIP_A:
-                                tripAReset();
+                                tripReset(&trip_A);
                                 toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
                                 break;
 
@@ -612,7 +607,7 @@ int main() {
                                 break;
 
                             case COMMAND_ID::RESET_TRIP_B:
-                                tripBReset();
+                                tripReset(&trip_B);
                                 toSend.append(std::format("{};Trip B was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
                                 break;
 
