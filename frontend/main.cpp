@@ -903,6 +903,10 @@ int main(int argc, char** argv)
                             if(ImGui::Button("REBOOT")) {
                                 std::system("sudo /sbin/shutdown -r now");
                             }
+                            ImGui::SameLine();
+                            if(ImGui::Button("QUIT")) {
+                                done = 1;
+                            }
 
                             if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
@@ -941,14 +945,14 @@ int main(int argc, char** argv)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Text("IPC Status: %s", successfulCommunication ? "connected" : "disconnected");
+                            ImGui::Text("Status: %s", successfulCommunication ? "connected" : "disconnected");
                             ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedWrite.count()), msElapsedWrite.count());
                             ImGui::Text("Reads per second:    %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedRead.count()), msElapsedRead.count());
                             // if (ImGui::Button("Reconnect")) {
                             //     IPC.begin();
                             // }
 
-                            ImGui::Text("IPC write wait time ");
+                            ImGui::Text("Write wait time ");
                             ImGui::SameLine();
                             ImGui::SetNextItemWidth(150.0f);
                             if (ImGui::InputInt("ms", &settings.ipcWriteWaitMs, 1, 100)) {
