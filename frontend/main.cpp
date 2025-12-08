@@ -503,9 +503,9 @@ int main(int argc, char** argv)
             cpuUsage.ipcThread.measureEnd(1);
         }
 
-        commThreadRead.request_stop();
-        commThreadRead.join();
         IPC.stop();
+        commThreadRead.join();
+
         return 0;
     });
 
@@ -1250,6 +1250,9 @@ int main(int argc, char** argv)
     }
 
     // Cleanup
+    done = true;
+    commThread.join();
+
     // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppQuit() function]
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL3_Shutdown();
@@ -1258,10 +1261,6 @@ int main(int argc, char** argv)
     SDL_GL_DestroyContext(gl_context);
     SDL_DestroyWindow(window);
     SDL_Quit();
-
-    done = true;
-
-    commThread.join();
 
     return 0;
 }

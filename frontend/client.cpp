@@ -76,5 +76,6 @@ int ClientSocket::write(const char* data, size_t size) {
 }
 
 void ClientSocket::stop() {
+    shutdown(clientSocket, SHUT_RDWR);
     close(clientSocket);
 }
