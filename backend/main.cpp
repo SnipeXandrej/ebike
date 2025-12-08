@@ -876,7 +876,7 @@ int main() {
         // estimatedRange.range
         estimatedRange.WhPerKm = estimatedRange.wattHoursUsed / estimatedRange.distance;
         double tmp = (battery.wattHoursFullyDischarged - battery.wattHoursUsed) / estimatedRange.WhPerKm;
-        tmp != tmp ? estimatedRange.range = -1 : estimatedRange.range = tmp;
+        tmp != tmp ? estimatedRange.range = 0.0 : estimatedRange.range = tmp;
 
         static double uptimeInSeconds_tmp = 0;
         if ((uptimeInSeconds - uptimeInSeconds_tmp) >= 1800) { // 30 minutes
