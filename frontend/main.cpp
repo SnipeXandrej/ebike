@@ -424,7 +424,8 @@ int main(int argc, char** argv)
     // ##### IPC ######
     // ################
 
-    static std::chrono::duration<double, std::milli> msElapsed;
+    static std::chrono::duration<double, std::milli> msElapsedWrite;
+    static std::chrono::duration<double, std::milli> msElapsedRead;
     std::thread commThread([&]() -> int {
         std::cout << "[IPC] Initializing" << "\n";
         if (IPC.createClientSocket(8080, serverAddress.c_str()) != 0) {
@@ -434,9 +435,11 @@ int main(int argc, char** argv)
         std::jthread commThreadRead([&] {
             while(!done) {
                 cpuUsage.ipcThreadRead.measureStart(1);
+                auto t1 = std::chrono::high_resolution_clock::now();
                 std::string readFromIPC = IPC.read();
 
                 processRead(readFromIPC);
+                msElapsedRead = std::chrono::high_resolution_clock::now() - t1;
                 cpuUsage.ipcThreadRead.measureEnd(1);
             }
         });
@@ -497,7 +500,7 @@ int main(int argc, char** argv)
 
                 IPC.write(to_send.data(), to_send.size());
                 std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
-                msElapsed = std::chrono::high_resolution_clock::now() - t1;
+                msElapsedWrite = std::chrono::high_resolution_clock::now() - t1;
             }
 
             cpuUsage.ipcThread.measureEnd(1);
@@ -510,6 +513,7 @@ int main(int argc, char** argv)
     });
 
 
+    std::string titleBarName = std::format("E-BIKE GUI (Connected to: {})", serverAddress);
 
     // ###########################
     // ##### SDL/ Dear ImGUI #####
@@ -561,7 +565,7 @@ int main(int argc, char** argv)
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN;
     // SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
-    SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
+    SDL_Window* window = SDL_CreateWindow(titleBarName.c_str(), (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
     if (window == nullptr)
     {
         printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
@@ -573,6 +577,7 @@ int main(int argc, char** argv)
         printf("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
         return -1;
     }
+    SDL_SetWindowMinimumSize(window, 800, 480);
 
     SDL_GL_MakeCurrent(window, gl_context);
     SDL_GL_SetSwapInterval(1); // Enable vsync
@@ -937,7 +942,8 @@ int main(int argc, char** argv)
                             ImGui::PopFont();
 
                             ImGui::Text("IPC Status: %s", successfulCommunication ? "connected" : "disconnected");
-                            ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsed.count()), msElapsed.count());
+                            ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedWrite.count()), msElapsedWrite.count());
+                            ImGui::Text("Reads per second:    %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedRead.count()), msElapsedRead.count());
                             // if (ImGui::Button("Reconnect")) {
                             //     IPC.begin();
                             // }
