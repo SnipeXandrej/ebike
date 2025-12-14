@@ -45,6 +45,12 @@ float map_f(float x, float in_min, float in_max, float out_min, float out_max) {
     return temp;
 }
 
+float map_f_nochecks(float x, float in_min, float in_max, float out_min, float out_max) {
+    float temp = (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
+
+    return temp;
+}
+
 void addVUMeter(float input, float input_min, float input_max, const char *label, int precision, int LED_COUNT) {
     // int LED_COUNT = 18;
     ImGui::PushID(label);

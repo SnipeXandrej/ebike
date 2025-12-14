@@ -27,6 +27,8 @@ std::vector<std::string> split(const std::string& input, char delimiter);
 
 float map_f(float x, float in_min, float in_max, float out_min, float out_max);
 
+float map_f_nochecks(float x, float in_min, float in_max, float out_min, float out_max);
+
 void addVUMeter(float input, float input_min, float input_max, const char *label, int precision, int LED_COUNT);
 
 void addValueToArray(int SIZE, float arr[], float newVal);

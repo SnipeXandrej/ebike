@@ -28,6 +28,7 @@
 #include "../comm.h"
 #include "arc_progress_bar.hpp"
 #include "timer.hpp"
+#include "imguiGestures.hpp"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -506,9 +507,7 @@ int main(int argc, char** argv)
             cpuUsage.ipcThread.measureEnd(1);
         }
 
-        IPC.stop();
         commThreadRead.join();
-
         return 0;
     });
 
@@ -678,6 +677,18 @@ int main(int argc, char** argv)
             if (ImGui::BeginTabBar("Tabbar", tab_bar_flags)) {
                 if (ImGui::BeginTabItem("Main"))
                 {
+
+                {
+                    static ImGuiGesture gesture;
+
+                    gesture.start();
+                        if (ImGui::Begin("Gesture test", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
+                            ImGui::Button("Test");
+                        }
+                        ImGui::End();
+                    gesture.end();
+                }
+
                     {
                         ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
@@ -1261,6 +1272,7 @@ int main(int argc, char** argv)
 
     // Cleanup
     done = true;
+    IPC.stop();
     commThread.join();
 
     // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppQuit() function]
