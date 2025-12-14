@@ -87,16 +87,16 @@ float appSizeX = 0;
 float windowPosY = 0;
 float windowPosYOnLetoff = 0;
 
-ImVec2 windowSize = ImVec2(300, 100);
+ImVec2 windowSize = ImVec2(300, 250);
 float gestureMaxY = 300;
 float gestureThresholdY = 200;
 
 enum {
     GESTURE_NOTHING = 0,
     GESTURE_START = 1,
-    GESTURE_CLOSE = 2,
+    GESTURE_HIDE = 2,
     GESTURE_TOO_HIGH = 3,
-    GESTURE_TOO_LOW = 4,
+    GESTURE_CLOSE = 4,
     GESTURE_MOVE_TO_HIGHEST = 5,
     GESTURE_CLOSING_ACTION = 6,
 };
@@ -153,7 +153,7 @@ void ImGuiGesture::start() {
 
                 // if the gesture didnt reach the threshold, close the window
                 if ((appSizeY - windowPosY) < gestureThresholdY) {
-                    gestureCase = GESTURE_TOO_LOW;
+                    gestureCase = GESTURE_CLOSE;
                     break;
                 }
 
@@ -164,7 +164,7 @@ void ImGuiGesture::start() {
 
         break;
 
-    case GESTURE_CLOSE:
+    case GESTURE_HIDE:
         continueGesture = false;
 
         gestureCase = GESTURE_NOTHING;
@@ -191,7 +191,7 @@ void ImGuiGesture::start() {
 
         break;
 
-    case GESTURE_TOO_LOW:
+    case GESTURE_CLOSE:
         output += valueTransition.getValueDifference(0.0, 100.0, 150.0); // move down
         valueTransition.start();
 
@@ -202,7 +202,7 @@ void ImGuiGesture::start() {
         windowPosY = map_f(output_bezier, 0, 100, windowPosYOnLetoff, destination);
 
         if ((int)windowPosY >= (int)destination) {
-            gestureCase = GESTURE_CLOSE;
+            gestureCase = GESTURE_HIDE;
             output = 0;
         }
 
@@ -243,7 +243,7 @@ void ImGuiGesture::start() {
             temp = false;
 
             if ((appSizeY - windowPosY) < gestureThresholdY)
-                gestureCase = GESTURE_TOO_LOW;
+                gestureCase = GESTURE_CLOSE;
 
             if ((appSizeY - windowPosY) > gestureThresholdY)
                 gestureCase = GESTURE_MOVE_TO_HIGHEST;
@@ -267,4 +267,10 @@ void ImGuiGesture::end() {
         // std::print("\n{}\n", io.MousePos.y);
         // std::print("{}\n", appSizeY);
     }
+}
+
+void ImGuiGesture::closeGesture() {
+    gestureCase = GESTURE_CLOSE;
+    windowPosYOnLetoff = appSizeY - gestureMaxY;
+    valueTransition.start();
 }

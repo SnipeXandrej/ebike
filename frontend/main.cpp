@@ -669,7 +669,7 @@ int main(int argc, char** argv)
 
         if (true) {
             timer.draw.start();
-            ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
+            ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
 
             ImGui::BeginGroup();
 
@@ -684,6 +684,10 @@ int main(int argc, char** argv)
                     gesture.start();
                         if (ImGui::Begin("Gesture test", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
                             ImGui::Button("Test");
+
+                            if (ImGui::Button("Close")) {
+                                gesture.closeGesture();
+                            }
                         }
                         ImGui::End();
                     gesture.end();
