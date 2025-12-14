@@ -47,6 +47,10 @@ public:
     }
 
     double getValueDifference(double fromValue, double toValue, double inMilliseconds) {
+        if (timer.getTime_ms_now() > inMilliseconds) {
+            timer.start();
+        }
+
         timer.end();
 
         double timePassed = timer.getTime_ms();
@@ -103,6 +107,11 @@ enum {
 
 int gestureCase = GESTURE_NOTHING;
 
+void f_gestureClose() {
+    gestureCase = GESTURE_CLOSE;
+    windowPosYOnLetoff = appSizeY - gestureMaxY;
+}
+
 void ImGuiGesture::start() {
     appSizeY = ImGui::GetWindowSize().y;
     appSizeX = ImGui::GetWindowSize().x;
@@ -142,7 +151,6 @@ void ImGuiGesture::start() {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 windowPosY = io.MousePos.y + animationMoveOffset;
             } else {
-                valueTransition.start();
                 windowPosYOnLetoff = windowPosY;
 
                 // if the gesture went above the max height, move it down
@@ -172,8 +180,7 @@ void ImGuiGesture::start() {
 
     case GESTURE_TOO_HIGH:
         static float output;
-        output += valueTransition.getValueDifference(0.0, 100.0, 300.0); // move down
-        valueTransition.start();
+        output = valueTransition.getValueDifference(0.0, 100.0, 300.0); // move down
 
         static float output_bezier;
         output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
@@ -192,8 +199,7 @@ void ImGuiGesture::start() {
         break;
 
     case GESTURE_CLOSE:
-        output += valueTransition.getValueDifference(0.0, 100.0, 150.0); // move down
-        valueTransition.start();
+        output = valueTransition.getValueDifference(0.0, 100.0, 150.0); // move down
 
         output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
 
@@ -209,8 +215,7 @@ void ImGuiGesture::start() {
         break;
 
     case GESTURE_MOVE_TO_HIGHEST:
-        output += valueTransition.getValueDifference(0.0, 100.0, 300.0); // move down
-        valueTransition.start();
+        output = valueTransition.getValueDifference(0.0, 100.0, 300.0); // move down
 
         output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
 
@@ -251,7 +256,6 @@ void ImGuiGesture::start() {
             if ((appSizeY - windowPosY) > gestureMaxY)
                 gestureCase = GESTURE_TOO_HIGH;
 
-            valueTransition.start();
             windowPosYOnLetoff = windowPosY;
         }
 
@@ -270,7 +274,5 @@ void ImGuiGesture::end() {
 }
 
 void ImGuiGesture::closeGesture() {
-    gestureCase = GESTURE_CLOSE;
-    windowPosYOnLetoff = appSizeY - gestureMaxY;
-    valueTransition.start();
+    f_gestureClose();
 }
