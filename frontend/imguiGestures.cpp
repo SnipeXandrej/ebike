@@ -47,10 +47,6 @@ public:
     }
 
     double getValueDifference(double fromValue, double toValue, double inMilliseconds) {
-        if (timer.getTime_ms_now() > inMilliseconds) {
-            timer.start();
-        }
-
         timer.end();
 
         double timePassed = timer.getTime_ms();
@@ -75,11 +71,7 @@ public:
         return output;
     }
 
-private:
     Timer timer;
-    // double fromValue;
-    // double toValue;
-    // double inMilliseconds;
 };
 ValueTransition valueTransition;
 
@@ -94,6 +86,8 @@ float windowPosYOnLetoff = 0;
 ImVec2 windowSize = ImVec2(300, 250);
 float gestureMaxY = 300;
 float gestureThresholdY = 200;
+float gestureMouseMovementThreshold = 30;
+float headerOffset = 15;
 
 enum {
     GESTURE_NOTHING = 0,
@@ -103,14 +97,25 @@ enum {
     GESTURE_CLOSE = 4,
     GESTURE_MOVE_TO_HIGHEST = 5,
     GESTURE_CLOSING_ACTION = 6,
+    GESTURE_PRESTART = 7,
 };
 
 int gestureCase = GESTURE_NOTHING;
 
-void f_gestureClose() {
+void f_gestureClose(float _windowPosYOnLetoff) {
     gestureCase = GESTURE_CLOSE;
-    windowPosYOnLetoff = appSizeY - gestureMaxY;
+    windowPosYOnLetoff = _windowPosYOnLetoff;
 }
+
+void f_gestureClose() {
+    f_gestureClose(appSizeY - gestureMaxY);
+}
+
+bool wasGestureWithinStartRegion = false;
+static float output;
+static float output_bezier;
+static float destination;
+
 
 void ImGuiGesture::start() {
     appSizeY = ImGui::GetWindowSize().y;
@@ -120,15 +125,29 @@ void ImGuiGesture::start() {
     bool isHeaderWithinConstraints = (io.MousePos.y > (appSizeY - gestureMaxY)) && (io.MousePos.y < (appSizeY - gestureMaxY + 40.0))
                                   && (io.MousePos.x > (appSizeX/2.0 - (windowSize.x/2.0)) && io.MousePos.x < (appSizeX/2.0 + (windowSize.x/2.0))) ? true : false;
 
+    // std::print("case: {}\n", gestureCase);
     switch (gestureCase) {
     case GESTURE_NOTHING:
         // hide it
         if (!continueGesture) {
             windowPosY = appSizeY;
-        }
 
-        if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && !continueGesture) {
-            gestureCase = GESTURE_START;
+            if ((ImGui::IsMouseDown(ImGuiMouseButton_Left) && isGestureWithinStartRegion ) || wasGestureWithinStartRegion) {
+                wasGestureWithinStartRegion = true;
+                static bool temp = false;
+                static float initialMousePos;
+
+                if (temp == false) {
+                    temp = true;
+                    initialMousePos = io.MousePos.y;
+                }
+
+                if ((initialMousePos - io.MousePos.y) > gestureMouseMovementThreshold) {
+                    temp = false;
+                    gestureCase = GESTURE_PRESTART;
+                    valueTransition.start();
+                }
+            }
         }
 
         if (continueGesture) {
@@ -138,36 +157,52 @@ void ImGuiGesture::start() {
                 }
             }
         }
+
+        valueTransition.start();
+        break;
+
+    case GESTURE_PRESTART:
+        output = valueTransition.getValueDifference(0.0, 100.0, 200.0);
+        output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
+
+        destination = io.MousePos.y - headerOffset;
+        windowPosY = map_f_nochecks(output_bezier, 0, 100, appSizeY, destination);
+
+        if (windowPosY <= destination) {
+            output = 0;
+            gestureCase = GESTURE_START;
+            valueTransition.start();
+        }
+
         break;
 
     case GESTURE_START:
-        if (isGestureWithinStartRegion || continueGesture) {
+        wasGestureWithinStartRegion = false;
 
-            if (continueGesture == false) {
-                continueGesture = true;
-                animationMoveOffset = appSizeY - io.MousePos.y;
+        if (continueGesture == false) {
+            continueGesture = true;
+        }
+
+        if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            windowPosY = io.MousePos.y - headerOffset;
+        } else {
+            valueTransition.start();
+            // when the mouse goes off of the app the value is set to FLT_MAX, that is undesirable
+            windowPosYOnLetoff = windowPosY > 0 ? windowPosY : 0;
+
+            // if the gesture went above the max height, move it down
+            if ((appSizeY - windowPosY) > gestureMaxY) {
+                gestureCase = GESTURE_TOO_HIGH;
+                break;
             }
 
-            if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                windowPosY = io.MousePos.y + animationMoveOffset;
-            } else {
-                windowPosYOnLetoff = windowPosY;
-
-                // if the gesture went above the max height, move it down
-                if ((appSizeY - windowPosY) > gestureMaxY) {
-                    gestureCase = GESTURE_TOO_HIGH;
-                    break;
-                }
-
-                // if the gesture didnt reach the threshold, close the window
-                if ((appSizeY - windowPosY) < gestureThresholdY) {
-                    gestureCase = GESTURE_CLOSE;
-                    break;
-                }
-
-                gestureCase = GESTURE_MOVE_TO_HIGHEST;
-
+            // if the gesture didnt reach the threshold, close the window
+            if ((appSizeY - windowPosY) < gestureThresholdY) {
+                gestureCase = GESTURE_CLOSE;
+                break;
             }
+
+            gestureCase = GESTURE_MOVE_TO_HIGHEST;
         }
 
         break;
@@ -179,16 +214,13 @@ void ImGuiGesture::start() {
         break;
 
     case GESTURE_TOO_HIGH:
-        static float output;
         output = valueTransition.getValueDifference(0.0, 100.0, 300.0); // move down
 
-        static float output_bezier;
         output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
 
-        static float destination;
         destination = appSizeY - gestureMaxY;
 
-        windowPosY = map_f(output_bezier, 0, 100, windowPosYOnLetoff, destination);
+        windowPosY = map_f_nochecks(output_bezier, 0, 100, windowPosYOnLetoff, destination);
 
         if ((appSizeY - windowPosY) <= gestureMaxY) {
             windowPosY = destination;
@@ -201,13 +233,13 @@ void ImGuiGesture::start() {
     case GESTURE_CLOSE:
         output = valueTransition.getValueDifference(0.0, 100.0, 150.0); // move down
 
-        output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2) + 1.0;
+        output_bezier = mapToCubicBezier(output, c_x1, c_y1, c_x2, c_y2);
 
         destination = appSizeY;
 
-        windowPosY = map_f(output_bezier, 0, 100, windowPosYOnLetoff, destination);
+        windowPosY = map_f_nochecks(output_bezier, 0, 100, windowPosYOnLetoff, destination);
 
-        if ((int)windowPosY >= (int)destination) {
+        if ((int)windowPosY + 1 >= (int)destination) {
             gestureCase = GESTURE_HIDE;
             output = 0;
         }
@@ -258,6 +290,8 @@ void ImGuiGesture::start() {
 
             windowPosYOnLetoff = windowPosY;
         }
+
+        valueTransition.start();
 
         break;
     }

@@ -16,7 +16,6 @@ private:
     std::chrono::high_resolution_clock::time_point timeStart;
     std::chrono::high_resolution_clock::time_point timeEnd;
     std::chrono::duration<double, std::micro> timeElapsed;
-    std::chrono::duration<double, std::micro> timeElapsedNow;
 };
 
 #endif
