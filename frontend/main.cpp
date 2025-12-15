@@ -104,6 +104,7 @@ struct {
     bool showAcceleration;
     bool showTripA;
     bool showMotorDutyInsteadOfMotorTemp;
+    bool launchFullscreen;
 } settings;
 
 struct {
@@ -415,6 +416,7 @@ int main(int argc, char** argv)
     settings.showAcceleration   = tbl["settings"]["showAcceleration"].value_or(1);
     settings.showTripA          = tbl["settings"]["showTripA"].value_or(1);
     settings.showMotorDutyInsteadOfMotorTemp = tbl["settings"]["showMotorDutyInsteadOfMotorTemp"].value_or(0);
+    settings.launchFullscreen   = tbl["settings"]["launchFullscreen"].value_or(0);
 
     ArcBar_WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, "Wh/km");
     ArcBar_phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, "Phase");
@@ -562,7 +564,7 @@ int main(int argc, char** argv)
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_FULLSCREEN;
+    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
     // SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
     SDL_Window* window = SDL_CreateWindow(titleBarName.c_str(), (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
     if (window == nullptr)
@@ -576,7 +578,12 @@ int main(int argc, char** argv)
         printf("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
         return -1;
     }
+
     SDL_SetWindowMinimumSize(window, 800, 480);
+
+    if (settings.launchFullscreen) {
+        SDL_SetWindowFullscreen(window, true);
+    }
 
     SDL_GL_MakeCurrent(window, gl_context);
     SDL_GL_SetSwapInterval(1); // Enable vsync
@@ -950,6 +957,10 @@ int main(int argc, char** argv)
 
                             if (ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp)) {
                                 updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+                            }
+
+                            if (ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen)) {
+                                updateTableValue(SETTINGS_FILEPATH, "settings", "launchFullscreen", settings.launchFullscreen);
                             }
 
 
