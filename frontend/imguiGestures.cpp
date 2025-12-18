@@ -83,9 +83,9 @@ float appSizeX = 0;
 float windowPosY = 0;
 float windowPosYOnLetoff = 0;
 
-ImVec2 windowSize = ImVec2(300, 250);
-float gestureMaxY = 300;
-float gestureThresholdY = 200;
+ImVec2 windowSize = ImVec2(600, 350);
+float gestureMaxY = 400;
+float gestureThresholdY = 150;
 float gestureMouseMovementThreshold = 30;
 float headerOffset = 15;
 
@@ -168,10 +168,14 @@ void ImGuiGesture::start() {
         destination = io.MousePos.y - headerOffset;
         windowPosY = map_f_nochecks(output_bezier, 0, 100, appSizeY, destination);
 
-        if (windowPosY <= destination) {
+        if (windowPosY <= destination || !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
             output = 0;
             gestureCase = GESTURE_START;
             valueTransition.start();
+
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                windowPosYOnLetoff = windowPosY;
+            }
         }
 
         break;
@@ -297,7 +301,7 @@ void ImGuiGesture::start() {
     }
 
     ImGui::SetNextWindowSize(windowSize);
-    ImGui::SetNextWindowPos(ImVec2(appSizeX/2.0 - 300.0/2.0, windowPosY));
+    ImGui::SetNextWindowPos(ImVec2(appSizeX/2.0 - windowSize.x/2.0, windowPosY));
 }
 
 void ImGuiGesture::end() {
