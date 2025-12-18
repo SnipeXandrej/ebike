@@ -502,7 +502,11 @@ int main(int argc, char** argv)
                 to_send_extra = "";
 
                 IPC.write(to_send.data(), to_send.size());
-                std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
+                if (backend.power_on) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                }
                 msElapsedWrite = std::chrono::high_resolution_clock::now() - t1;
             }
 
@@ -1274,11 +1278,18 @@ int main(int argc, char** argv)
 
         // limit framerate
         static double lasttime = (float)(SDL_GetTicks() / 1000.0f);;
-        if (settings.LIMIT_FRAMERATE) {
+        if (settings.LIMIT_FRAMERATE && backend.power_on) {
             while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0/settings.TARGET_FPS) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             lasttime += 1.0/settings.TARGET_FPS;
+        }
+
+        if (!backend.power_on) {
+            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0 / 1.0/* target fps*/) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            lasttime += 1.0 / 1.0/* target fps*/;
         }
 
         cpuUsage.ImGui.measureEnd(1);
