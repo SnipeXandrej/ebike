@@ -689,20 +689,20 @@ int main(int argc, char** argv)
                 if (ImGui::BeginTabItem("Main"))
                 {
 
-                {
-                    static ImGuiGesture gesture;
+                    {
+                        static ImGuiGesture gesture;
 
-                    gesture.start();
-                        if (ImGui::Begin("Gesture test", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
-                            ImGui::Button("Test");
+                        gesture.start();
+                            if (ImGui::Begin("Gesture test", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
+                                ImGui::Button("Test");
 
-                            if (ImGui::Button("Close")) {
-                                gesture.closeGesture();
+                                if (ImGui::Button("Close")) {
+                                    gesture.closeGesture();
+                                }
                             }
-                        }
-                        ImGui::End();
-                    gesture.end();
-                }
+                            ImGui::End();
+                        gesture.end();
+                    }
 
                     {
                         ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
@@ -1246,6 +1246,23 @@ int main(int argc, char** argv)
                 ImGui::EndTabBar(); //TABBAR1
             }
 
+            if (IPC.isConnected == false) {
+                // if (ImGui::Begin("IPC failed", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
+                bool open = true;
+                // ImGui::SetNextWindowSize(V)
+                ImGui::OpenPopup("IPC Failed");
+                if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
+                    ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
+
+                    if (ImGui::Button("Quit")) {
+                        done = true;
+                    }
+                ImGui::EndPopup();
+                }
+
+                // ImGui::End();
+            }
+
             ImGui::EndGroup();
 
             ImGui::End();
@@ -1285,7 +1302,7 @@ int main(int argc, char** argv)
             lasttime += 1.0/settings.TARGET_FPS;
         }
 
-        if (!backend.power_on) {
+        if (!backend.power_on && IPC.isConnected) {
             while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0 / 1.0/* target fps*/) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }

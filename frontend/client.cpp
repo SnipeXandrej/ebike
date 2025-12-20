@@ -15,9 +15,11 @@ int ClientSocket::createClientSocket(int PORT, const char* ADDRESS) {
     int ret = connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
     if (ret == -1) {
         std::cout << "[IPC] Another server is running, or the port is being used by another process\n";
-        exit(EXIT_FAILURE);
+        isConnected = false;
+        return -1;
     }
 
+    isConnected = true;
     return 0;
 }
 
@@ -54,7 +56,12 @@ std::string ClientSocket::read() {
         int len = recv(clientSocket, buffer, sizeof(buffer), 0);
 
         if (len == -1) {
-            clientSocket = createClientSocket(8080);
+            if (!isShutdown) {
+                clientSocket = createClientSocket(8080);
+            } else {
+                return "";
+            }
+
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             continue;
         }
@@ -62,7 +69,7 @@ std::string ClientSocket::read() {
         if (len == 0) {
             std::cout << "[IPC] client disconnected or connection closed\n";
             close(clientSocket);
-            exit(EXIT_FAILURE);
+            return "";
         }
 
         receivedBuffer.append(buffer, len);
@@ -76,6 +83,8 @@ int ClientSocket::write(const char* data, size_t size) {
 }
 
 void ClientSocket::stop() {
+    isConnected = false;
     shutdown(clientSocket, SHUT_RDWR);
+    isShutdown = true;
     close(clientSocket);
 }

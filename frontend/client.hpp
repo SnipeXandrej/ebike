@@ -9,6 +9,7 @@
 #include <thread>
 #include <chrono>
 #include <arpa/inet.h>
+#include <fcntl.h>
 
 #define BUF_SIZE 10240
 
@@ -23,4 +24,9 @@ public:
     int clientSocket = -1;
     int receivedLength = 0;
     std::string receivedBuffer;
+
+    bool isConnected = false;
+
+private:
+    bool isShutdown = false;
 };
