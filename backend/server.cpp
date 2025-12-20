@@ -10,7 +10,7 @@ int ServerSocket::createServerSocket(int PORT) {
 
     if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1) {
         std::cout << "[IPC] Another server is running, or the port is being used by another process\n";
-        exit(EXIT_FAILURE);
+        return -1;
     }
 
     listen(serverSocket, 1);

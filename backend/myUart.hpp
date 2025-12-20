@@ -25,7 +25,6 @@ public:
 
     void write(const uint8_t *data, size_t len);
 
-private:
     int fd;
 };
 
