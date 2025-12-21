@@ -27,6 +27,8 @@
 #include "inputOffset.h"
 #include "map.hpp"
 #include "profiles.hpp"
+#include "../timer.hpp"
+#include "../valueTransition.hpp"
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
@@ -91,6 +93,13 @@ struct {
     std::thread IPCRead;
 } threads;
 
+struct {
+    Timer throttleCreep;
+} timer;
+
+ValueTransition throttleShockCurrentTransition;
+ValueTransition throttleValueTransition;
+
 // TODO: do not hardcode filepaths
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
 std::chrono::duration<double, std::micro> whileLoopUsElapsed;
@@ -103,7 +112,6 @@ float throttleBrakeLevel = 0;
 bool  powerOn = false;
 bool  BRAKING = false;
 bool  done = false;
-bool threadsInitialized = false;
 std::string toSendExtra;
 
 struct {
@@ -305,26 +313,59 @@ void uptimeCounterFunction() {
 
 void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
+    static float minCurrent = 7.5;
+    static float initialShockTransitionTime = 150.0;
+    static float realThrottleTransitionTime = 90.0;
+    throttleValueTransition.start();
+
     while (!done) {
         if (fcntl(uartVESC.fd, F_GETFD) != -1) {
+
+            float throttleCurrent = clampValue(
+                                            throttle.map(throttleLevel),
+                                            maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
+                                            );
+
             // Throttle
             if (!powerOn || battery.charging) {
                 VESC.setCurrent(0.0f);
-            } else if (BRAKING && settings.regenerativeBraking) {
-                static float brakingCurrentMax = 100.0;
-
-                // gradually increase braking current
-                VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
             } else {
-                float vescCurrent = clampValue(
-                                                throttle.map(throttleLevel),
-                                                maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
-                                                );
 
-                VESC.setCurrent(vescCurrent);
+                if (BRAKING && settings.regenerativeBraking) {
+                    static float brakingCurrentMax = 100.0;
 
-                // reset regen braking
-                movingAverages.brakingCurrent.setInput(0.0f);
+                    // gradually increase braking current
+                    VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
+                } else {
+
+                    if (throttleCurrent == 0.0) {
+                        if (speed_kmh > 2.0) {
+                            VESC.setCurrent(minCurrent);
+                        } else {
+                            throttleShockCurrentTransition.start();
+                            VESC.setCurrent(0.0);
+                        }
+
+                    } else if (throttleShockCurrentTransition.timer.getTime_ms_now() < initialShockTransitionTime) {
+                        VESC.setCurrent(throttleShockCurrentTransition.getValueDifference(0.0, minCurrent, initialShockTransitionTime));
+                        throttleValueTransition.start();
+                    } else {
+                        if (throttleCurrent < minCurrent)
+                            VESC.setCurrent(minCurrent);
+                        else {
+                            if (throttleValueTransition.timer.getTime_ms_now() < realThrottleTransitionTime) {
+                                VESC.setCurrent(throttleValueTransition.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime));
+                            } else {
+                                VESC.setCurrent(throttleCurrent);
+                            }
+                        }
+
+                    }
+
+                    // reset regen braking
+                    movingAverages.brakingCurrent.setInput(0.0f);
+                }
+
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -732,8 +773,9 @@ int main() {
     };
     throttle.setCurve(customThrottleCurve);
 
-    movingAverages.potThrottle.smoothingFactor = 0.7;
+    movingAverages.potThrottle.smoothingFactor = 0.2;
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
+    movingAverages.brakingCurrent.smoothingFactor = 0.02;
 
     wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/);
     motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
@@ -812,7 +854,7 @@ int main() {
         }
 
         // calculate other stuff
-        battery.watts       = battery.voltage * battery.current;
+        battery.watts = battery.voltage * battery.current;
 
         // BATTERY
         static double _batteryAmpsUsedInElapsedTime,     _batteryWattsUsedUsedInElapsedTime;
@@ -922,6 +964,7 @@ int main() {
             saveAll();
         }
 
+        static bool threadsInitialized = false;
         if (!threadsInitialized) {
             threads.uptimeCounter = std::thread(uptimeCounterFunction);
             threads.throttle = std::thread(throttleFunction);

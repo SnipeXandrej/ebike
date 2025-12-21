@@ -27,7 +27,7 @@
 #include "cpuUsage.hpp"
 #include "../comm.h"
 #include "arc_progress_bar.hpp"
-#include "timer.hpp"
+#include "../timer.hpp"
 #include "imguiGestures.hpp"
 
 struct VESC_MCCONF {
@@ -1247,9 +1247,8 @@ int main(int argc, char** argv)
             }
 
             if (IPC.isConnected == false) {
-                // if (ImGui::Begin("IPC failed", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
                 bool open = true;
-                // ImGui::SetNextWindowSize(V)
+
                 ImGui::OpenPopup("IPC Failed");
                 if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
                     ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
@@ -1259,8 +1258,6 @@ int main(int argc, char** argv)
                     }
                 ImGui::EndPopup();
                 }
-
-                // ImGui::End();
             }
 
             ImGui::EndGroup();
@@ -1303,10 +1300,10 @@ int main(int argc, char** argv)
         }
 
         if (!backend.power_on && IPC.isConnected) {
-            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0 / 1.0/* target fps*/) {
+            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0 / 3.0/* target fps*/) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
-            lasttime += 1.0 / 1.0/* target fps*/;
+            lasttime += 1.0 / 3.0/* target fps*/;
         }
 
         cpuUsage.ImGui.measureEnd(1);

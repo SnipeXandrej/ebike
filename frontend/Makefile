@@ -13,14 +13,16 @@
 
 #CXX = g++
 #CXX = clang++
+BUILD = build
 
 EXE = ebikegui
 IMGUI_DIR = ../submodules/imgui
 SOURCES = main.cpp
-SOURCES += client.cpp other.cpp cpuUsage.cpp arc_progress_bar.cpp timer.cpp imguiGestures.hpp
+SOURCES += client.cpp other.cpp cpuUsage.cpp arc_progress_bar.cpp ../timer.cpp ../valueTransition.cpp ../cubicBezier.cpp imguiGestures.cpp
 SOURCES += $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp
 SOURCES += $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
 OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
+
 UNAME_S := $(shell uname -s)
 LINUX_GL_LIBS = -lGL
 
@@ -62,6 +64,9 @@ endif
 ##---------------------------------------------------------------------
 
 %.o:%.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
+
+%.o: ../%.cpp
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 %.o:$(IMGUI_DIR)/%.cpp

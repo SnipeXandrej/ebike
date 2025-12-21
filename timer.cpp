@@ -17,6 +17,11 @@ double Timer::getTime_ms() {
     return timeElapsed.count() / 1000.0;
 }
 
+double Timer::getTime_ms_now() {
+    std::chrono::duration<double, std::milli> timeElapsedNow = std::chrono::high_resolution_clock::now() - timeStart;
+    return timeElapsedNow.count();
+}
+
 double Timer::getTime_s() {
     return timeElapsed.count() / 1000000.0;
 }
