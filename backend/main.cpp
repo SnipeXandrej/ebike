@@ -164,6 +164,7 @@ struct {
 struct {
     bool batteryPercentageVoltageBased = 0;
     bool regenerativeBraking = 0;
+    bool minimizeDrivetrainBacklash = 0;
 } settings;
 
 struct {
@@ -206,7 +207,6 @@ void my_handler(int s) {
 
     IPC.stop();
     done = true;
-    exit(1);
 }
 
 float clampValue(float input, float clampTo) {
@@ -261,6 +261,7 @@ void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "battery", "wattHoursFullyDischarged", battery.wattHoursFullyDischarged);
     updateTableValue(SETTINGS_FILEPATH, "settings", "batteryPercentageVoltageBased", settings.batteryPercentageVoltageBased);
     updateTableValue(SETTINGS_FILEPATH, "settings", "regenerativeBraking", settings.regenerativeBraking);
+    updateTableValue(SETTINGS_FILEPATH, "settings", "minimizeDrivetrainBacklash", settings.minimizeDrivetrainBacklash);
     updateTableValue(SETTINGS_FILEPATH, "PP", "setProfile", PP.getProfile());
 
     for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
@@ -313,8 +314,8 @@ void uptimeCounterFunction() {
 
 void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
-    static float minCurrent = 7.5;
-    static float initialShockTransitionTime = 150.0;
+    static float minCurrent = 5.5;
+    static float initialShockTransitionTime = 110.0;
     static float realThrottleTransitionTime = 90.0;
     throttleValueTransition.start();
 
@@ -338,28 +339,32 @@ void throttleFunction() {
                     VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
                 } else {
 
-                    if (throttleCurrent == 0.0) {
-                        if (speed_kmh > 2.0) {
-                            VESC.setCurrent(minCurrent);
-                        } else {
-                            throttleShockCurrentTransition.start();
-                            VESC.setCurrent(0.0);
-                        }
+                    if (settings.minimizeDrivetrainBacklash) {
 
-                    } else if (throttleShockCurrentTransition.timer.getTime_ms_now() < initialShockTransitionTime) {
-                        VESC.setCurrent(throttleShockCurrentTransition.getValueDifference(0.0, minCurrent, initialShockTransitionTime));
-                        throttleValueTransition.start();
-                    } else {
-                        if (throttleCurrent < minCurrent)
-                            VESC.setCurrent(minCurrent);
-                        else {
-                            if (throttleValueTransition.timer.getTime_ms_now() < realThrottleTransitionTime) {
-                                VESC.setCurrent(throttleValueTransition.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime));
+                        if (throttleCurrent == 0.0) {
+                            if (speed_kmh > 2.0) {
+                                VESC.setCurrent(minCurrent);
                             } else {
-                                VESC.setCurrent(throttleCurrent);
+                                throttleShockCurrentTransition.start();
+                                VESC.setCurrent(0.0);
+                            }
+                        } else if (throttleShockCurrentTransition.timer.getTime_ms_now() < initialShockTransitionTime) {
+                            VESC.setCurrent(throttleShockCurrentTransition.getValueDifference(0.0, minCurrent, initialShockTransitionTime));
+                            throttleValueTransition.start();
+                        } else {
+                            if (throttleCurrent < minCurrent)
+                                VESC.setCurrent(minCurrent);
+                            else {
+                                if (throttleValueTransition.timer.getTime_ms_now() < realThrottleTransitionTime) {
+                                    VESC.setCurrent(throttleValueTransition.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime));
+                                } else {
+                                    VESC.setCurrent(throttleCurrent);
+                                }
                             }
                         }
 
+                    } else {
+                        VESC.setCurrent(throttleCurrent);
                     }
 
                     // reset regen braking
@@ -498,6 +503,7 @@ void IPCReadFunction() {
                             commAddValue(&toSend, powerOn, 0);
                             commAddValue(&toSend, settings.regenerativeBraking, 0);
                             commAddValue(&toSend, PP.getProfile(), 0);
+                            commAddValue(&toSend, settings.minimizeDrivetrainBacklash, 0);
 
                             toSend.append("\n");
                             break;
@@ -643,6 +649,11 @@ void IPCReadFunction() {
 
                             toSend.append(std::format("{};Power profile was set;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
                             break;
+
+                        case COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH:
+                            settings.minimizeDrivetrainBacklash = (bool)getValueFromPacket(packet, 1);
+
+                            break;
                     }
                 }
             }// !if packet.empty()
@@ -678,6 +689,7 @@ void setupTOML() {
     battery.wattHoursFullyDischarged        = tbl["battery"]["wattHoursFullyDischarged"].value_or<double>(-1);
     settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"].value_or(0);
     settings.regenerativeBraking            = tbl["settings"]["regenerativeBraking"].value_or(0);
+    settings.minimizeDrivetrainBacklash     = tbl["settings"]["minimizeDrivetrainBacklash"].value_or(0);
     PP.setProfile(tbl["PP"]["setProfile"].value_or(0));
 
     for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
@@ -773,7 +785,7 @@ int main() {
     };
     throttle.setCurve(customThrottleCurve);
 
-    movingAverages.potThrottle.smoothingFactor = 0.2;
+    movingAverages.potThrottle.smoothingFactor = 0.7;
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
     movingAverages.brakingCurrent.smoothingFactor = 0.02;
 
@@ -970,6 +982,10 @@ int main() {
             threads.throttle = std::thread(throttleFunction);
             threads.vescValueProcessing = std::thread(vescValueProcessingFunction);
             threads.IPCRead = std::thread(IPCReadFunction);
+
+            while (!threads.IPCRead.joinable()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
 
             threadsInitialized = true;
         }

@@ -84,6 +84,7 @@ struct {
     std::string log;
     bool regenerativeBraking;
     int currentPowerProfile;
+    bool minimizeDrivetrainBacklash;
 
     std::string fw_name;
     std::string fw_version;
@@ -308,6 +309,7 @@ void processRead(std::string line) {
                             backend.power_on = (bool)getValueFromPacket(packet, &index);
                             backend.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
                             backend.currentPowerProfile = (int)getValueFromPacket(packet, &index);
+                            backend.minimizeDrivetrainBacklash = (bool)getValueFromPacket(packet, &index);
 
                             backend.clockSecondsSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot) % 60;
                             backend.clockMinutesSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot / 60.0) % 60;
@@ -1028,6 +1030,11 @@ int main(int argc, char** argv)
                             ImGui::SeparatorText("BACKEND / EBIKE");
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
+
+                            if (ImGui::Checkbox("Minimize drivetrain backlash", &backend.minimizeDrivetrainBacklash)) {
+                                std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH), (int)backend.minimizeDrivetrainBacklash);
+                                to_send_extra.append(append);
+                            }
 
                             ImGui::Text("Powered on: %s", backend.power_on ? "True" : "False");
                             ImGui::Dummy(ImVec2(0.0f, 20.0f));
