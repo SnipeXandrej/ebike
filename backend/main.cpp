@@ -885,7 +885,7 @@ int main() {
 
         battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
 
-        if (!battery.charging && speed_kmh > 0.0) {
+        if (!battery.charging && speed_kmh != 0.0) {
             estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
 
             if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
