@@ -99,8 +99,12 @@ struct {
     Timer throttleCreep;
 } timer;
 
-ValueTransition throttleShockCurrentTransition;
-ValueTransition throttleValueTransition;
+struct {
+    ValueTransition throttleShockCurrent;
+    ValueTransition throttleReal;
+    ValueTransition throttleToBrake;
+    ValueTransition toRealBrake;
+} valueTransition;
 
 // TODO: do not hardcode filepaths
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
@@ -314,15 +318,29 @@ void uptimeCounterFunction() {
     }
 }
 
+enum STATE {
+    POWER_OFF_OR_CHARGING = 0,
+    THROTTLE = 1,
+    BRAKING = 2,
+    THROTTLE_TRANSITION_TO_BRAKING = 3,
+    BRAKING_TRANSITION_TO_THROTTLE = 4,
+};
+
 void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
+    float throttleCurrentToApply = 0.0;
+    float brakingCurrentToApply = 0.0;
     static float minCurrent = 5.5;
     static float initialShockTransitionTime = 110.0;
     static float realThrottleTransitionTime = 90.0;
-    throttleValueTransition.start();
+    static float throttleToBrakeTransitionTime = 40.0;
+    static float realBrakeTransitionTime = 20.0;
+    int state = STATE::POWER_OFF_OR_CHARGING;
+    valueTransition.throttleReal.start();
 
     while (!done) {
         if (fcntl(uartVESC.fd, F_GETFD) != -1) {
+            // TODO: settings.regenerativeBraking
 
             float throttleCurrent = clampValue(
                                             throttleMap.map(throttleLevel),
@@ -331,49 +349,93 @@ void throttleFunction() {
 
             float brakeCurrent = brakeMap.map(brakeLevel);
 
-            // Throttle
             if (!powerOn || battery.charging) {
-                VESC.setCurrent(0.0f);
-            } else {
+                state = STATE::POWER_OFF_OR_CHARGING;
+            }
 
-                if (brakeLevel != 0.0 && settings.regenerativeBraking) {
+            switch (state) {
+                case STATE::POWER_OFF_OR_CHARGING:
+                    VESC.setCurrent(0.0);
 
-                    // gradually increase braking current
-                    VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakeCurrent));
-                    throttleShockCurrentTransition.start();
-                } else {
-                    // reset regen braking
-                    movingAverages.brakingCurrent.setInput(0.0f);
+                    if (powerOn && !battery.charging && speed_kmh == 0.0) {
+                        state = STATE::THROTTLE;
+                    }
+                    break;
 
-                    if (settings.minimizeDrivetrainBacklash) {
+                case STATE::THROTTLE:
+                    if (brakeLevel > 0.0) {
+                        state = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                        valueTransition.throttleToBrake.start();
+                        break;
+                    }
 
-                        if (throttleCurrent == 0.0) {
-                            if (speed_kmh > 2.0) {
-                                VESC.setCurrent(minCurrent);
-                            } else {
-                                throttleShockCurrentTransition.start();
-                                VESC.setCurrent(0.0);
-                            }
-                        } else if (throttleShockCurrentTransition.timer.getTime_ms_now() < initialShockTransitionTime) {
-                            VESC.setCurrent(throttleShockCurrentTransition.getValueDifference(0.0, minCurrent, initialShockTransitionTime));
-                            throttleValueTransition.start();
+                    if (throttleLevel == 0.0) {
+                        if (speed_kmh > 2.0) {
+                            throttleCurrentToApply = minCurrent;
+                        } else {
+                            valueTransition.throttleShockCurrent.start();
+                            throttleCurrentToApply = 0.0;
+                        }
+
+                        VESC.setCurrent(throttleCurrentToApply);
+                        break;
+                    }
+
+                    if (throttleLevel > 0.0) {
+                        if (valueTransition.throttleShockCurrent.timer.getTime_ms_now() < initialShockTransitionTime) {
+                            throttleCurrentToApply = valueTransition.throttleShockCurrent.getValueDifference(0.0, minCurrent, initialShockTransitionTime);
+                            valueTransition.throttleReal.start();
                         } else {
                             if (throttleCurrent < minCurrent)
-                                VESC.setCurrent(minCurrent);
+                                throttleCurrentToApply = minCurrent;
                             else {
-                                if (throttleValueTransition.timer.getTime_ms_now() < realThrottleTransitionTime) {
-                                    VESC.setCurrent(throttleValueTransition.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime));
+                                if (valueTransition.throttleReal.timer.getTime_ms_now() < realThrottleTransitionTime) {
+                                    throttleCurrentToApply = valueTransition.throttleReal.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime);
                                 } else {
-                                    VESC.setCurrent(throttleCurrent);
+                                    throttleCurrentToApply = throttleCurrent;
                                 }
                             }
                         }
-
-                    } else {
-                        VESC.setCurrent(throttleCurrent);
                     }
-                }
 
+                    VESC.setCurrent(throttleCurrentToApply);
+                    break;
+
+                case STATE::BRAKING:
+                    if (brakeLevel == 0.0 && (throttleLevel != 0.0 || settings.minimizeDrivetrainBacklash)) {
+                        state = STATE::BRAKING_TRANSITION_TO_THROTTLE;
+                        break;
+                    }
+
+                    if (valueTransition.toRealBrake.timer.getTime_ms_now() < realBrakeTransitionTime) {
+                        brakingCurrentToApply = valueTransition.toRealBrake.getValueDifference(0.0, brakeCurrent, realBrakeTransitionTime);
+
+                        VESC.setBrakeCurrent(brakingCurrentToApply);
+                    } else {
+                        VESC.setBrakeCurrent(brakeCurrent);
+                    }
+
+                    break;
+
+                case STATE::THROTTLE_TRANSITION_TO_BRAKING:
+                    static float _currentToApply;
+
+                    if (valueTransition.throttleToBrake.timer.getTime_ms_now() < throttleToBrakeTransitionTime) {
+                        _currentToApply = valueTransition.throttleToBrake.getValueDifference(throttleCurrentToApply, 0.0, throttleToBrakeTransitionTime);
+
+                        VESC.setCurrent(_currentToApply);
+                    } else {
+                        state = STATE::BRAKING;
+                        valueTransition.toRealBrake.start();
+                    }
+
+                    break;
+
+                case STATE::BRAKING_TRANSITION_TO_THROTTLE:
+                    valueTransition.throttleShockCurrent.start();
+
+                    state = STATE::THROTTLE;
+                    break;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
