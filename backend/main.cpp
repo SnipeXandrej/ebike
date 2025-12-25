@@ -835,7 +835,7 @@ int main() {
     }
     signal(SIGINT, my_handler);
 
-    VESC.data.maxMotorCurrent = 250.0; // TODO: retrieve it from VESC
+    VESC.data.maxMotorCurrent = 300.0; // TODO: retrieve it from VESC
     maxBrakingCurrent = 100.0;
 
     std::vector<Point> throttleCurve = {
@@ -844,11 +844,11 @@ int main() {
         {15, 13},
         {20, 18},
         {30, 30},
-        {40, 40},
-        {50, 60},
-        {75, 150},
-        {87, 200},
-        {100, 250}
+        {40, 60},
+        {50, 100},
+        {75, 200},
+        {87, 250},
+        {100, 300}
     };
     throttleMap.setCurve(throttleCurve);
 
