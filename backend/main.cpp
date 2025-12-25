@@ -77,11 +77,13 @@ ServerSocket IPC;
 toml::table tbl;
 VescUart    VESC;
 MyUart      uartVESC;
-ThrottleMap throttle;
+ThrottleMap throttleMap;
+ThrottleMap brakeMap;
 PowerProfiles PP;
 
 struct {
     MovingAverage potThrottle;
+    MovingAverage brakeThrottle;
     MovingAverage brakingCurrent;
     MovingAverage batteryCurrentForFrontend;
 } movingAverages;
@@ -108,10 +110,10 @@ float uptimeInSeconds = 0;
 float motor_rpm = 0;
 float speed_kmh = 0;
 float throttleLevel = 0;
-float throttleBrakeLevel = 0;
+float brakeLevel = 0;
 bool  powerOn = false;
-bool  BRAKING = false;
 bool  done = false;
+float maxBrakingCurrent = 0.0;
 std::string toSendExtra;
 
 struct {
@@ -323,21 +325,25 @@ void throttleFunction() {
         if (fcntl(uartVESC.fd, F_GETFD) != -1) {
 
             float throttleCurrent = clampValue(
-                                            throttle.map(throttleLevel),
+                                            throttleMap.map(throttleLevel),
                                             maxCurrentAtRPM(VESC.data.rpm / motor.magnetPairs)
                                             );
+
+            float brakeCurrent = brakeMap.map(brakeLevel);
 
             // Throttle
             if (!powerOn || battery.charging) {
                 VESC.setCurrent(0.0f);
             } else {
 
-                if (BRAKING && settings.regenerativeBraking) {
-                    static float brakingCurrentMax = 100.0;
+                if (brakeLevel != 0.0 && settings.regenerativeBraking) {
 
                     // gradually increase braking current
-                    VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakingCurrentMax));
+                    VESC.setBrakeCurrent(movingAverages.brakingCurrent.moveAverage(brakeCurrent));
+                    throttleShockCurrentTransition.start();
                 } else {
+                    // reset regen braking
+                    movingAverages.brakingCurrent.setInput(0.0f);
 
                     if (settings.minimizeDrivetrainBacklash) {
 
@@ -366,9 +372,6 @@ void throttleFunction() {
                     } else {
                         VESC.setCurrent(throttleCurrent);
                     }
-
-                    // reset regen braking
-                    movingAverages.brakingCurrent.setInput(0.0f);
                 }
 
             }
@@ -771,7 +774,9 @@ int main() {
     signal(SIGINT, my_handler);
 
     VESC.data.maxMotorCurrent = 250.0; // TODO: retrieve it from VESC
-    std::vector<Point> customThrottleCurve = {
+    maxBrakingCurrent = 100.0;
+
+    std::vector<Point> throttleCurve = {
         {0, 0},
         {8, 8},
         {15, 13},
@@ -783,11 +788,26 @@ int main() {
         {87, 200},
         {100, 250}
     };
-    throttle.setCurve(customThrottleCurve);
+    throttleMap.setCurve(throttleCurve);
+
+    std::vector<Point> brakeCurve = {
+        {0, 0},
+        {8, 6},
+        {15, 10},
+        {20, 15},
+        {30, 25},
+        {40, 35},
+        {50, 50},
+        {75, 75},
+        {87, 87},
+        {100, 100}
+    };
+    brakeMap.setCurve(brakeCurve);
 
     movingAverages.potThrottle.smoothingFactor = 0.7;
+    movingAverages.brakeThrottle.smoothingFactor = 0.7;
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
-    movingAverages.brakingCurrent.smoothingFactor = 0.02;
+    movingAverages.brakingCurrent.smoothingFactor = 0.1;
 
     wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/);
     motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
@@ -839,6 +859,10 @@ int main() {
         static float throttleMinVoltage = 0.95;
         static float throttleMaxVoltage = 2.5;
 
+        // brakeLevel
+        static float brakeMinVoltage = 0.845;
+        static float brakeMaxVoltage = 2.48;
+
         // battery.voltage
         static float batteryVoltageR1 = 220000 + 3500 /* +3500 is the correction value */;
         static float batteryVoltageR2 = 4700+1000+1000+1000;
@@ -846,6 +870,7 @@ int main() {
         static float batteryVoltageVMax = (batteryVoltageVMaxInput * batteryVoltageR2) / (batteryVoltageR1 + batteryVoltageR2);
 
         throttleLevel       = map_f(movingAverages.potThrottle.moveAverage(analogReadings.analog0), throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
+        brakeLevel          = map_f(movingAverages.brakeThrottle.moveAverage(analogReadings.analog1), brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
         battery.voltage     = map_f_nochecks(analogReadings.analog7, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
 
         // Power on/off
@@ -902,15 +927,6 @@ int main() {
         trip_A.wattHoursUsed = trip_A.wattHoursConsumed + trip_A.wattHoursRegenerated;
         trip_B.wattHoursUsed = trip_B.wattHoursConsumed + trip_B.wattHoursRegenerated;
 
-
-        // BRAKING = digitalRead(pinBrake);
-        // TODO: feature idea: when we manually start to roll the bike from a standstill, dont activate braking until some throttle is applied
-        if (speed_kmh > 1.0 && throttleLevel == 0) {
-            BRAKING = true;
-        } else {
-            BRAKING = false;
-        }
-
         static auto timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
         static auto timeWaitBeforeChangingToCharging = std::chrono::high_resolution_clock::now();
         static std::chrono::duration<double, std::milli> timeAmphoursMinVoltageMsElapsed;
@@ -919,7 +935,7 @@ int main() {
         // automatically change the battery.charging status to true if its false & we aint braking & the current is less than 0 (meaning it's charging)
         // we don't have dedicated sensing pin for the charger being connected, yet...
         // after that wait one second, just to make sure it's not a fluke, so it doesnt just randomly put it in charging mode because of a small anomaly...
-        if (!battery.charging && !BRAKING && battery.current < 0.0) {
+        if (!battery.charging && brakeLevel == 0.0 && battery.current < 0.0) {
             timeWaitBeforeChangingToChargingMsElapsed = std::chrono::high_resolution_clock::now() - timeWaitBeforeChangingToCharging;
             if (timeWaitBeforeChangingToChargingMsElapsed.count() >= 1000) {
                 battery.charging = true;
