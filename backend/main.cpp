@@ -71,6 +71,7 @@
 
 // Pins
 #define pinPowerswitch  A0_EXP
+#define pinChargerConnected  A1_EXP
 #define pinPWM_fan      12
 
 ServerSocket IPC;
@@ -324,6 +325,7 @@ enum STATE {
     BRAKING = 2,
     THROTTLE_TRANSITION_TO_BRAKING = 3,
     BRAKING_TRANSITION_TO_THROTTLE = 4,
+    POWER_OFF_OR_CHARGING_BRAKING = 5,
 };
 
 void throttleFunction() {
@@ -350,14 +352,18 @@ void throttleFunction() {
             float brakeCurrent = brakeMap.map(brakeLevel);
 
             if (!powerOn || battery.charging) {
-                state = STATE::POWER_OFF_OR_CHARGING;
+                if (brakeLevel > 0.0) {
+                    state = STATE::POWER_OFF_OR_CHARGING_BRAKING;
+                } else {
+                    state = STATE::POWER_OFF_OR_CHARGING;
+                }
             }
 
             switch (state) {
                 case STATE::POWER_OFF_OR_CHARGING:
                     VESC.setCurrent(0.0);
 
-                    if (powerOn && !battery.charging && speed_kmh == 0.0) {
+                    if (powerOn && !battery.charging) {
                         state = STATE::THROTTLE;
                     }
                     break;
@@ -436,6 +442,10 @@ void throttleFunction() {
 
                     state = STATE::THROTTLE;
                     break;
+
+                case STATE::POWER_OFF_OR_CHARGING_BRAKING:
+                    VESC.setBrakeCurrent(brakeCurrent);
+                    break;
             }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -477,6 +487,8 @@ void vescValueProcessingFunction() {
 
             motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
             speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+
+            // TODO: add back acceleration calculation
         }
     }
 }
@@ -793,7 +805,8 @@ void setupMCP() {
     }
 
     // Setup pins
-    pinMode(        pinPowerswitch, INPUT);;
+    pinMode(     pinPowerswitch, INPUT);
+    pinMode(pinChargerConnected, INPUT);
 }
 
 void setupADC() {
@@ -894,6 +907,7 @@ int main() {
 
         // Digital
         powerOn = digitalRead(pinPowerswitch);
+        battery.charging = digitalRead(pinChargerConnected);
 
         // PWM
         pwmWrite(pinPWM_fan, 256); // 0 - 1023
@@ -990,21 +1004,7 @@ int main() {
         trip_B.wattHoursUsed = trip_B.wattHoursConsumed + trip_B.wattHoursRegenerated;
 
         static auto timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
-        static auto timeWaitBeforeChangingToCharging = std::chrono::high_resolution_clock::now();
         static std::chrono::duration<double, std::milli> timeAmphoursMinVoltageMsElapsed;
-        static std::chrono::duration<double, std::milli> timeWaitBeforeChangingToChargingMsElapsed;
-
-        // automatically change the battery.charging status to true if its false & we aint braking & the current is less than 0 (meaning it's charging)
-        // we don't have dedicated sensing pin for the charger being connected, yet...
-        // after that wait one second, just to make sure it's not a fluke, so it doesnt just randomly put it in charging mode because of a small anomaly...
-        if (!battery.charging && brakeLevel == 0.0 && battery.current < 0.0) {
-            timeWaitBeforeChangingToChargingMsElapsed = std::chrono::high_resolution_clock::now() - timeWaitBeforeChangingToCharging;
-            if (timeWaitBeforeChangingToChargingMsElapsed.count() >= 1000) {
-                battery.charging = true;
-            }
-        } else {
-            timeWaitBeforeChangingToCharging = std::chrono::high_resolution_clock::now();
-        }
 
         // Battery charge tracking stuff
         if (settings.batteryPercentageVoltageBased) {
