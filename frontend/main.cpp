@@ -709,7 +709,7 @@ int main(int argc, char** argv)
                     {
                         ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
-                        ImGui::Text(currentTimeAndDate);
+                        ImGui::Text("%s", currentTimeAndDate);
                     }
 
                     {
@@ -719,7 +719,7 @@ int main(int argc, char** argv)
                         ImVec2 textSize = ImGui::CalcTextSize(text);
                         ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
                         ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
-                        ImGui::TextColored(color, text);
+                        ImGui::TextColored(color, "%s", text);
 
                         if (ImGui::IsItemClicked())
                             to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
@@ -808,11 +808,17 @@ int main(int argc, char** argv)
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                                 if (settings.showTripA) {
                                     double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
-                                    whkm != whkm ? whkm = -1 : whkm = whkm;
+                                    if (whkm != whkm) {
+                                        whkm = 0.0;
+                                    }
+
                                     ImGui::Text("Wh/km: %0.1f¹", whkm);
                                 } else {
                                     double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
-                                    whkm != whkm ? whkm = -1 : whkm = whkm;
+                                    if (whkm != whkm) {
+                                        whkm = 0.0;
+                                    }
+
                                     ImGui::Text("Wh/km: %0.1f²", whkm);
                                 }
 
@@ -835,7 +841,7 @@ int main(int argc, char** argv)
                                     sprintf(text, "%0.1f", backend.speed_kmh);
                                 }
                                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0);
-                                ImGui::Text(text);
+                                ImGui::Text("%s", text);
                                 ImGui::SameLine();
                                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
                                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.2);
@@ -1042,13 +1048,13 @@ int main(int argc, char** argv)
                             ImGui::Text("Firmware");
                             char text[50];
                             sprintf(text, "   Name: %s", backend.fw_name.c_str());
-                            ImGui::Text(text);
+                            ImGui::Text("%s", text);
 
                             sprintf(text, "   Version: %s", backend.fw_version.c_str());
-                            ImGui::Text(text);
+                            ImGui::Text("%s", text);
 
                             sprintf(text, "   Compile Time: %s", backend.fw_compile_date_time.c_str());
-                            ImGui::Text(text);
+                            ImGui::Text("%s", text);
 
                             ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
 
@@ -1071,7 +1077,10 @@ int main(int argc, char** argv)
                             ImGui::PopStyleColor();
                             ImGui::PopFont();
 
-                            ImGui::Text("Trip A\n"
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::Text("Trip A");
+                            ImGui::PopStyleColor();
+                            ImGui::Text(
                                         "   Distance:       %0.3f km\n"
                                         "   Wh used:        %0.3f\n"
                                         "   Wh Consumed:    %0.3f\n"
@@ -1082,7 +1091,16 @@ int main(int argc, char** argv)
                                         , backend.trip_A.wattHoursRegenerated
                                        );
 
-                            ImGui::Text("Trip B\n"
+                            ImGui::SameLine();
+                            if (ImGui::Button("Reset##1", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_A));
+                                to_send_extra.append(append);
+                            }
+
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::Text("Trip B");
+                            ImGui::PopStyleColor();
+                            ImGui::Text(
                                         "   Distance:       %0.3f km\n"
                                         "   Wh used:        %0.3f\n"
                                         "   Wh Consumed:    %0.3f\n"
@@ -1092,19 +1110,17 @@ int main(int argc, char** argv)
                                         , backend.trip_B.wattHoursConsumed
                                         , backend.trip_B.wattHoursRegenerated
                                        );
-
-                            if (ImGui::Button("Reset\nTrip A    ", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_A));
-                                to_send_extra.append(append);
-                            }
                             ImGui::SameLine();
-                            if (ImGui::Button("Reset\nTrip B    ", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                            if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                 std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_B));
                                 to_send_extra.append(append);
                             }
 
                             ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::Text("Estimated range\n"
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::Text("Estimated Range");
+                            ImGui::PopStyleColor();
+                            ImGui::Text(
                                         "   Range:       %0.3f km\n"
                                         "   Distance:    %0.3f km\n"
                                         "   Wh/km:       %0.3f\n\n"
@@ -1112,21 +1128,25 @@ int main(int argc, char** argv)
                                         , backend.estimatedRange.distance
                                         , backend.estimatedRange.WhPerKm
                                         );
-
-                            if (ImGui::Button("Reset\nest. Range", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                            ImGui::SameLine();
+                            if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                 std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
                                 to_send_extra.append(append);
                             }
 
                             ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::Text("Odometer: %0.3f km", backend.odometer_distance);
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                            ImGui::Text("Odometer: ");
+                            ImGui::PopStyleColor();
+                            ImGui::SameLine();
+                            ImGui::Text("%0.3f km", backend.odometer_distance);
 
                             static char newOdometerValue[30];
                             ImGui::Text("New value: ");
                             ImGui::SameLine();
                             ImGui::SetNextItemWidth(100.0);
                             ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
-                            // ImGui::SameLine();
+                            ImGui::SameLine();
                             if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                                 std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
                                 to_send_extra.append(append);
