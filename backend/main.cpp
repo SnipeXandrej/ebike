@@ -121,7 +121,7 @@ bool  done = false;
 float maxBrakingCurrent = 0.0;
 std::string toSendExtra;
 
-struct {
+struct Battery {
     float percentage;
     double watts;
     double current;
@@ -145,15 +145,16 @@ struct {
     double wattHoursFullyDischarged_tmp;
 
     bool charging = false;
-} battery;
+};
+Battery battery;
 
-struct {
-    float range;
-    float wattHoursUsedOnStart;
+struct EstimatedRange {
+    float range; // calculated at runtime
     float distance;
     float wattHoursUsed;
-    float WhPerKm;
-} estimatedRange;
+    float WhPerKm; // calculated at runtime
+};
+EstimatedRange estimatedRange;
 
 struct Trip {
     double distance; // in km
@@ -197,10 +198,15 @@ struct {
     float rpmPerKmh = 0;
 } wheel;
 
-void estimatedRangeReset() {
-    estimatedRange.wattHoursUsedOnStart  = battery.wattHoursUsed;
-    estimatedRange.distance              = 0.0;
-    estimatedRange.wattHoursUsed         = 0.0;
+void estimatedRangeReset(EstimatedRange *estRange) {
+    estRange->distance              = 0.0;
+    estRange->wattHoursUsed         = 0.0;
+}
+
+void estimatedRangeCalculateStats(EstimatedRange *estRange, double batWattHoursFullyDischarged, double batWattHoursUsed) {
+    estRange->WhPerKm = estRange->wattHoursUsed / estRange->distance;
+    double tmp = (batWattHoursFullyDischarged - batWattHoursUsed) / estRange->WhPerKm;
+    tmp != tmp ? estRange->range = 0.0 : estRange->range = tmp;
 }
 
 void tripReset(Trip *trip) {
@@ -260,6 +266,8 @@ void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "distance", trip_B.distance);
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursConsumed", trip_B.wattHoursConsumed);
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursRegenerated", trip_B.wattHoursRegenerated);
+    updateTableValue(SETTINGS_FILEPATH, "estimatedRange", "distance", estimatedRange.distance);
+    updateTableValue(SETTINGS_FILEPATH, "estimatedRange", "wattHoursUsed", estimatedRange.wattHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsed", battery.ampHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
@@ -601,7 +609,7 @@ void IPCReadFunction() {
                             break;
 
                         case COMMAND_ID::RESET_ESTIMATED_RANGE:
-                            estimatedRangeReset();
+                            estimatedRangeReset(&estimatedRange);
                             toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
                             break;
 
@@ -758,6 +766,8 @@ void setupTOML() {
     trip_B.distance                         = tbl["trip_B"]["distance"].value_or<double>(-1);
     trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"].value_or<double>(-1);
     trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"].value_or<double>(-1);
+    estimatedRange.distance                 = tbl["estimatedRange"]["distance"].value_or<double>(0);
+    estimatedRange.wattHoursUsed            = tbl["estimatedRange"]["wattHoursUsed"].value_or<double>(0);
     battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(-1);
     battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(-1);
     battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(-1);
@@ -907,7 +917,7 @@ int main() {
 
         // Digital
         powerOn = digitalRead(pinPowerswitch);
-        battery.charging = digitalRead(pinChargerConnected);
+        // battery.charging = digitalRead(pinChargerConnected);
 
         // PWM
         pwmWrite(pinPWM_fan, 256); // 0 - 1023
@@ -1043,9 +1053,7 @@ int main() {
         }
 
         // estimatedRange.range
-        estimatedRange.WhPerKm = estimatedRange.wattHoursUsed / estimatedRange.distance;
-        double tmp = (battery.wattHoursFullyDischarged - battery.wattHoursUsed) / estimatedRange.WhPerKm;
-        tmp != tmp ? estimatedRange.range = 0.0 : estimatedRange.range = tmp;
+        estimatedRangeCalculateStats(&estimatedRange, battery.wattHoursFullyDischarged, battery.wattHoursUsed);
 
         static double uptimeInSeconds_tmp = 0;
         if ((uptimeInSeconds - uptimeInSeconds_tmp) >= 1800) { // 30 minutes
