@@ -54,6 +54,9 @@ struct trip {
     double wattHoursUsed;
     double wattHoursConsumed;
     double wattHoursRegenerated;
+
+    double range; // calculated at runtime
+    double WhPerKm; // calculated at runtime
 };
 
 struct estRange {
@@ -92,7 +95,7 @@ struct {
 
     trip trip_A;
     trip trip_B;
-    estRange estimatedRange;
+    double rollingRangeEstimation;
 } backend;
 
 // Limit FPS
@@ -291,15 +294,14 @@ void processRead(std::string line) {
                             backend.trip_A.wattHoursUsed = getValueFromPacket(packet, &index);
                             backend.trip_A.wattHoursConsumed = getValueFromPacket(packet, &index);
                             backend.trip_A.wattHoursRegenerated = getValueFromPacket(packet, &index);
+                            backend.trip_A.range = getValueFromPacket(packet, &index);
                             backend.trip_B.distance = getValueFromPacket(packet, &index);
                             backend.trip_B.wattHoursUsed = getValueFromPacket(packet, &index);
                             backend.trip_B.wattHoursConsumed = getValueFromPacket(packet, &index);
                             backend.trip_B.wattHoursRegenerated = getValueFromPacket(packet, &index);
+                            backend.trip_B.range = getValueFromPacket(packet, &index);
                             backend.phase_current = getValueFromPacket(packet, &index);
                             backend.duty_cycle = getValueFromPacket(packet, &index);
-                            backend.estimatedRange.WhPerKm = getValueFromPacket(packet, &index);
-                            backend.estimatedRange.distance = getValueFromPacket(packet, &index);
-                            backend.estimatedRange.range = getValueFromPacket(packet, &index);
                             backend.temperature_motor = getValueFromPacket(packet, &index);
                             backend.temperature_vesc = getValueFromPacket(packet, &index);
                             backend.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
@@ -310,6 +312,7 @@ void processRead(std::string line) {
                             backend.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
                             backend.currentPowerProfile = (int)getValueFromPacket(packet, &index);
                             backend.minimizeDrivetrainBacklash = (bool)getValueFromPacket(packet, &index);
+                            backend.rollingRangeEstimation = getValueFromPacket_double(packet, &index);
 
                             backend.clockSecondsSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot) % 60;
                             backend.clockMinutesSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot / 60.0) % 60;
@@ -443,10 +446,15 @@ int main(int argc, char** argv)
                 auto t1 = std::chrono::high_resolution_clock::now();
                 std::string readFromIPC = IPC.read();
 
+                if (strlen(readFromIPC.c_str()) == 0) {
+                    successfulCommunication = false;
+                }
+
                 processRead(readFromIPC);
                 msElapsedRead = std::chrono::high_resolution_clock::now() - t1;
                 cpuUsage.ipcThreadRead.measureEnd(1);
             }
+            std::print("[IPC Read] Thread stopped\n");
         });
 
         std::cout << "[IPC] Entering main while loop\n";
@@ -507,7 +515,7 @@ int main(int argc, char** argv)
                 if (backend.power_on) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
                 } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
                 msElapsedWrite = std::chrono::high_resolution_clock::now() - t1;
             }
@@ -516,6 +524,7 @@ int main(int argc, char** argv)
         }
 
         commThreadRead.join();
+        std::print("[IPC Write] Thread stopped\n");
         return 0;
     });
 
@@ -755,11 +764,12 @@ int main(int argc, char** argv)
                         // ImGui::SameLine();
                         //
                         ImGui::BeginGroup();
-
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
                             // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
                             //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
                             //     to_send_extra.append(append);
                             // }
+                            ImGui::PopFont();
 
                         ImGui::EndGroup();
                     ImGui::EndGroup(); // Ends here
@@ -829,7 +839,13 @@ int main(int argc, char** argv)
                             ImGui::PopFont();
 
                             if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip("¹Watthour/km from Trip A\n²Watthour/km from Trip B\n");
+                                if (settings.showTripA) {
+                                    ImGui::SetTooltip("Trip A\n"
+                                                        "Range left: %0.1f", backend.trip_A.range);
+                                } else {
+                                    ImGui::SetTooltip("Trip B\n"
+                                                        "Range left: %0.1f", backend.trip_B.range);
+                                }
                             }
 
                             {
@@ -852,7 +868,8 @@ int main(int argc, char** argv)
                             }
 
                             ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                                ImGui::Text("Range: %0.1f", backend.estimatedRange.range);
+                                ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
+
                                 if (settings.showAcceleration) {
                                     ImGui::Text("Accel: %0.1f", backend.acceleration);
 
@@ -867,6 +884,12 @@ int main(int argc, char** argv)
                                     ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
 
                             ImGui::PopFont();
+
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetTooltip(  "This is a rolling range\n"
+                                                    "estimation calculated from the\n"
+                                                    "last few kilometers travelled");
+                            }
                         ImGui::EndGroup();
 
 
@@ -1084,11 +1107,13 @@ int main(int argc, char** argv)
                                         "   Distance:       %0.3f km\n"
                                         "   Wh used:        %0.3f\n"
                                         "   Wh Consumed:    %0.3f\n"
-                                        "   Wh Regenerated: %0.3f\n\n"
+                                        "   Wh Regenerated: %0.3f\n"
+                                        "   Range left:     %0.3f\n\n"
                                         , backend.trip_A.distance
                                         , backend.trip_A.wattHoursUsed
                                         , backend.trip_A.wattHoursConsumed
                                         , backend.trip_A.wattHoursRegenerated
+                                        , backend.trip_A.range
                                        );
 
                             ImGui::SameLine();
@@ -1104,11 +1129,13 @@ int main(int argc, char** argv)
                                         "   Distance:       %0.3f km\n"
                                         "   Wh used:        %0.3f\n"
                                         "   Wh Consumed:    %0.3f\n"
-                                        "   Wh Regenerated: %0.3f\n\n"
+                                        "   Wh Regenerated: %0.3f\n"
+                                        "   Range left:     %0.3f\n\n"
                                         , backend.trip_B.distance
                                         , backend.trip_B.wattHoursUsed
                                         , backend.trip_B.wattHoursConsumed
                                         , backend.trip_B.wattHoursRegenerated
+                                        , backend.trip_B.range
                                        );
                             ImGui::SameLine();
                             if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1116,23 +1143,10 @@ int main(int argc, char** argv)
                                 to_send_extra.append(append);
                             }
 
-                            ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::Text("Estimated Range");
-                            ImGui::PopStyleColor();
-                            ImGui::Text(
-                                        "   Range:       %0.3f km\n"
-                                        "   Distance:    %0.3f km\n"
-                                        "   Wh/km:       %0.3f\n\n"
-                                        , backend.estimatedRange.range
-                                        , backend.estimatedRange.distance
-                                        , backend.estimatedRange.WhPerKm
-                                        );
-                            ImGui::SameLine();
-                            if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
-                                to_send_extra.append(append);
-                            }
+                            // if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                            //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
+                            //     to_send_extra.append(append);
+                            // }
 
                             ImGui::Dummy(ImVec2(0, 20));
                             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));

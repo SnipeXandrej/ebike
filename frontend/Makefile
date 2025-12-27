@@ -12,8 +12,7 @@
 #
 
 #CXX = g++
-#CXX = clang++
-BUILD = build
+CXX = clang++
 
 EXE = ebikegui
 IMGUI_DIR = ../submodules/imgui

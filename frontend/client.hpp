@@ -10,6 +10,7 @@
 #include <chrono>
 #include <arpa/inet.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 
 #define BUF_SIZE 10240
 
@@ -25,6 +26,7 @@ public:
     int receivedLength = 0;
     std::string receivedBuffer;
 
+    char* lastServerAddress;
     bool isConnected = false;
 
 private:

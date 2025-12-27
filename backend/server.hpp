@@ -23,4 +23,5 @@ public:
     int clientSocket = -1;
     int serverSocket = -1;
     int receivedLength = 0;
+    bool isShutdown = 0;
 };

@@ -195,7 +195,7 @@ void TextCenteredOnLine(const char* label, float alignment, bool contentRegionFr
     if (off > 0.0f)
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() + off);
 
-    ImGui::Text(label);
+    ImGui::Text("%s", label);
 }
 
 void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness) {

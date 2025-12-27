@@ -5,6 +5,8 @@
 // digitalRead takes around 88.5us
 // digitalWrite takes around 73 us
 
+// #define NOT_RPI
+
 #include <cstdio>
 #include <thread>
 #include <chrono>
@@ -29,6 +31,7 @@
 #include "profiles.hpp"
 #include "../timer.hpp"
 #include "../valueTransition.hpp"
+#include "rollingRangeEstimation.hpp"
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.0.0"
@@ -81,6 +84,7 @@ MyUart      uartVESC;
 ThrottleMap throttleMap;
 ThrottleMap brakeMap;
 PowerProfiles PP;
+RollingRangeEstimation rollingRangeEstimation;
 
 struct {
     MovingAverage potThrottle;
@@ -144,23 +148,20 @@ struct Battery {
     double wattHoursFullyDischarged;
     double wattHoursFullyDischarged_tmp;
 
+    double wattHoursRemaining; // calculated at runtime
+
     bool charging = false;
 };
 Battery battery;
-
-struct EstimatedRange {
-    float range; // calculated at runtime
-    float distance;
-    float wattHoursUsed;
-    float WhPerKm; // calculated at runtime
-};
-EstimatedRange estimatedRange;
 
 struct Trip {
     double distance; // in km
     double wattHoursUsed;
     double wattHoursConsumed;
     double wattHoursRegenerated;
+
+    double range; // calculated at runtime
+    double WhPerKm; // calculated at runtime
 };
 Trip trip_A, trip_B;
 
@@ -198,21 +199,18 @@ struct {
     float rpmPerKmh = 0;
 } wheel;
 
-void estimatedRangeReset(EstimatedRange *estRange) {
-    estRange->distance              = 0.0;
-    estRange->wattHoursUsed         = 0.0;
-}
-
-void estimatedRangeCalculateStats(EstimatedRange *estRange, double batWattHoursFullyDischarged, double batWattHoursUsed) {
-    estRange->WhPerKm = estRange->wattHoursUsed / estRange->distance;
-    double tmp = (batWattHoursFullyDischarged - batWattHoursUsed) / estRange->WhPerKm;
-    tmp != tmp ? estRange->range = 0.0 : estRange->range = tmp;
+void estimatedRangeCalculateStats(Trip *trip, double availableWatthours) {
+    trip->WhPerKm = trip->wattHoursUsed / trip->distance;
+    double tmp = availableWatthours / trip->WhPerKm;
+    tmp != tmp ? trip->range = 0.0 : trip->range = tmp;
 }
 
 void tripReset(Trip *trip) {
     trip->distance = 0;
     trip->wattHoursConsumed = 0;
     trip->wattHoursRegenerated = 0;
+    trip->range = 0;
+    trip->WhPerKm = 0;
 }
 
 void my_handler(int s) {
@@ -266,8 +264,6 @@ void saveAll() {
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "distance", trip_B.distance);
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursConsumed", trip_B.wattHoursConsumed);
     updateTableValue(SETTINGS_FILEPATH, "trip_B", "wattHoursRegenerated", trip_B.wattHoursRegenerated);
-    updateTableValue(SETTINGS_FILEPATH, "estimatedRange", "distance", estimatedRange.distance);
-    updateTableValue(SETTINGS_FILEPATH, "estimatedRange", "wattHoursUsed", estimatedRange.wattHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursUsed", battery.ampHoursUsed);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
     updateTableValue(SETTINGS_FILEPATH, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
@@ -300,8 +296,8 @@ void saveAll() {
 void setMcconfFromCurrentProfile() {
     VESC.data_mcconf.l_current_min_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE);
     VESC.data_mcconf.l_current_max_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE);
-    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0 * 1.028777545848526;
-    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0 * 1.028777545848526;
+    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0 / 1.101625333333333;
+    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0 / 1.101625333333333;
     VESC.data_mcconf.l_min_duty = PP.get(PP.getProfile(), PP_VALS::L_MIN_DUTY);
     VESC.data_mcconf.l_max_duty = PP.get(PP.getProfile(), PP_VALS::L_MAX_DUTY);
     VESC.data_mcconf.l_watt_min = PP.get(PP.getProfile(), PP_VALS::L_WATT_MIN);
@@ -490,7 +486,8 @@ void vescValueProcessingFunction() {
                 trip_A.distance += distanceDiff;
                 trip_B.distance += distanceDiff;
                 odometer.distance += distanceDiff;
-                estimatedRange.distance += distanceDiff;
+                rollingRangeEstimation.addDeltaDistance(distanceDiff);
+
             }
 
             motor_rpm = (VESC.data.rpm / (float)motor.magnetPairs);
@@ -503,10 +500,6 @@ void vescValueProcessingFunction() {
 
 void IPCReadFunction() {
     std::print("[IPCreadThread] Started thread\n");
-    std::print("[IPC] Waiting for client to connect\n");
-    if (IPC.createClientSocket() != 0) {
-        std::print("[IPC] Client failed to connect!\n");
-    }
 
     while(!done) {
         std::string toSend;
@@ -570,15 +563,14 @@ void IPCReadFunction() {
                             commAddValue(&toSend, trip_A.wattHoursUsed, 15);
                             commAddValue(&toSend, trip_A.wattHoursConsumed, 15);
                             commAddValue(&toSend, -(trip_A.wattHoursRegenerated), 15);
+                            commAddValue(&toSend, trip_A.range, 15);
                             commAddValue(&toSend, trip_B.distance, 15);
                             commAddValue(&toSend, trip_B.wattHoursUsed, 15);
                             commAddValue(&toSend, trip_B.wattHoursConsumed, 15);
                             commAddValue(&toSend, -(trip_B.wattHoursRegenerated), 15);
+                            commAddValue(&toSend, trip_B.range, 15);
                             commAddValue(&toSend, VESC.data.avgMotorCurrent, 1);
                             commAddValue(&toSend, VESC.data.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
-                            commAddValue(&toSend, estimatedRange.WhPerKm, 15);
-                            commAddValue(&toSend, estimatedRange.distance, 15);
-                            commAddValue(&toSend, estimatedRange.range, 15);
                             commAddValue(&toSend, VESC.data.tempMotor, 1);
                             commAddValue(&toSend, VESC.data.tempMosfet, 1);
                             commAddValue(&toSend, uptimeInSeconds, 0);
@@ -589,6 +581,7 @@ void IPCReadFunction() {
                             commAddValue(&toSend, settings.regenerativeBraking, 0);
                             commAddValue(&toSend, PP.getProfile(), 0);
                             commAddValue(&toSend, settings.minimizeDrivetrainBacklash, 0);
+                            commAddValue(&toSend, rollingRangeEstimation.getEstimation(), 15);
 
                             toSend.append("\n");
                             break;
@@ -608,10 +601,10 @@ void IPCReadFunction() {
                             toSend.append(std::format("{};Trip was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
                             break;
 
-                        case COMMAND_ID::RESET_ESTIMATED_RANGE:
-                            estimatedRangeReset(&estimatedRange);
-                            toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
-                            break;
+                        // case COMMAND_ID::RESET_ESTIMATED_RANGE:
+                        //     estimatedRangeReset(&estimatedRange);
+                        //     toSend.append(std::format("{};Estimated range was reset;\n", static_cast<int>(COMMAND_ID::BACKEND_LOG)));
+                        //     break;
 
                         case COMMAND_ID::GET_FW:
                             commAddValue(&toSend, COMMAND_ID::GET_FW, 0);
@@ -766,8 +759,6 @@ void setupTOML() {
     trip_B.distance                         = tbl["trip_B"]["distance"].value_or<double>(-1);
     trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"].value_or<double>(-1);
     trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"].value_or<double>(-1);
-    estimatedRange.distance                 = tbl["estimatedRange"]["distance"].value_or<double>(0);
-    estimatedRange.wattHoursUsed            = tbl["estimatedRange"]["wattHoursUsed"].value_or<double>(0);
     battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(-1);
     battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(-1);
     battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(-1);
@@ -899,11 +890,13 @@ int main() {
 
     setupIPC();  // IPC
     setupTOML(); // settings
+    #ifndef NOT_RPI
     setupGPIO(); // RPi GPIO
     setupMCP();  // Pin Expander
     setupADC();  // ADC 8ch 10bit
     setupADC2(); // ADC2 1ch 16bit (15bit)
     setupVESC(); // VESC
+    #endif
 
     setMcconfFromCurrentProfile();
 
@@ -915,9 +908,11 @@ int main() {
         // # readings #
         // ############
 
+        double batteryCurrentRaw = 0.0;
+        #ifndef NOT_RPI
         // Digital
         powerOn = digitalRead(pinPowerswitch);
-        // battery.charging = digitalRead(pinChargerConnected);
+        battery.charging = digitalRead(pinChargerConnected);
 
         // PWM
         pwmWrite(pinPWM_fan, 256); // 0 - 1023
@@ -931,7 +926,18 @@ int main() {
         analogReadings.analog5 = ((float)analogRead(A5_ADC) / 1023.0) * 3.3;
         analogReadings.analog6 = ((float)analogRead(A6_ADC) / 1023.0) * 3.3;
         analogReadings.analog7 = ((float)analogRead(A7_ADC) / 1023.0) * 3.3;
-        double batteryCurrentRaw = -analogRead(ADS1115_BASEPIN+5);
+        batteryCurrentRaw = -analogRead(ADS1115_BASEPIN+5);
+        #endif
+
+        #ifdef NOT_RPI
+            if (speed_kmh >= 100) {
+                speed_kmh = 0;
+            } else if (speed_kmh < 100) {
+                speed_kmh++;
+            }
+            powerOn = true;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        #endif
 
         // ##########################
         // # map all these readings #
@@ -978,6 +984,8 @@ int main() {
 
         // calculate other stuff
         battery.watts = battery.voltage * battery.current;
+        battery.wattHoursRemaining = battery.wattHoursFullyDischarged - battery.wattHoursUsed;
+        rollingRangeEstimation.loop(battery.wattHoursRemaining);
 
         // BATTERY
         static double _batteryAmpsUsedInElapsedTime,     _batteryWattsUsedUsedInElapsedTime;
@@ -997,7 +1005,7 @@ int main() {
         battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
 
         if (!battery.charging && speed_kmh != 0.0) {
-            estimatedRange.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
+            rollingRangeEstimation.addDeltaWhUsed(_batteryWattHoursUsedUsedInElapsedTime);
 
             if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
                 trip_A.wattHoursConsumed += _batteryWattHoursUsedUsedInElapsedTime;
@@ -1052,8 +1060,8 @@ int main() {
             }
         }
 
-        // estimatedRange.range
-        estimatedRangeCalculateStats(&estimatedRange, battery.wattHoursFullyDischarged, battery.wattHoursUsed);
+        estimatedRangeCalculateStats(&trip_A, battery.wattHoursRemaining);
+        estimatedRangeCalculateStats(&trip_B, battery.wattHoursRemaining);
 
         static double uptimeInSeconds_tmp = 0;
         if ((uptimeInSeconds - uptimeInSeconds_tmp) >= 1800) { // 30 minutes

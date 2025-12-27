@@ -9,7 +9,6 @@ private:
     double cpu_start;
     double cpu_end;
 
-    float addedUp;
     bool canMeasure = 1;
 
     // Get CPU time used by the calling thread
