@@ -35,12 +35,13 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 - [x] Longterm Wh/km usage
 - [x] Estimated range
 - [x] Software poweroff
-- [ ] Hardware poweroff (disconnect everything from battery, to prevent and battery drain)
+- [ ] Hardware poweroff (disconnect everything from battery, to prevent battery drain)
 - [x] Runtime changing of power profiles
 - [ ] Lights
     - [x] Front light
     - [ ] Back light
     - [ ] Turn lights
+- [ ] Motor fan cooling
 - [ ] Bike unlocking (through a card? NFC? 1-Wire?)
 - [ ] Water resistant
 - [x] 100km range (at maybe like 30-35km/h)
