@@ -5,6 +5,7 @@ public:
     ImGuiIO& io = ImGui::GetIO();
 
     void closeGesture();
+    void openGesture();
 
     void start();
     void end();

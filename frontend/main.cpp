@@ -622,6 +622,8 @@ int main(int argc, char** argv)
 
     io.Fonts->AddFontFromFileTTF("ProggyVector-Regular.ttf", 13.0);
 
+    ImFont* nerdFont = io.Fonts->AddFontFromFileTTF("0xProtoNerdFont-Regular.ttf", 13.0);
+
     // Setup scaling
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
@@ -637,8 +639,7 @@ int main(int argc, char** argv)
     style.FontScaleDpi = 2.0f;
 
     // Main loop
-    while (!done)
-    {
+    while (!done) {
         cpuUsage.ImGui.measureStart(1);
         cpuUsage.Everything.measureStart(0);
 
@@ -689,623 +690,628 @@ int main(int argc, char** argv)
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->Pos);
         ImGui::SetNextWindowSize(io.DisplaySize);
 
-        if (true) {
-            timer.draw.start();
-            ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
+        static ImGuiGesture gesture;
 
+        timer.draw.start();
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0);
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0);
+        ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
+
+        ImGui::BeginGroup();
+
+        ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_FittingPolicyScroll;
+        {
+            ImGui::PushFont(nerdFont);
+                ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5.0);
+                ImGui::Text("\uf013");
+                if (ImGui::IsItemClicked()) {
+                    gesture.openGesture();
+                }
+            ImGui::PopFont();
+        }
+
+        {
+            ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
+            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
+            ImGui::Text("%s", currentTimeAndDate);
+        }
+
+        {
+            // Bike Battery
+            char text[100];
+            sprintf(text, "SOC: %0.1f", battery.percentage);
+            ImVec2 textSize = ImGui::CalcTextSize(text);
+            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
+            ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
+            ImGui::TextColored(color, "%s", text);
+
+            if (ImGui::IsItemClicked())
+                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Click to toggle charging state\nCharging: %s", battery.charging ? "true" : "false");
+        }
+
+        ImGui::Separator();
+
+        ImGui::BeginGroup(); // Starts here
             ImGui::BeginGroup();
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
 
-            ImGuiTabBarFlags tab_bar_flags = ImGuiTabBarFlags_FittingPolicyScroll;
-            if (ImGui::BeginTabBar("Tabbar", tab_bar_flags)) {
-                if (ImGui::BeginTabItem("Main"))
+                ImGui::Text("Power info");
+                movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
+
+                ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
+                ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%7.2f A", battery.current);
+                ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
+
+                ImGui::Dummy(ImVec2(0.0, 40.0));
+                    ImGui::TextColored(backend.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
+                ImGui::PopFont();
+                if (ImGui::IsItemClicked())
+                    to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
+
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", backend.regenerativeBraking ? "on" : "off");
+
+            ImGui::EndGroup();
+            //
+            ImGui::SameLine();
+            ImGui::Dummy(ImVec2(20,0));
+            // ImGui::SameLine();
+            //
+            ImGui::BeginGroup();
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+                // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
+                //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
+                //     to_send_extra.append(append);
+                // }
+                ImGui::PopFont();
+
+            ImGui::EndGroup();
+        ImGui::EndGroup(); // Ends here
+
+        // METERS
+        // METERS
+        ImGui::SameLine();
+        ImGui::BeginGroup();
+            double whkmnow = battery.watts / backend.speed_kmh;
+            if (std::isnan(whkmnow) || whkmnow > 999.0 || whkmnow < -999.0) {
+                whkmnow = 0;
+            }
+            movingAverages.whOverKm.moveAverage((float)whkmnow);
+
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0 - 130.0));
+            ArcBar_WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
+
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0));
+            ArcBar_phaseCurrent.ProgressBarArc(backend.phase_current);
+
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
+            if (settings.showMotorDutyInsteadOfMotorTemp) {
+                ArcBar_motorDutyCycle.ProgressBarArc(backend.duty_cycle);
+            } else {
+                ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
+            }
+
+            if (ImGui::IsItemClicked()) {
+                settings.showMotorDutyInsteadOfMotorTemp = !settings.showMotorDutyInsteadOfMotorTemp;
+                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+            }
+        ImGui::EndGroup();
+
+
+        // Wh/km
+        ImGui::SetCursorPosX(200);
+        ImGui::SetCursorPosY(75);
+        ImGui::BeginGroup();
+            int numOfBars = 100;
+            float maxWatts = 9000;
+            float indicateEveryWatts = 1000;
+            powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
+
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
+            ImGui::BeginGroup();
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
+                    if (settings.showTripA) {
+                        double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
+                        if (whkm != whkm) {
+                            whkm = 0.0;
+                        }
+
+                        ImGui::Text("Wh/km: %0.1f¹", whkm);
+                    } else {
+                        double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
+                        if (whkm != whkm) {
+                            whkm = 0.0;
+                        }
+
+                        ImGui::Text("Wh/km: %0.1f²", whkm);
+                    }
+
+                    if (ImGui::IsItemClicked()) {
+                        settings.showTripA = !settings.showTripA;
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
+                    }
+                ImGui::PopFont();
+
+                if (ImGui::IsItemHovered()) {
+                    if (settings.showTripA) {
+                        ImGui::SetTooltip("Trip A\n"
+                                            "Range left: %0.1f", backend.trip_A.range);
+                    } else {
+                        ImGui::SetTooltip("Trip B\n"
+                                            "Range left: %0.1f", backend.trip_B.range);
+                    }
+                }
+
                 {
-
-                    {
-                        static ImGuiGesture gesture;
-
-                        gesture.start();
-                            if (ImGui::Begin("Gesture test", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize)) {
-                                ImGui::Button("Test");
-
-                                if (ImGui::Button("Close")) {
-                                    gesture.closeGesture();
-                                }
-                            }
-                            ImGui::End();
-                        gesture.end();
+                    char text[128];
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 2.0);
+                    if (backend.speed_kmh >= 50.0) {
+                        sprintf(text, "%0.1f >:(", backend.speed_kmh);
+                    } else {
+                        sprintf(text, "%0.1f", backend.speed_kmh);
                     }
-
-                    {
-                        ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
-                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
-                        ImGui::Text("%s", currentTimeAndDate);
-                    }
-
-                    {
-                        // Bike Battery
-                        char text[100];
-                        sprintf(text, "SOC: %0.1f", battery.percentage);
-                        ImVec2 textSize = ImGui::CalcTextSize(text);
-                        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
-                        ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
-                        ImGui::TextColored(color, "%s", text);
-
-                        if (ImGui::IsItemClicked())
-                            to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
-
-                        if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Click to toggle charging state\nCharging: %s", battery.charging ? "true" : "false");
-                    }
-
-                    ImGui::BeginGroup(); // Starts here
-                        ImGui::BeginGroup();
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
-
-                            ImGui::Text("Power info");
-                            movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
-
-                            ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
-                            ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%7.2f A", battery.current);
-                            ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
-
-                            ImGui::Dummy(ImVec2(0.0, 40.0));
-                                ImGui::TextColored(backend.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
-                            ImGui::PopFont();
-                            if (ImGui::IsItemClicked())
-                                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
-
-                            if (ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", backend.regenerativeBraking ? "on" : "off");
-
-                        ImGui::EndGroup();
-                        //
-                        ImGui::SameLine();
-                        ImGui::Dummy(ImVec2(20,0));
-                        // ImGui::SameLine();
-                        //
-                        ImGui::BeginGroup();
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
-                            // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
-                            //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
-                            //     to_send_extra.append(append);
-                            // }
-                            ImGui::PopFont();
-
-                        ImGui::EndGroup();
-                    ImGui::EndGroup(); // Ends here
-
-                    // METERS
-                    // METERS
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0);
+                    ImGui::Text("%s", text);
                     ImGui::SameLine();
-                    ImGui::BeginGroup();
-                        double whkmnow = battery.watts / backend.speed_kmh;
-                        if (std::isnan(whkmnow) || whkmnow > 999.0 || whkmnow < -999.0) {
-                            whkmnow = 0;
-                        }
-                        movingAverages.whOverKm.moveAverage((float)whkmnow);
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.2);
+                    ImGui::Text("km/h");
+                    ImGui::PopFont();
+                    // TextCenteredOnLine(text, -0.5f, false);
+                    ImGui::PopFont();
+                }
 
-                        ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0 - 130.0));
-                        ArcBar_WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
+                    ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
 
-                        ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0));
-                        ArcBar_phaseCurrent.ProgressBarArc(backend.phase_current);
+                    if (settings.showAcceleration) {
+                        ImGui::Text("Accel: %0.1f", backend.acceleration);
 
-                        ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
-                        if (settings.showMotorDutyInsteadOfMotorTemp) {
-                            ArcBar_motorDutyCycle.ProgressBarArc(backend.duty_cycle);
-                        } else {
-                            ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
-                        }
-
-                        if (ImGui::IsItemClicked()) {
-                            settings.showMotorDutyInsteadOfMotorTemp = !settings.showMotorDutyInsteadOfMotorTemp;
-                            updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
-                        }
-                    ImGui::EndGroup();
-
-
-                    // Wh/km
-                    ImGui::SetCursorPosX(200);
-                    ImGui::SetCursorPosY(75);
-                    ImGui::BeginGroup();
-                        int numOfBars = 100;
-                        float maxWatts = 9000;
-                        float indicateEveryWatts = 1000;
-                        powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
-
-                        ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
-                        ImGui::BeginGroup();
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                                if (settings.showTripA) {
-                                    double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
-                                    if (whkm != whkm) {
-                                        whkm = 0.0;
-                                    }
-
-                                    ImGui::Text("Wh/km: %0.1f¹", whkm);
-                                } else {
-                                    double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
-                                    if (whkm != whkm) {
-                                        whkm = 0.0;
-                                    }
-
-                                    ImGui::Text("Wh/km: %0.1f²", whkm);
-                                }
-
-                                if (ImGui::IsItemClicked()) {
-                                    settings.showTripA = !settings.showTripA;
-                                    updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
-                                }
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
+                            ImGui::SetTooltip("measured in km/h per second");
                             ImGui::PopFont();
-
-                            if (ImGui::IsItemHovered()) {
-                                if (settings.showTripA) {
-                                    ImGui::SetTooltip("Trip A\n"
-                                                        "Range left: %0.1f", backend.trip_A.range);
-                                } else {
-                                    ImGui::SetTooltip("Trip B\n"
-                                                        "Range left: %0.1f", backend.trip_B.range);
-                                }
-                            }
-
-                            {
-                                char text[128];
-                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 2.0);
-                                if (backend.speed_kmh >= 50.0) {
-                                    sprintf(text, "%0.1f >:(", backend.speed_kmh);
-                                } else {
-                                    sprintf(text, "%0.1f", backend.speed_kmh);
-                                }
-                                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0);
-                                ImGui::Text("%s", text);
-                                ImGui::SameLine();
-                                ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
-                                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.2);
-                                ImGui::Text("km/h");
-                                ImGui::PopFont();
-                                // TextCenteredOnLine(text, -0.5f, false);
-                                ImGui::PopFont();
-                            }
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                                ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
-
-                                if (settings.showAcceleration) {
-                                    ImGui::Text("Accel: %0.1f", backend.acceleration);
-
-                                    if (ImGui::IsItemHovered()) {
-                                        ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
-                                        ImGui::SetTooltip("measured in km/h per second");
-                                        ImGui::PopFont();
-                                    }
-                                }
-
-                                if (settings.showMotorRPM)
-                                    ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
-
-                            ImGui::PopFont();
-
-                            if (ImGui::IsItemHovered()) {
-                                ImGui::SetTooltip(  "This is a rolling range\n"
-                                                    "estimation calculated from the\n"
-                                                    "last few kilometers travelled");
-                            }
-                        ImGui::EndGroup();
-
-
-                    ImGui::EndGroup();
-
-
-                    // ODOMETER / TRIP
-                    {
-                        char text[128];
-                        ImGui::BeginGroup();
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::SetCursorPosY(io.DisplaySize.y - 55.0f);
-                                ImGui::Separator();
-                                sprintf(text, "O: %0.0f", backend.odometer_distance);
-                                TextCenteredOnLine(text, 0.0f, false);
-                                if (settings.showTripA) {
-                                    sprintf(text, "T: %4.1f¹", backend.trip_A.distance);
-                                } else {
-                                    sprintf(text, "T: %4.1f²", backend.trip_B.distance);
-                                }
-                            ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
-                                TextCenteredOnLine(text, 1.0f, false);
-                                if (ImGui::IsItemClicked()) {
-                                    settings.showTripA = !settings.showTripA;
-                                    updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
-                                }
-                            ImGui::PopFont();
-
-                            {
-                                // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
-
-                                ImVec2 cursorPos = ImGui::GetContentRegionAvail();
-                                cursorPos.x = (cursorPos.x / 2.0) - 115;
-
-                                ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
-
-                                ImGui::SetNextItemWidth(230.0);
-                                if (ImGui::Combo("##v", &backend.currentPowerProfile, availablePowerProfiles.data())) {
-                                    setPowerProfile(backend.currentPowerProfile);
-                                    to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF)));
-                                }
-
-                                // ImGui::PopFont();
-                            }
-
-                        ImGui::EndGroup();
+                        }
                     }
 
+                    if (settings.showMotorRPM)
+                        ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
+
+                ImGui::PopFont();
+
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip(  "This is a rolling range\n"
+                                        "estimation calculated from the\n"
+                                        "last few kilometers travelled");
+                }
+            ImGui::EndGroup();
+        ImGui::EndGroup();
+
+
+        // ODOMETER / TRIP
+        {
+            char text[128];
+            ImGui::BeginGroup();
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                ImGui::SetCursorPosY(io.DisplaySize.y - 55.0f);
+                    ImGui::Separator();
+                    sprintf(text, "O: %0.0f", backend.odometer_distance);
+                    TextCenteredOnLine(text, 0.0f, false);
+                    if (settings.showTripA) {
+                        sprintf(text, "T: %4.1f¹", backend.trip_A.distance);
+                    } else {
+                        sprintf(text, "T: %4.1f²", backend.trip_B.distance);
+                    }
+                ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
+                    TextCenteredOnLine(text, 1.0f, false);
+                    if (ImGui::IsItemClicked()) {
+                        settings.showTripA = !settings.showTripA;
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
+                    }
+                ImGui::PopFont();
+
+                {
+                    // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
+
+                    ImVec2 cursorPos = ImGui::GetContentRegionAvail();
+                    cursorPos.x = (cursorPos.x / 2.0) - 115;
+
+                    ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
+
+                    ImGui::SetNextItemWidth(230.0);
+                    if (ImGui::Combo("##v", &backend.currentPowerProfile, availablePowerProfiles.data())) {
+                        setPowerProfile(backend.currentPowerProfile);
+                        to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF)));
+                    }
+
+                    // ImGui::PopFont();
+                }
+
+                ImGui::EndGroup();
+            }
+
+            gesture.start();
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0);
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
+                if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
+
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - 72.0);
+            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - 3.0);
+            if (ImGui::Button("Close")) {
+                gesture.closeGesture();
+            }
+
+            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y);
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMin().x);
+            if (ImGui::BeginTabBar("Settings tabs", tab_bar_flags)) {
+                if (ImGui::BeginTabItem("App Menu"))
+                {
+                    ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("ImGui");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    if(ImGui::Button("SHUTDOWN")) {
+                        std::system("sudo /sbin/shutdown -h now");
+                    }
+                    ImGui::SameLine();
+                    if(ImGui::Button("REBOOT")) {
+                        std::system("sudo /sbin/shutdown -r now");
+                    }
+                    ImGui::SameLine();
+                    if(ImGui::Button("QUIT")) {
+                        done = 1;
+                    }
+
+                    if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
+                    }
+
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100);
+                    const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
+                    static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
+                    if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
+                        settings.TARGET_FPS = std::stof(items[item_current]);
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
+                    }
+
+                    if (ImGui::Checkbox("Show acceleration", &settings.showAcceleration)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showAcceleration", settings.showAcceleration);
+                    }
+
+                    if (ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorRPM", settings.showMotorRPM);
+                    }
+
+                    if (ImGui::Checkbox("Show trip A", &settings.showTripA)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
+                    }
+
+                    if (ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+                    }
+
+                    if (ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "launchFullscreen", settings.launchFullscreen);
+                    }
+
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("IPC");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Text("Status: %s", successfulCommunication ? "connected" : "disconnected");
+                    ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedWrite.count()), msElapsedWrite.count());
+                    ImGui::Text("Reads per second:    %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedRead.count()), msElapsedRead.count());
+                    // if (ImGui::Button("Reconnect")) {
+                    //     IPC.begin();
+                    // }
+
+                    ImGui::Text("Write wait time ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(150.0f);
+                    if (ImGui::InputInt("ms", &settings.ipcWriteWaitMs, 1, 100)) {
+                        updateTableValue(SETTINGS_FILEPATH, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
+                    }
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                        ImGui::SeparatorText("System/App Statistics");
+                        ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+                    ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("CPU Usage (100%% is 1 core)");
+                    ImGui::Text("       All:       %0.2f%%", cpuUsage.Everything.cpu_percent);
+                    ImGui::Text("       ImGui:     %0.2f%%", cpuUsage.ImGui.cpu_percent);
+                    ImGui::Text("       IPC Read:  %0.2f%%", cpuUsage.ipcThreadRead.cpu_percent);
+                    ImGui::Text("       IPC Write: %0.2f%%", cpuUsage.ipcThread.cpu_percent);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Drawtime: %0.1fms", timer.draw.getTime_ms());
+                    ImGui::Text("Rendertime: %0.1fms", timer.render.getTime_ms());
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("Hostname: %s", hostname);
+                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
+
+                    ImGui::EndChild();
                     ImGui::EndTabItem();
                 }
 
-                if (ImGui::BeginTabItem("Settings"))
+                if (ImGui::BeginTabItem("E-BIKE Menu"))
                 {
-                    if (ImGui::BeginTabBar("TABBAR2", tab_bar_flags)) {
-                        if (ImGui::BeginTabItem("App Menu"))
-                        {
-                            ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("ImGui");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
+                    ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-                            if(ImGui::Button("SHUTDOWN")) {
-                                std::system("sudo /sbin/shutdown -h now");
-                            }
-                            ImGui::SameLine();
-                            if(ImGui::Button("REBOOT")) {
-                                std::system("sudo /sbin/shutdown -r now");
-                            }
-                            ImGui::SameLine();
-                            if(ImGui::Button("QUIT")) {
-                                done = 1;
-                            }
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("BACKEND / EBIKE");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
 
-                            if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
-                            }
-
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(100);
-                            const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
-                            static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
-                            if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
-                                settings.TARGET_FPS = std::stof(items[item_current]);
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
-                            }
-
-                            if (ImGui::Checkbox("Show acceleration", &settings.showAcceleration)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "showAcceleration", settings.showAcceleration);
-                            }
-
-                            if (ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorRPM", settings.showMotorRPM);
-                            }
-
-                            if (ImGui::Checkbox("Show trip A", &settings.showTripA)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
-                            }
-
-                            if (ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
-                            }
-
-                            if (ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "launchFullscreen", settings.launchFullscreen);
-                            }
-
-
-                            ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("IPC");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            ImGui::Text("Status: %s", successfulCommunication ? "connected" : "disconnected");
-                            ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedWrite.count()), msElapsedWrite.count());
-                            ImGui::Text("Reads per second:    %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedRead.count()), msElapsedRead.count());
-                            // if (ImGui::Button("Reconnect")) {
-                            //     IPC.begin();
-                            // }
-
-                            ImGui::Text("Write wait time ");
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(150.0f);
-                            if (ImGui::InputInt("ms", &settings.ipcWriteWaitMs, 1, 100)) {
-                                updateTableValue(SETTINGS_FILEPATH, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
-                            }
-
-                            ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                                ImGui::SeparatorText("System/App Statistics");
-                                ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
-                            ImGui::Text("Compiled on: %s @ %s\n", __DATE__, __TIME__);
-
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("CPU Usage (100%% is 1 core)");
-                            ImGui::Text("       All:       %0.2f%%", cpuUsage.Everything.cpu_percent);
-                            ImGui::Text("       ImGui:     %0.2f%%", cpuUsage.ImGui.cpu_percent);
-                            ImGui::Text("       IPC Read:  %0.2f%%", cpuUsage.ipcThreadRead.cpu_percent);
-                            ImGui::Text("       IPC Write: %0.2f%%", cpuUsage.ipcThread.cpu_percent);
-
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("Drawtime: %0.1fms", timer.draw.getTime_ms());
-                            ImGui::Text("Rendertime: %0.1fms", timer.render.getTime_ms());
-
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("Hostname: %s", hostname);
-                            ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
-
-                            ImGui::EndChild();
-                            ImGui::EndTabItem();
-                        }
-
-                        if (ImGui::BeginTabItem("E-BIKE Menu"))
-                        {
-                            ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("BACKEND / EBIKE");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            if (ImGui::Checkbox("Minimize drivetrain backlash", &backend.minimizeDrivetrainBacklash)) {
-                                std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH), (int)backend.minimizeDrivetrainBacklash);
-                                to_send_extra.append(append);
-                            }
-
-                            ImGui::Text("Powered on: %s", backend.power_on ? "True" : "False");
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-
-                            ImGui::Text("Firmware");
-                            char text[50];
-                            sprintf(text, "   Name: %s", backend.fw_name.c_str());
-                            ImGui::Text("%s", text);
-
-                            sprintf(text, "   Version: %s", backend.fw_version.c_str());
-                            ImGui::Text("%s", text);
-
-                            sprintf(text, "   Compile Time: %s", backend.fw_compile_date_time.c_str());
-                            ImGui::Text("%s", text);
-
-                            ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
-
-                            ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                            ImGui::Text("main while loop: %0.0f us / %0.0f Hz", backend.timeCore0_us, 1000000 / backend.timeCore0_us);
-                            // ImGui::Text("Core 1 loop exec time: %0.0f us", backend.timeCore1_us);
-
-                            float buttonWidth = 170.0;
-                            float buttonHeight = 80.0;
-
-                            ImGui::Dummy(ImVec2(0, 20));
-                            if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
-                                to_send_extra.append(append);
-                            }
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("Trip/Range/Odometer");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::Text("Trip A");
-                            ImGui::PopStyleColor();
-                            ImGui::Text(
-                                        "   Distance:       %0.3f km\n"
-                                        "   Wh used:        %0.3f\n"
-                                        "   Wh Consumed:    %0.3f\n"
-                                        "   Wh Regenerated: %0.3f\n"
-                                        "   Range left:     %0.3f\n\n"
-                                        , backend.trip_A.distance
-                                        , backend.trip_A.wattHoursUsed
-                                        , backend.trip_A.wattHoursConsumed
-                                        , backend.trip_A.wattHoursRegenerated
-                                        , backend.trip_A.range
-                                       );
-
-                            ImGui::SameLine();
-                            if (ImGui::Button("Reset##1", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_A));
-                                to_send_extra.append(append);
-                            }
-
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::Text("Trip B");
-                            ImGui::PopStyleColor();
-                            ImGui::Text(
-                                        "   Distance:       %0.3f km\n"
-                                        "   Wh used:        %0.3f\n"
-                                        "   Wh Consumed:    %0.3f\n"
-                                        "   Wh Regenerated: %0.3f\n"
-                                        "   Range left:     %0.3f\n\n"
-                                        , backend.trip_B.distance
-                                        , backend.trip_B.wattHoursUsed
-                                        , backend.trip_B.wattHoursConsumed
-                                        , backend.trip_B.wattHoursRegenerated
-                                        , backend.trip_B.range
-                                       );
-                            ImGui::SameLine();
-                            if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_B));
-                                to_send_extra.append(append);
-                            }
-
-                            // if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                            //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
-                            //     to_send_extra.append(append);
-                            // }
-
-                            ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::Text("Odometer: ");
-                            ImGui::PopStyleColor();
-                            ImGui::SameLine();
-                            ImGui::Text("%0.3f km", backend.odometer_distance);
-
-                            static char newOdometerValue[30];
-                            ImGui::Text("New value: ");
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(100.0);
-                            ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
-                            ImGui::SameLine();
-                            if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
-                                to_send_extra.append(append);
-                            }
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("Battery");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-
-                            ImGui::Text("Charging: %s", battery.charging ? "true": "false");
-                            // TODO: amphours when new is hardcoded
-                            ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
-                            ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
-                            ImGui::Text("Wh Capacity (When fully discharged): %0.1f Wh", (battery.watthoursFullyDischarged));
-                            ImGui::Text("Wh Used: %0.5f Wh", battery.wattHoursUsed);
-                            ImGui::Dummy(ImVec2(0, 20));
-                            ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
-                            ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursFullyCharged);
-                            ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
-                            // Amphours used lifetime since 22.09.2025
-                            ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
-
-                            ImGui::Dummy(ImVec2(0,40));
-
-                            static char newAmphoursUsedLifetimeValue[30];
-                            ImGui::Text("Set Amphours Used (Lifetime) value = ");
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(100.0);
-                            ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
-                            // ImGui::SameLine();
-                            if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                if (strlen(newAmphoursUsedLifetimeValue) > 0) {
-                                    std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_USED_LIFETIME), newAmphoursUsedLifetimeValue);
-                                    to_send_extra.append(append);
-                                }
-                            }
-
-                            static char newAmphoursChargedValue[30];
-                            ImGui::Text("Set Amphours when charged = ");
-                            ImGui::SameLine();
-                            ImGui::SetNextItemWidth(100.0);
-                            ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
-                            // ImGui::SameLine();
-                            if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                if (strlen(newAmphoursChargedValue) > 0) {
-                                    std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
-                                    to_send_extra.append(append);
-                                }
-                            }
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("VESC");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.temperature_vesc);
-                            ImGui::Text(" ");
-
-                            ImGui::BeginGroup();
-                                float ItemWidth = 150.0;
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
-
-                                if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
-                                    to_send_extra.append(append);
-                                }
-                                ImGui::SameLine();
-                                if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                                    setMcconfCustomValues(mcconf_vesc);
-                                }
-                            ImGui::EndGroup();
-
-
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                            ImGui::SeparatorText("Analog Readings");
-                            ImGui::PopStyleColor();
-                            ImGui::PopFont();
-
-                            ImGui::BeginGroup();
-                            {
-                                float ItemWidth = 150.0;
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.15lf", analogReadings.analog0);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.15lf", analogReadings.analog1);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.15lf", analogReadings.analog2);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.15lf", analogReadings.analog3);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.15lf", analogReadings.analog4);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.15lf", analogReadings.analog5);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.15lf", analogReadings.analog6);
-                                ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.15lf", analogReadings.analog7);
-                            }
-                            ImGui::EndGroup();
-
-                            ImGui::EndChild();
-                            ImGui::EndTabItem();
-                        }
-
-                        if (ImGui::BeginTabItem("E-BIKE Log"))
-                        {
-                            std::string log_tmp = backend.log;
-
-                            ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
-                            ImGui::EndTabItem();
-                        }
-
-                        ImGui::EndTabBar(); //TABBAR2
+                    if (ImGui::Checkbox("Minimize drivetrain backlash", &backend.minimizeDrivetrainBacklash)) {
+                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH), (int)backend.minimizeDrivetrainBacklash);
+                        to_send_extra.append(append);
                     }
-                    ImGui::EndTabItem(); // if (ImGui::BeginTabItem("Settings"))
-                } // Settings tab item
-                ImGui::EndTabBar(); //TABBAR1
-            }
 
-            if (IPC.isConnected == false) {
-                bool open = true;
+                    ImGui::Text("Powered on: %s", backend.power_on ? "True" : "False");
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
 
-                ImGui::OpenPopup("IPC Failed");
-                if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
-                    ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
+                    ImGui::Text("Firmware");
+                    char text[50];
+                    sprintf(text, "   Name: %s", backend.fw_name.c_str());
+                    ImGui::Text("%s", text);
 
-                    if (ImGui::Button("Quit")) {
-                        done = true;
+                    sprintf(text, "   Version: %s", backend.fw_version.c_str());
+                    ImGui::Text("%s", text);
+
+                    sprintf(text, "   Compile Time: %s", backend.fw_compile_date_time.c_str());
+                    ImGui::Text("%s", text);
+
+                    ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
+
+                    ImGui::Dummy(ImVec2(0.0f, 20.0f));
+                    ImGui::Text("main while loop: %0.0f us / %0.0f Hz", backend.timeCore0_us, 1000000 / backend.timeCore0_us);
+                    // ImGui::Text("Core 1 loop exec time: %0.0f us", backend.timeCore1_us);
+
+                    float buttonWidth = 170.0;
+                    float buttonHeight = 80.0;
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
+                        to_send_extra.append(append);
                     }
-                ImGui::EndPopup();
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("Trip/Range/Odometer");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::Text("Trip A");
+                    ImGui::PopStyleColor();
+                    ImGui::Text(
+                                "   Distance:       %0.3f km\n"
+                                "   Wh used:        %0.3f\n"
+                                "   Wh Consumed:    %0.3f\n"
+                                "   Wh Regenerated: %0.3f\n"
+                                "   Range left:     %0.3f\n\n"
+                                , backend.trip_A.distance
+                                , backend.trip_A.wattHoursUsed
+                                , backend.trip_A.wattHoursConsumed
+                                , backend.trip_A.wattHoursRegenerated
+                                , backend.trip_A.range
+                                );
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("Reset##1", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_A));
+                        to_send_extra.append(append);
+                    }
+
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::Text("Trip B");
+                    ImGui::PopStyleColor();
+                    ImGui::Text(
+                                "   Distance:       %0.3f km\n"
+                                "   Wh used:        %0.3f\n"
+                                "   Wh Consumed:    %0.3f\n"
+                                "   Wh Regenerated: %0.3f\n"
+                                "   Range left:     %0.3f\n\n"
+                                , backend.trip_B.distance
+                                , backend.trip_B.wattHoursUsed
+                                , backend.trip_B.wattHoursConsumed
+                                , backend.trip_B.wattHoursRegenerated
+                                , backend.trip_B.range
+                                );
+                    ImGui::SameLine();
+                    if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_B));
+                        to_send_extra.append(append);
+                    }
+
+                    // if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
+                    //     to_send_extra.append(append);
+                    // }
+
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::Text("Odometer: ");
+                    ImGui::PopStyleColor();
+                    ImGui::SameLine();
+                    ImGui::Text("%0.3f km", backend.odometer_distance);
+
+                    static char newOdometerValue[30];
+                    ImGui::Text("New value: ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
+                    ImGui::SameLine();
+                    if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
+                        to_send_extra.append(append);
+                    }
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("Battery");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+
+                    ImGui::Text("Charging: %s", battery.charging ? "true": "false");
+                    // TODO: amphours when new is hardcoded
+                    ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
+                    ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
+                    ImGui::Text("Wh Capacity (When fully discharged): %0.1f Wh", (battery.watthoursFullyDischarged));
+                    ImGui::Text("Wh Used: %0.5f Wh", battery.wattHoursUsed);
+                    ImGui::Dummy(ImVec2(0, 20));
+                    ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
+                    ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursFullyCharged);
+                    ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
+                    // Amphours used lifetime since 22.09.2025
+                    ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
+
+                    ImGui::Dummy(ImVec2(0,40));
+
+                    static char newAmphoursUsedLifetimeValue[30];
+                    ImGui::Text("Set Amphours Used (Lifetime) value = ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
+                    // ImGui::SameLine();
+                    if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        if (strlen(newAmphoursUsedLifetimeValue) > 0) {
+                            std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_USED_LIFETIME), newAmphoursUsedLifetimeValue);
+                            to_send_extra.append(append);
+                        }
+                    }
+
+                    static char newAmphoursChargedValue[30];
+                    ImGui::Text("Set Amphours when charged = ");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
+                    // ImGui::SameLine();
+                    if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        if (strlen(newAmphoursChargedValue) > 0) {
+                            std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
+                            to_send_extra.append(append);
+                        }
+                    }
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("VESC");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.temperature_vesc);
+                    ImGui::Text(" ");
+
+                    ImGui::BeginGroup();
+                        float ItemWidth = 150.0;
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
+
+                        if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                            std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
+                            to_send_extra.append(append);
+                        }
+                        ImGui::SameLine();
+                        if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                            setMcconfCustomValues(mcconf_vesc);
+                        }
+                    ImGui::EndGroup();
+
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("Analog Readings");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+
+                    ImGui::BeginGroup();
+                    {
+                        float ItemWidth = 150.0;
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.15lf", analogReadings.analog0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.15lf", analogReadings.analog1);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.15lf", analogReadings.analog2);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.15lf", analogReadings.analog3);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.15lf", analogReadings.analog4);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.15lf", analogReadings.analog5);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.15lf", analogReadings.analog6);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.15lf", analogReadings.analog7);
+                    }
+                    ImGui::EndGroup();
+
+                    ImGui::EndChild();
+                    ImGui::EndTabItem();
                 }
+
+                if (ImGui::BeginTabItem("E-BIKE Log"))
+                {
+                    std::string log_tmp = backend.log;
+
+                    ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::EndTabItem();
+                }
+
+                ImGui::EndTabBar();
             }
 
-            ImGui::EndGroup();
-
-            ImGui::End();
-            timer.draw.end();
         }
+        ImGui::End();
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        gesture.end();
+
+        if (IPC.isConnected == false) {
+            bool open = true;
+
+            ImGui::OpenPopup("IPC Failed");
+            if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
+                ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
+
+                if (ImGui::Button("Quit")) {
+                    done = true;
+                }
+            ImGui::EndPopup();
+            }
+        }
+
+        ImGui::EndGroup();
+
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleVar();
+        timer.draw.end();
 
         // Rendering
         timer.render.start();
