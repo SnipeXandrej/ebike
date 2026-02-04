@@ -1,4 +1,12 @@
 #include "server.hpp"
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <thread>
+#include <chrono>
 
 int ServerSocket::createServerSocket(int PORT) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);

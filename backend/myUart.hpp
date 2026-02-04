@@ -3,13 +3,7 @@
 
 #include <inttypes.h>
 #include <stdio.h>
-#include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
 #include <termios.h>
-#include <fcntl.h>
-
 
 class MyUart {
 public:

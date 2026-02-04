@@ -1,16 +1,7 @@
 // C++ program to illustrate the client application in the
 // socket programming
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <thread>
-#include <chrono>
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/tcp.h>
 
 #define BUF_SIZE 10240
 
@@ -28,6 +19,9 @@ public:
 
     char* lastServerAddress;
     bool isConnected = false;
+
+    uint64_t amountOfDataReceived = 0;
+    uint64_t amountOfDataSent = 0;
 
 private:
     bool isShutdown = false;

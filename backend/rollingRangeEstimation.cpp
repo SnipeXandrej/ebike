@@ -1,47 +1,43 @@
 #include "rollingRangeEstimation.hpp"
+#include <iostream>
+#include <iomanip>
+#include <algorithm>
+#include <mutex>
+
+std::mutex mtx;
 
 void RollingRangeEstimation::addDeltaDistance(double _currentDistanceKm) {
+    mtx.lock();
     currentDistanceKm += _currentDistanceKm;
+    mtx.unlock();
 }
 
 void RollingRangeEstimation::addDeltaWhUsed(double _currentWhUsed) {
+    mtx.lock();
     currentWhUsed += _currentWhUsed;
+    mtx.unlock();
 }
 
 void RollingRangeEstimation::loop(double remainingEnergyWh) {
-    double tmp_currentDistanceKm = currentDistanceKm;
-    double tmp_currentWhUsed = currentWhUsed;
+    mtx.lock();
+    double rollOverKilometers = NUM_OF_KILOMETERS + (NUM_OF_KILOMETERS * (PERCENT/100.0));
+    double ratio = rollOverKilometers / NUM_OF_KILOMETERS;
 
-    if (tmp_currentDistanceKm >= SEGMENT_LENGTH_KM) {
-
-        addValueToArray(SEGMENTS, distanceSegment, tmp_currentDistanceKm);
-        addValueToArray(SEGMENTS, whUsedSegment, tmp_currentWhUsed);
-
-        currentDistanceKm -= tmp_currentDistanceKm;
-        currentWhUsed -= tmp_currentWhUsed;
-
-        sum.distance = 0.0;
-        sum.whUsed = 0.0;
-
-        for (int i = 0; i < SEGMENTS; i++) {
-            sum.distance += distanceSegment[i];
-            sum.whUsed += whUsedSegment[i];
-        }
-
-        sum.whPerKm = sum.whUsed / sum.distance;
-        sum.range = remainingEnergyWh / sum.whPerKm;
+    if (currentDistanceKm >= rollOverKilometers) {
+        currentDistanceKm /= ratio;
+        currentWhUsed /= ratio;
     }
+
+    whPerKm = currentWhUsed / currentDistanceKm;
+    range = remainingEnergyWh / whPerKm;
+
+    mtx.unlock();
 }
 
-double RollingRangeEstimation::getEstimation() {
-    return sum.range;
+double RollingRangeEstimation::getRange() {
+    return range;
 }
 
-void RollingRangeEstimation::addValueToArray(int SIZE, double arr[], double newVal) {
-    // Shift all values to the left
-    for (int i = 0; i < SIZE - 1; ++i) {
-        arr[i] = arr[i + 1];
-    }
-    // Add new value to the end
-    arr[SIZE - 1] = newVal;
+double RollingRangeEstimation::getWhPerKm() {
+    return whPerKm;
 }

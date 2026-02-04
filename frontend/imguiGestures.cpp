@@ -1,8 +1,9 @@
 #include "imguiGestures.hpp"
-#include "other.hpp"
+#include "commonUtils.hpp"
+#include "valueTransition.hpp"
+#include "cubicBezier.hpp"
+
 #include <print>
-#include "../valueTransition.hpp"
-#include "../cubicBezier.hpp"
 
 ValueTransition valueTransition;
 
@@ -14,6 +15,7 @@ float c_y2 = 1.0f;
 
 bool closeWindow = false;
 bool continueGesture = false;
+bool gestureStarted = false;
 float animationMoveOffset;
 float appSizeY = 0;
 float appSizeX = 0;
@@ -50,9 +52,13 @@ void f_gestureClose() {
 }
 
 void f_gestureOpen() {
+    if (continueGesture)
+        return;
+
     gestureCase = GESTURE_MOVE_TO_HIGHEST;
     windowPosYOnLetoff = appSizeY;
     continueGesture = true;
+    gestureStarted = true;
 }
 
 bool wasGestureWithinStartRegion = false;
@@ -60,8 +66,9 @@ static float output;
 static float output_bezier;
 static float destination;
 
+bool isThisWindowFocused = false;
 
-void ImGuiGesture::start() {
+bool ImGuiGesture::start() {
     appSizeY = ImGui::GetWindowSize().y;
     appSizeX = ImGui::GetWindowSize().x;
 
@@ -71,17 +78,26 @@ void ImGuiGesture::start() {
     gestureClosingThresholdY = gestureMaxY - 150.0;
 
     bool isGestureWithinStartRegion = ((io.MousePos.y < appSizeY) && (io.MousePos.y > appSizeY - 90.0)) ? true : false;
-    bool isHeaderWithinConstraints = (io.MousePos.y > (appSizeY - gestureMaxY - 60.0)) && (io.MousePos.y < (appSizeY - gestureMaxY + 80.0))
+    bool isHeaderWithinConstraints = (io.MousePos.y > (appSizeY - gestureMaxY - 60.0)) && (io.MousePos.y < (appSizeY - gestureMaxY + 50.0))
                                   && (io.MousePos.x > (appSizeX/2.0 - (windowSize.x/2.0)) && io.MousePos.x < (appSizeX/2.0 + (windowSize.x/2.0))) ? true : false;
 
     bool isMouseDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);
     bool isMouseLeftClick = ImGui::IsMouseDown(ImGuiMouseButton_Left);
 
+    static bool mouse_tmp = ImGui::IsMouseDown(ImGuiMouseButton_Left);
+
+    static bool wasMouseOnHeader = false;
+    if (mouse_tmp != isMouseLeftClick) {
+        mouse_tmp = isMouseLeftClick;
+
+        wasMouseOnHeader = isHeaderWithinConstraints;
+    }
+
     // std::print("case: {}\n", gestureCase);
     switch (gestureCase) {
     case GESTURE_NOTHING:
         // hide it
-        if (!continueGesture) {
+        if (!continueGesture && ImGui::IsWindowFocused()) {
             windowPosY = appSizeY;
 
             if ((isMouseDragging && isGestureWithinStartRegion ) || wasGestureWithinStartRegion) {
@@ -96,13 +112,14 @@ void ImGuiGesture::start() {
 
                 if ((initialMousePos - io.MousePos.y) > gestureMouseMovementThreshold) {
                     temp = false;
+                    gestureStarted = true;
                     gestureCase = GESTURE_PRESTART;
                     valueTransition.start();
                 }
             }
         }
 
-        if (continueGesture) {
+        if (continueGesture && isThisWindowFocused) {
             if (isHeaderWithinConstraints) {
                 if (isMouseLeftClick) {
                     gestureCase = GESTURE_CLOSING_ACTION;
@@ -143,8 +160,7 @@ void ImGuiGesture::start() {
             windowPosY = io.MousePos.y - headerOffset;
         } else {
             valueTransition.start();
-            // when the mouse goes off of the app the value is set to FLT_MAX, that is undesirable
-            windowPosYOnLetoff = windowPosY > 0 ? windowPosY : 0;
+            windowPosYOnLetoff = windowPosY;
 
             // if the gesture went above the max height, move it down
             if ((appSizeY - windowPosY) > gestureMaxY) {
@@ -165,6 +181,7 @@ void ImGuiGesture::start() {
 
     case GESTURE_HIDE:
         continueGesture = false;
+        gestureStarted = false;
 
         gestureCase = GESTURE_NOTHING;
         break;
@@ -223,12 +240,13 @@ void ImGuiGesture::start() {
         static bool temp = false;
         static float mouseOffset;
         static float windowOffset;
-        if (isMouseDragging) {
-            if (temp == false) {
-                temp = true;
-                mouseOffset = io.MousePos.y;
-                windowOffset = windowPosY;
-            }
+        if (temp == false) {
+            temp = true;
+            mouseOffset = io.MousePos.y;
+            windowOffset = windowPosY;
+        }
+
+        if (isMouseDragging && wasMouseOnHeader) {
 
             // do not snap the windowPos to the mousePos, only move it by the difference of the mouse movement
             windowPosY = windowOffset + (io.MousePos.y - mouseOffset);
@@ -254,6 +272,12 @@ void ImGuiGesture::start() {
 
     ImGui::SetNextWindowSize(windowSize);
     ImGui::SetNextWindowPos(ImVec2(appSizeX/2.0 - windowSize.x/2.0, windowPosY + 2.0));
+
+    return gestureStarted;
+}
+
+void ImGuiGesture::beforeEnd() {
+    isThisWindowFocused = ImGui::IsWindowFocused();
 }
 
 void ImGuiGesture::end() {

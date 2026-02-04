@@ -1,4 +1,12 @@
 #include "client.hpp"
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <thread>
+#include <chrono>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netinet/tcp.h>
 
 bool previousConnection = false;
 
@@ -90,6 +98,8 @@ std::string ClientSocket::read() {
             return "";
         }
 
+        amountOfDataReceived += len;
+
         receivedBuffer.append(buffer, len);
     }
 }
@@ -106,6 +116,7 @@ int ClientSocket::write(const char* data, size_t size) {
         return -1;
     }
 
+    amountOfDataSent += ret;
     return ret;
 }
 

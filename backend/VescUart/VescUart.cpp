@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "VescUart.h"
+#include <string.h>
 
 VescUart::VescUart(uint32_t timeout_ms) : _TIMEOUT(timeout_ms) {
 	nunchuck.valueX         = 127;
@@ -206,8 +207,8 @@ bool VescUart::processReadPacket(uint8_t * message) {
 			data.tempMotor 			= buffer_get_float16(message, 10.0, &index); 	// 2 bytes - mc_interface_temp_motor_filtered()
 			data.avgMotorCurrent 	= buffer_get_float32(message, 100.0, &index); // 4 bytes - mc_interface_read_reset_avg_motor_current()
 			data.avgInputCurrent 	= buffer_get_float32(message, 100.0, &index); // 4 bytes - mc_interface_read_reset_avg_input_current()
-			index += 4; // Skip 4 bytes - mc_interface_read_reset_avg_id()
-			index += 4; // Skip 4 bytes - mc_interface_read_reset_avg_iq()
+			data.avgCurrentDAxis 	= buffer_get_float32(message, 100.0, &index); // 4 bytes - mc_interface_read_reset_avg_id()
+			data.avgCurrentQAxis 	= buffer_get_float32(message, 100.0, &index); // 4 bytes - mc_interface_read_reset_avg_iq()
 			data.dutyCycleNow 		= buffer_get_float16(message, 1000.0, &index); 	// 2 bytes - mc_interface_get_duty_cycle_now()
 			data.rpm 				= buffer_get_float32(message, 1.0, &index);		// 4 bytes - mc_interface_get_rpm()
 			data.inpVoltage 		= buffer_get_float16(message, 10.0, &index);		// 2 bytes - GET_INPUT_VOLTAGE()
@@ -355,10 +356,10 @@ void VescUart::setMcconfTempValues(uint8_t canId) {
 	if(printDebug){
 		printf("Command: COMM_SET_MCCONF_TEMP_SETUP %d", canId);
 	}
-	int32_t index = 0;
-	int payloadSize = 45; // 37
-	uint8_t payload[payloadSize];
 
+	int32_t index = 0;
+	int payloadSize = (canId == 0 ? 45 : 47);
+	uint8_t payload[payloadSize];
 	if (canId != 0) {
 		payload[index++] = { COMM_FORWARD_CAN };
 		payload[index++] = canId;

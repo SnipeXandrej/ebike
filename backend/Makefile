@@ -1,27 +1,26 @@
 CXX = clang++
 MAKEFLAGS += -j$(shell nproc)
 
+SRC_ROOT := $(abspath ..)
+BUILD := build
+
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += server.cpp utils.cpp myUart.cpp ads1115.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp
+SOURCES += server.cpp myUart.cpp ads1115.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp
 SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
-OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
-CXXFLAGS = -std=c++23 -g -Wall -Wextra
-
+CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT)
 LIBS = -lwiringPi
+
+NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
+OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
 
 .PHONY: all clean notrpi
 
 ## BUILD RULES
-%.o:%.cpp
-		$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-%.o:VescUart/%.cpp
-		$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-%.o: ../%.cpp
-		$(CXX) $(CXXFLAGS) -c -o $@ $<
+$(BUILD)/%.o: $(SRC_ROOT)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 all: $(EXEC)
 		@echo Build complete

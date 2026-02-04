@@ -10,24 +10,28 @@
 # MSYS2:
 #   pacman -S mingw-w64-i686-SDL2
 #
-
-#CXX = g++
+MAKEFLAGS += -j$(shell nproc)
 CXX = clang++
+
+SRC_ROOT := $(abspath ..)
+BUILD := build
 
 EXE = ebikegui
 IMGUI_DIR = ../submodules/imgui
 SOURCES = main.cpp
-SOURCES += client.cpp other.cpp cpuUsage.cpp arc_progress_bar.cpp ../timer.cpp ../valueTransition.cpp ../cubicBezier.cpp imguiGestures.cpp
-SOURCES += $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp
+SOURCES += client.cpp utils.cpp cpuUsage.cpp arc_progress_bar.cpp imguiGestures.cpp ../timer.cpp ../valueTransition.cpp ../cubicBezier.cpp ../messagingUtils.cpp ../commonUtils.cpp waylandUtils.cpp
+SOURCES += $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp $(IMGUI_DIR)/misc/cpp/imgui_stdlib.cpp
 SOURCES += $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
-OBJS = $(addsuffix .o, $(basename $(notdir $(SOURCES))))
 
 UNAME_S := $(shell uname -s)
 LINUX_GL_LIBS = -lGL
 
-CXXFLAGS = -std=c++23 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends
+CXXFLAGS = -std=c++23 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I$(IMGUI_DIR)/misc/cpp -I$(SRC_ROOT)
 CXXFLAGS += -g -Wall -Wformat
-LIBS =
+LIBS = -lwayland-client
+
+NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
+OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
 
 ##---------------------------------------------------------------------
 ## BUILD FLAGS PER PLATFORM
@@ -62,17 +66,9 @@ endif
 ## BUILD RULES
 ##---------------------------------------------------------------------
 
-%.o:%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-%.o: ../%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-%.o:$(IMGUI_DIR)/%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
-
-%.o:$(IMGUI_DIR)/backends/%.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+$(BUILD)/%.o: $(SRC_ROOT)/%.cpp
+	@mkdir -p $(dir $@)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 all: $(EXE)
 	@echo Build complete for $(ECHO_MESSAGE)

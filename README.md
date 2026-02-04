@@ -23,6 +23,7 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 ## Status of features
 - [x] Motor temperature
 - [x] VESC MOSFET temperature
+- [ ] Outside temperature
 - [x] Speed (calculated from the motor speed)
 - [x] Odometer
 - [x] Trip A / Trip B with Wh/km usage separate for both trips
@@ -31,6 +32,7 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 - [x] Immediate Wh/km usage
 - [x] Battery Percentage calculated from amphour usage
 - [ ] Battery cycle counter
+- [ ] External battery
 - [x] Immediate Wh/km usage
 - [x] Longterm Wh/km usage
 - [x] Estimated range

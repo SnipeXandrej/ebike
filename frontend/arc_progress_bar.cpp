@@ -1,11 +1,23 @@
 #include "arc_progress_bar.hpp"
+#include "commonUtils.hpp"
 #include <format>
 
 void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, float thickness, ImVec2 pos, float min_input, float max_input)
 {
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
 
-    float inputMapped = map_f(input, min_input, max_input, 0, 100);
+    bool isInputNegative = false;
+    float inputMapped;
+    if (input >= min_input) {
+        inputMapped = map_f(input, min_input, max_input, 0, 100);
+    } else {
+        isInputNegative = true;
+        inputMapped = map_f(input, min_input, min_input-(max_input+min_input), 0, 100);
+    }
+
+    if (!drawArcOutsideInputBoundary) {
+        inputMapped = 0;
+    }
 
     float x = pos.x, y = pos.y;    // Position
 
@@ -27,7 +39,7 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     ImGui::Text("%0.0f", max_input);
 
     {
-        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * 0.75);
+        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * textScale);
         std::string text = std::format("{:.0f}", input);
         ImVec2 textSize = ImGui::CalcTextSize(text.data());
         ImGui::SetCursorPos(ImVec2((x + (size * 0.5f)) - (textSize.x * 0.5), y + (size * 0.20)));
@@ -44,11 +56,6 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
 
     ImColor green = ImVec4(0.0f, 0.85f, 0.0f, 1.0f);
 
-    // Path for background arc (dimmed arc)
-    // ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.0f, 0.85f, 0.0f, 1.0f));
-    // draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
-    // draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness);
-    // ImGui::PopStyleColor();
     draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
     draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness);
 
@@ -57,7 +64,12 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     draw_list->PathStroke(green, ImDrawFlags_None, thickness);
 
     draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
-    draw_list->PathStroke(ColorInside, ImDrawFlags_None, thickness);
+
+    if (!isInputNegative) {
+        draw_list->PathStroke(ColorInside, ImDrawFlags_None, thickness);
+    } else {
+        draw_list->PathStroke(ColorInsideNegative, ImDrawFlags_None, thickness);
+    }
 }
 
 void ArcProgressBar::ProgressBarArc(float input, ImVec2 pos)
@@ -77,4 +89,8 @@ void ArcProgressBar::ProgressBarArc(float input)
     ImGui::Dummy(ImVec2(size, size));   // Placeholder
 
     ProgressBarArc(input, pos);
+}
+
+void ArcProgressBar::setTextScaling(float input) {
+    textScale = input;
 }

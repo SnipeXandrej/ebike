@@ -1,13 +1,7 @@
 // C++ program to show the example of server application in
 // socket programming
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <thread>
-#include <chrono>
+#include <stdio.h>
+#include <string>
 
 #define BUF_SIZE 10240
 

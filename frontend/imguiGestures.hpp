@@ -7,6 +7,7 @@ public:
     void closeGesture();
     void openGesture();
 
-    void start();
+    bool start();
+    void beforeEnd();
     void end();
 };

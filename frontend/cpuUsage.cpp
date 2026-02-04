@@ -1,4 +1,5 @@
 #include "cpuUsage.hpp"
+#include <sys/resource.h>
 
 double CPUUsage::getCPUTime(bool thread_only) {
     if (thread_only) {

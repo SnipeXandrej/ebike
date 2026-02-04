@@ -10,6 +10,7 @@
 #include "imgui.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#include "misc/cpp/imgui_stdlib.h"
 #include <format>
 #include <stdio.h>
 #include <SDL3/SDL.h>
@@ -23,12 +24,17 @@
 #include <print>
 
 #include "client.hpp"
-#include "other.hpp"
+#include "utils.hpp"
+#include "commonUtils.hpp"
 #include "cpuUsage.hpp"
-#include "../comm.h"
+#include "comm.h"
 #include "arc_progress_bar.hpp"
-#include "../timer.hpp"
+#include "timer.hpp"
 #include "imguiGestures.hpp"
+#include "messagingUtils.hpp"
+#include "waylandUtils.hpp"
+
+#define GUI_VERSION "0.1.0 (For server version 0.1.0)"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -77,15 +83,18 @@ struct {
     float odometer_distance;
     float trip_distance;
     float phase_current;
+    float phase_currentDAxis;
+    float phase_currentQAxis;
     float duty_cycle;
     float temperature_motor;
     float temperature_vesc;
-    float timeCore0_us;
-    float timeCore1_us;
+    float loopTimeMain_ms;
+    float loopTimeThrottle_ms;
+    float loopTimeVescValueProcessing_ms;
     float acceleration;
     bool power_on = false;
     std::string log;
-    bool regenerativeBraking;
+    bool automaticRegenerativeBraking;
     int currentPowerProfile;
     bool minimizeDrivetrainBacklash;
 
@@ -96,19 +105,27 @@ struct {
     trip trip_A;
     trip trip_B;
     double rollingRangeEstimation;
+    double rollingWhPerKmEstimation;
+
+    std::string availablePowerProfiles;
+
+    std::string notes;
 } backend;
 
 // Limit FPS
 struct {
     float TARGET_FPS;
     bool LIMIT_FRAMERATE;
-    int ipcWriteWaitMs;
+    float ipcWriteWaitMs;
     int powerProfile;
     bool showMotorRPM;
     bool showAcceleration;
     bool showTripA;
     bool showMotorDutyInsteadOfMotorTemp;
     bool launchFullscreen;
+    bool limitFramerateOnSwitchOff;
+    bool useTripStatsForDisplayingRangeAndWhPerKm;
+    bool useOnDemandRendering;
 } settings;
 
 struct {
@@ -132,9 +149,10 @@ struct {
 } battery;
 
 struct {
-    MovingAverage wattage;
     MovingAverage wattageMoreSmooth;
     MovingAverage whOverKm;
+    MovingAverage motorDCurrent;
+    MovingAverage motorQCurrent;
 } movingAverages;
 
 struct {
@@ -164,11 +182,10 @@ struct {
     Timer ping;
 } timer;
 
-std::string availablePowerProfiles;
 bool successfulCommunication = false;
 
-std::string to_send;
-std::string to_send_extra;
+std::string toSend;
+std::string toSendExtra;
 
 struct {
     CPUUsage ImGui;
@@ -179,10 +196,17 @@ struct {
 
 ClientSocket IPC;
 
-ArcProgressBar ArcBar_WhKmNow;
-ArcProgressBar ArcBar_phaseCurrent;
-ArcProgressBar ArcBar_motorTemp;
-ArcProgressBar ArcBar_motorDutyCycle;
+struct {
+    ArcProgressBar WhKmNow;
+    ArcProgressBar phaseCurrent;
+    ArcProgressBar motorTemp;
+    ArcProgressBar motorDutyCycle;
+    ArcProgressBar motorDCurrent;
+    ArcProgressBar motorQCurrent;
+} arcBar;
+
+float buttonWidth = 170.0;
+float buttonHeight = 80.0;
 
 void setBrightnessLow() {
     // std::system("brightnessctl set 0%");
@@ -203,8 +227,7 @@ void setBrightnessHigh() {
 }
 
 void setMcconfCustomValues(VESC_MCCONF mcconf) {
-    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};{};\n"
-                                        ,static_cast<int>(COMMAND_ID::SET_POWER_PROFILE_CUSTOM)
+    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};"
                                         ,mcconf.l_current_min_scale
                                         ,mcconf.l_current_max_scale
                                         ,mcconf.l_min_erpm
@@ -216,15 +239,16 @@ void setMcconfCustomValues(VESC_MCCONF mcconf) {
                                         ,mcconf.l_in_current_min
                                         ,mcconf.l_in_current_max
     );
-    to_send_extra.append(append);
+
+    msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE_CUSTOM);
+    msg::addString(toSendExtra, "{}", append);
+    msg::end(toSendExtra);
 }
 
 void setPowerProfile(int PROFILE) {
-    std::string append = std::format("{};{};\n"
-                                        ,static_cast<int>(COMMAND_ID::SET_POWER_PROFILE)
-                                        ,PROFILE
-    );
-    to_send_extra.append(append);
+    msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE);
+    msg::addValue(toSendExtra, PROFILE);
+    msg::end(toSendExtra);
 }
 
 void writeClock() {
@@ -241,13 +265,11 @@ void writeClock() {
 
 void processRead(std::string line) {
         if (!line.empty()) {
-            // std::print("\n{}\n", line);
-
-            auto readStringPacket = split(line, '\n');
+            auto readStringPacket = msg::split(line, msg::messageEnd);
 
             if (!readStringPacket.empty())
             for (int i = 0; i < (int)readStringPacket.size(); i++) {
-                auto packet = split(readStringPacket[i], ';');
+                auto packet = msg::split(readStringPacket[i], ";");
                 if (!packet.empty()) {
 
                 int index = 1;
@@ -268,51 +290,55 @@ void processRead(std::string line) {
                 if (successfulCommunication) {
                     switch (command_id) {
                         case COMMAND_ID::GET_BATTERY:
-                            battery.voltage = getValueFromPacket(packet, &index);
-                            battery.current = getValueFromPacket(packet, &index);
-                            battery.watts = getValueFromPacket(packet, &index);
-                            battery.wattHoursUsed = getValueFromPacket(packet, &index);
-                            battery.watthoursFullyDischarged = getValueFromPacket(packet, &index);
-                            battery.ampHoursUsed = getValueFromPacket(packet, &index);
-                            battery.ampHoursUsedLifetime = getValueFromPacket(packet, &index);
-                            battery.ampHoursFullyCharged = getValueFromPacket(packet, &index);
-                            battery.ampHoursFullyChargedWhenNew = getValueFromPacket(packet, &index);
-                            battery.percentage = getValueFromPacket(packet, &index);
-                            battery.voltage_min = getValueFromPacket(packet, &index);
-                            battery.voltage_max = getValueFromPacket(packet, &index);
-                            battery.nominalVoltage = getValueFromPacket(packet, &index);
-                            battery.amphours_min_voltage = getValueFromPacket(packet, &index);
-                            battery.amphours_max_voltage = getValueFromPacket(packet, &index);
-                            battery.charging = getValueFromPacket(packet, &index);
+                            battery.voltage = msg::getValueFromSplit(packet, index);
+                            battery.current = msg::getValueFromSplit(packet, index);
+                            battery.watts = msg::getValueFromSplit(packet, index);
+                            battery.wattHoursUsed = msg::getValueFromSplit(packet, index);
+                            battery.watthoursFullyDischarged = msg::getValueFromSplit(packet, index);
+                            battery.ampHoursUsed = msg::getValueFromSplit(packet, index);
+                            battery.ampHoursUsedLifetime = msg::getValueFromSplit(packet, index);
+                            battery.ampHoursFullyCharged = msg::getValueFromSplit(packet, index);
+                            battery.ampHoursFullyChargedWhenNew = msg::getValueFromSplit(packet, index);
+                            battery.percentage = msg::getValueFromSplit(packet, index);
+                            battery.voltage_min = msg::getValueFromSplit(packet, index);
+                            battery.voltage_max = msg::getValueFromSplit(packet, index);
+                            battery.nominalVoltage = msg::getValueFromSplit(packet, index);
+                            battery.amphours_min_voltage = msg::getValueFromSplit(packet, index);
+                            battery.amphours_max_voltage = msg::getValueFromSplit(packet, index);
+                            battery.charging = msg::getValueFromSplit(packet, index);
                             break;
 
                         case COMMAND_ID::GET_STATS:
-                            backend.speed_kmh = getValueFromPacket(packet, &index);
-                            backend.motor_rpm = getValueFromPacket(packet, &index);
-                            backend.odometer_distance = getValueFromPacket(packet, &index);
-                            backend.trip_A.distance = getValueFromPacket(packet, &index);
-                            backend.trip_A.wattHoursUsed = getValueFromPacket(packet, &index);
-                            backend.trip_A.wattHoursConsumed = getValueFromPacket(packet, &index);
-                            backend.trip_A.wattHoursRegenerated = getValueFromPacket(packet, &index);
-                            backend.trip_A.range = getValueFromPacket(packet, &index);
-                            backend.trip_B.distance = getValueFromPacket(packet, &index);
-                            backend.trip_B.wattHoursUsed = getValueFromPacket(packet, &index);
-                            backend.trip_B.wattHoursConsumed = getValueFromPacket(packet, &index);
-                            backend.trip_B.wattHoursRegenerated = getValueFromPacket(packet, &index);
-                            backend.trip_B.range = getValueFromPacket(packet, &index);
-                            backend.phase_current = getValueFromPacket(packet, &index);
-                            backend.duty_cycle = getValueFromPacket(packet, &index);
-                            backend.temperature_motor = getValueFromPacket(packet, &index);
-                            backend.temperature_vesc = getValueFromPacket(packet, &index);
-                            backend.totalSecondsSinceBoot = getValueFromPacket(packet, &index);
-                            backend.timeCore0_us = getValueFromPacket(packet, &index);
-                            backend.timeCore1_us = getValueFromPacket(packet, &index);
-                            backend.acceleration = getValueFromPacket(packet, &index);
-                            backend.power_on = (bool)getValueFromPacket(packet, &index);
-                            backend.regenerativeBraking = (bool)getValueFromPacket(packet, &index);
-                            backend.currentPowerProfile = (int)getValueFromPacket(packet, &index);
-                            backend.minimizeDrivetrainBacklash = (bool)getValueFromPacket(packet, &index);
-                            backend.rollingRangeEstimation = getValueFromPacket_double(packet, &index);
+                            backend.speed_kmh = msg::getValueFromSplit(packet, index);
+                            backend.motor_rpm = msg::getValueFromSplit(packet, index);
+                            backend.odometer_distance = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.distance = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.wattHoursUsed = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.wattHoursConsumed = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.wattHoursRegenerated = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.range = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.distance = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.wattHoursUsed = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.wattHoursConsumed = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.wattHoursRegenerated = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.range = msg::getValueFromSplit(packet, index);
+                            backend.phase_current = msg::getValueFromSplit(packet, index);
+                            backend.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
+                            backend.phase_currentQAxis = msg::getValueFromSplit(packet, index);
+                            backend.duty_cycle = msg::getValueFromSplit(packet, index);
+                            backend.temperature_motor = msg::getValueFromSplit(packet, index);
+                            backend.temperature_vesc = msg::getValueFromSplit(packet, index);
+                            backend.totalSecondsSinceBoot = msg::getValueFromSplit(packet, index);
+                            backend.loopTimeMain_ms = msg::getValueFromSplit(packet, index);
+                            backend.loopTimeThrottle_ms = msg::getValueFromSplit(packet, index);
+                            backend.loopTimeVescValueProcessing_ms = msg::getValueFromSplit(packet, index);
+                            backend.acceleration = msg::getValueFromSplit(packet, index);
+                            backend.power_on = (bool)msg::getValueFromSplit(packet, index);
+                            backend.automaticRegenerativeBraking = (bool)msg::getValueFromSplit(packet, index);
+                            backend.currentPowerProfile = (int)msg::getValueFromSplit(packet, index);
+                            backend.minimizeDrivetrainBacklash = (bool)msg::getValueFromSplit(packet, index);
+                            backend.rollingRangeEstimation = msg::getValueFromSplit(packet, index);
+                            backend.rollingWhPerKmEstimation = msg::getValueFromSplit(packet, index);
 
                             backend.clockSecondsSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot) % 60;
                             backend.clockMinutesSinceBoot = (uint64_t)(backend.totalSecondsSinceBoot / 60.0) % 60;
@@ -322,47 +348,48 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::GET_FW:
-                            backend.fw_name = getValueFromPacket_string(packet, &index);
-                            backend.fw_version = getValueFromPacket_string(packet, &index);
-                            backend.fw_compile_date_time = getValueFromPacket_string(packet, &index);
+                            backend.fw_name = msg::getValueFromSplit_string(packet, index);
+                            backend.fw_version = msg::getValueFromSplit_string(packet, index);
+                            backend.fw_compile_date_time = msg::getValueFromSplit_string(packet, index);
                             break;
 
                         case COMMAND_ID::GET_VESC_MCCONF:
-                            mcconf_vesc.l_current_min_scale = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_current_max_scale = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_min_erpm = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_max_erpm = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_min_duty = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_max_duty = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_watt_min = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_watt_max = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_in_current_min = getValueFromPacket(packet, &index);
-                            mcconf_vesc.l_in_current_max = getValueFromPacket(packet, &index);
-                            mcconf_vesc.name = getValueFromPacket_string(packet, &index);
+                            mcconf_vesc.l_current_min_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_current_max_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_min_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_max_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_min_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_max_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_watt_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_watt_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_in_current_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.l_in_current_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.name = msg::getValueFromSplit_string(packet, index);
                             break;
 
                         case COMMAND_ID::GET_ANALOG_READINGS:
-                            analogReadings.analog0 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog1 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog2 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog3 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog4 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog5 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog6 = getValueFromPacket_double(packet, &index);
-                            analogReadings.analog7 = getValueFromPacket_double(packet, &index);
+                            analogReadings.analog0 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog1 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog2 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog3 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog4 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog5 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog6 = msg::getValueFromSplit(packet, index);
+                            analogReadings.analog7 = msg::getValueFromSplit(packet, index);
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
-                            backend.log.append(std::format("[{}] {}\n", currentTimeAndDate, getValueFromPacket_string(packet, &index)));
+                            backend.log.append(std::format("[{}] {}\n", currentTimeAndDate, msg::getValueFromSplit_string(packet, index)));
                             break;
 
                         case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
-                            availablePowerProfiles = getValueFromPacket_string(packet, &index);
+                            backend.availablePowerProfiles = msg::getValueFromSplit_string(packet, index);
 
                             break;
 
-                        default:
-                            // std::cout << "Received: " << line << "\n";
+                        case COMMAND_ID::GET_NOTES:
+                            backend.notes = msg::getValueFromSplit_string(packet, index);
+
                             break;
                     }
                 }
@@ -371,10 +398,70 @@ void processRead(std::string line) {
         }
 }
 
+void setupTOML(toml::table &tbl, const char* filepath) {
+    tbl = toml::parse_file(filepath);
+
+    // values
+    settings.TARGET_FPS                      = tbl["settings"]["framerate"].value_or<float>(60);
+    settings.LIMIT_FRAMERATE                 = tbl["settings"]["limit_framerate"].value_or<int8_t>(0);
+    settings.ipcWriteWaitMs                  = tbl["settings"]["ipcWriteWaitMs"].value_or<float>(50);
+    settings.showMotorRPM                    = tbl["settings"]["showMotorRPM"].value_or<int8_t>(1);
+    settings.showAcceleration                = tbl["settings"]["showAcceleration"].value_or<int8_t>(1);
+    settings.showTripA                       = tbl["settings"]["showTripA"].value_or<int8_t>(1);
+    settings.showMotorDutyInsteadOfMotorTemp = tbl["settings"]["showMotorDutyInsteadOfMotorTemp"].value_or<int8_t>(0);
+    settings.useTripStatsForDisplayingRangeAndWhPerKm = tbl["settings"]["useTripStatsForDisplayingRangeAndWhPerKm"].value_or<int8_t>(1);
+    settings.launchFullscreen                = tbl["settings"]["launchFullscreen"].value_or<int8_t>(0);
+    settings.limitFramerateOnSwitchOff       = tbl["settings"]["limitFramerateOnSwitchOff"].value_or<int8_t>(1);
+    settings.useOnDemandRendering            = tbl["settings"]["useOnDemandRendering"].value_or<int8_t>(1);
+}
+
+void TOMLSave(toml::table &tbl, const char* filepath) {
+    updateTableValue(tbl, "settings", "framerate", settings.TARGET_FPS);
+    updateTableValue(tbl, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
+    updateTableValue(tbl, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
+    updateTableValue(tbl, "settings", "showMotorRPM", settings.showMotorRPM);
+    updateTableValue(tbl, "settings", "showAcceleration", settings.showAcceleration);
+    updateTableValue(tbl, "settings", "showTripA", settings.showTripA);
+    updateTableValue(tbl, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+    updateTableValue(tbl, "settings", "useTripStatsForDisplayingRangeAndWhPerKm", settings.useTripStatsForDisplayingRangeAndWhPerKm);
+    updateTableValue(tbl, "settings", "launchFullscreen", settings.launchFullscreen);
+    updateTableValue(tbl, "settings", "limitFramerateOnSwitchOff", settings.limitFramerateOnSwitchOff);
+    updateTableValue(tbl, "settings", "useOnDemandRendering", settings.useOnDemandRendering);
+    saveTableToFile(tbl, filepath);
+}
+
+// Compute a hash of draw data to detect visual changes (skip GPU render when unchanged)
+static uint64_t ComputeDrawDataHash(ImDrawData* draw_data, const ImVec2& display_size, const ImVec4& clear_color)
+{
+    uint64_t h = 0xcbf29ce484222325ULL; // FNV-1a offset basis
+#define HASH_BYTES(ptr, len) do { \
+    const unsigned char* _p = (const unsigned char*)(ptr); \
+    for (size_t i = 0; i < (len); i++) { h ^= _p[i]; h *= 0x100000001b3ULL; } \
+} while(0)
+
+    HASH_BYTES(&display_size, sizeof(display_size));
+    HASH_BYTES(&clear_color, sizeof(clear_color));
+    if (draw_data && draw_data->Valid)
+    {
+        for (int n = 0; n < draw_data->CmdListsCount; n++)
+        {
+            const ImDrawList* cmd_list = draw_data->CmdLists[n];
+            if (cmd_list->VtxBuffer.Size > 0)
+                HASH_BYTES(cmd_list->VtxBuffer.Data, (size_t)cmd_list->VtxBuffer.Size * sizeof(ImDrawVert));
+            if (cmd_list->IdxBuffer.Size > 0)
+                HASH_BYTES(cmd_list->IdxBuffer.Data, (size_t)cmd_list->IdxBuffer.Size * sizeof(ImDrawIdx));
+        }
+    }
+#undef HASH_BYTES
+    return h;
+}
+uint64_t prev_draw_hash = 0;
+
 // Main code
 int main(int argc, char** argv)
 {
     setenv("SDL_VIDEODRIVER", "wayland", 1);
+    setenv("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0", 1);
 
     // ##########################
     // ##### Hostname stuff #####
@@ -404,29 +491,26 @@ int main(int argc, char** argv)
 
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.05f;
+    movingAverages.motorDCurrent.smoothingFactor = 0.4f;
+    movingAverages.motorQCurrent.smoothingFactor = 0.4f;
 
     // ########################
     // ######### TOML #########
     // ########################
 
     // TODO: if settings.toml doesnt exist, create it
-    toml::table tbl;
-    tbl = toml::parse_file(SETTINGS_FILEPATH);
+    toml::table table;
+    setupTOML(table, SETTINGS_FILEPATH);
 
-    // values
-    settings.TARGET_FPS         = tbl["settings"]["framerate"].value_or(60);
-    settings.LIMIT_FRAMERATE    = tbl["settings"]["limit_framerate"].value_or(0);
-    settings.ipcWriteWaitMs     = tbl["settings"]["ipcWriteWaitMs"].value_or(50);
-    settings.showMotorRPM       = tbl["settings"]["showMotorRPM"].value_or(1);
-    settings.showAcceleration   = tbl["settings"]["showAcceleration"].value_or(1);
-    settings.showTripA          = tbl["settings"]["showTripA"].value_or(1);
-    settings.showMotorDutyInsteadOfMotorTemp = tbl["settings"]["showMotorDutyInsteadOfMotorTemp"].value_or(0);
-    settings.launchFullscreen   = tbl["settings"]["launchFullscreen"].value_or(0);
+    arcBar.WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
+    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Phase");
+    arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
+    arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
+    arcBar.motorDCurrent.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "PhD");
+    arcBar.motorQCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "PhQ");
 
-    ArcBar_WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, "Wh/km");
-    ArcBar_phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, "Phase");
-    ArcBar_motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, "Temp");
-    ArcBar_motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, "Duty");
+    // arcBar.motorDCurrent.setTextScaling(0.6);
+    // arcBar.motorQCurrent.setTextScaling(0.6);
 
     // ################
     // ##### IPC ######
@@ -461,16 +545,16 @@ int main(int argc, char** argv)
         while(!done) {
             cpuUsage.ipcThread.measureStart(1);
 
-            to_send = "";
+            toSend = "";
             static bool sendOnce = false;
 
             if (!successfulCommunication) {
                 sendOnce = false;
 
-                commAddValue(&to_send, COMMAND_ID::ARE_YOU_ALIVE, 0);
-                to_send.append("\n");
+                msg::start(toSend, COMMAND_ID::ARE_YOU_ALIVE);
+                msg::end(toSend);
 
-                IPC.write(to_send.data(), to_send.size());
+                IPC.write(toSend.data(), toSend.size());
 
                 // hol'up
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -483,37 +567,43 @@ int main(int argc, char** argv)
                 if (timer.ping.getTime_ms() >= 750.0) {
                     timer.ping.start();
 
-
-                    commAddValue(&to_send, COMMAND_ID::PING, 0);
-                    to_send.append("\n");
+                    msg::start(toSend, COMMAND_ID::PING);
+                    msg::end(toSend);
 
                     if (sendOnce == false) {
                         sendOnce = true;
 
-                        commAddValue(&to_send, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES, 0);
-                        to_send.append("\n");
+                        msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
+                        msg::end(toSend);
 
-                        commAddValue(&to_send, COMMAND_ID::GET_VESC_MCCONF, 0);
-                        to_send.append("\n");
+                        msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
+                        msg::end(toSend);
 
-                        commAddValue(&to_send, COMMAND_ID::GET_FW, 0);
-                        to_send.append("\n");
+                        msg::start(toSend, COMMAND_ID::GET_FW);
+                        msg::end(toSend);
+
+                        msg::start(toSend, COMMAND_ID::GET_NOTES);
+                        msg::end(toSend);
                     }
                 }
 
-                commAddValue(&to_send, COMMAND_ID::GET_BATTERY, 0);
-                to_send.append("\n");
-                commAddValue(&to_send, COMMAND_ID::GET_STATS, 0);
-                to_send.append("\n");
-                commAddValue(&to_send, COMMAND_ID::GET_ANALOG_READINGS, 0);
-                to_send.append("\n");
+                msg::start(toSend, COMMAND_ID::GET_BATTERY);
+                msg::end(toSend);
 
-                to_send.append(to_send_extra);
-                to_send_extra = "";
+                msg::start(toSend, COMMAND_ID::GET_STATS);
+                msg::end(toSend);
 
-                IPC.write(to_send.data(), to_send.size());
+                msg::start(toSend, COMMAND_ID::GET_ANALOG_READINGS);
+                msg::end(toSend);
+
+                msg::mtx.lock();
+                    toSend.append(toSendExtra);
+                    toSendExtra = "";
+                msg::mtx.unlock();
+
+                IPC.write(toSend.data(), toSend.size());
                 if (backend.power_on) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(settings.ipcWriteWaitMs));
+                    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(settings.ipcWriteWaitMs));
                 } else {
                     std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 }
@@ -536,7 +626,7 @@ int main(int argc, char** argv)
     // ###########################
 
     // [If using SDL_MAIN_USE_CALLBACKS: all code below until the main loop starts would likely be your SDL_AppInit() function]
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    if (!SDL_Init(SDL_INIT_VIDEO))
     {
         printf("Error: SDL_Init(): %s\n", SDL_GetError());
         return -1;
@@ -580,7 +670,6 @@ int main(int argc, char** argv)
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
     float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
     SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    // SDL_Window* window = SDL_CreateWindow("E-BIKE GUI", (int)(1257 * main_scale), (int)(583 * main_scale), window_flags);
     SDL_Window* window = SDL_CreateWindow(titleBarName.c_str(), (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
     if (window == nullptr)
     {
@@ -604,6 +693,8 @@ int main(int argc, char** argv)
     SDL_GL_SetSwapInterval(1); // Enable vsync
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
+
+    wayland_utils::init(window);
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -642,6 +733,7 @@ int main(int argc, char** argv)
     while (!done) {
         cpuUsage.ImGui.measureStart(1);
         cpuUsage.Everything.measureStart(0);
+        uint64_t frameStart = SDL_GetTicksNS();
 
         static bool power_on_old = false;
         if (backend.power_on && power_on_old != backend.power_on) {
@@ -711,6 +803,23 @@ int main(int argc, char** argv)
         }
 
         {
+            // Drag handle: center title (time/date) — drag to move window via xdg-shell (Wayland)
+            const float dragHandleWidth = 450.f;
+            const float dragHandleHeight = 24.f;
+            ImVec2 timePos((io.DisplaySize.x - dragHandleWidth) * 0.5f, 7.0f);
+            ImGui::SetCursorPos(timePos);
+            ImGui::InvisibleButton("##window_drag_handle", ImVec2(dragHandleWidth, dragHandleHeight));
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Drag to move window");
+            static bool drag_was_active = false;
+            if (ImGui::IsItemActive()) {
+                if (!drag_was_active)
+                    wayland_utils::drag_window(window);
+                drag_was_active = true;
+            } else {
+                drag_was_active = false;
+            }
+
             ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
             ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
             ImGui::Text("%s", currentTimeAndDate);
@@ -725,8 +834,10 @@ int main(int argc, char** argv)
             ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
             ImGui::TextColored(color, "%s", text);
 
-            if (ImGui::IsItemClicked())
-                to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_CHARGING_STATE)));
+            if (ImGui::IsItemClicked()) {
+                msg::start(toSendExtra, COMMAND_ID::TOGGLE_CHARGING_STATE);
+                msg::end(toSendExtra);
+            }
 
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("Click to toggle charging state\nCharging: %s", battery.charging ? "true" : "false");
@@ -738,21 +849,12 @@ int main(int argc, char** argv)
             ImGui::BeginGroup();
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
 
-                ImGui::Text("Power info");
                 movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
+                ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%6.2f V", battery.voltage);
+                ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%6.2f A", battery.current);
+                ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%6.1f W", battery.watts);
 
-                ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%7.2f V", battery.voltage);
-                ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%7.2f A", battery.current);
-                ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%7.2f W", battery.watts);
-
-                ImGui::Dummy(ImVec2(0.0, 40.0));
-                    ImGui::TextColored(backend.regenerativeBraking ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 0.0, 0.0, 0.35),"REGEN");
                 ImGui::PopFont();
-                if (ImGui::IsItemClicked())
-                    to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_REGEN_BRAKING)));
-
-                if (ImGui::IsItemHovered())
-                    ImGui::SetTooltip("Click to toggle regenerative braking\nRegen: %s", backend.regenerativeBraking ? "on" : "off");
 
             ImGui::EndGroup();
             //
@@ -761,12 +863,13 @@ int main(int argc, char** argv)
             // ImGui::SameLine();
             //
             ImGui::BeginGroup();
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+                // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+
                 // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
                 //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
-                //     to_send_extra.append(append);
+                //     toSendExtra.append(append);
                 // }
-                ImGui::PopFont();
+                // ImGui::PopFont();
 
             ImGui::EndGroup();
         ImGui::EndGroup(); // Ends here
@@ -781,23 +884,27 @@ int main(int argc, char** argv)
             }
             movingAverages.whOverKm.moveAverage((float)whkmnow);
 
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0 - 130.0));
-            ArcBar_WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
+            // Bottom Left
+            ImGui::SetCursorPos(ImVec2(30.0f, io.DisplaySize.y - 0.0f - 150.0 - 105.0));
+            arcBar.WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
 
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 130.0));
-            ArcBar_phaseCurrent.ProgressBarArc(backend.phase_current);
-
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
+            ImGui::SetCursorPos(ImVec2(30.0f, io.DisplaySize.y - 0.0f - 150.0));
             if (settings.showMotorDutyInsteadOfMotorTemp) {
-                ArcBar_motorDutyCycle.ProgressBarArc(backend.duty_cycle);
+                arcBar.motorDutyCycle.ProgressBarArc(backend.duty_cycle);
             } else {
-                ArcBar_motorTemp.ProgressBarArc(backend.temperature_motor);
+                arcBar.motorTemp.ProgressBarArc(backend.temperature_motor);
             }
-
             if (ImGui::IsItemClicked()) {
                 settings.showMotorDutyInsteadOfMotorTemp = !settings.showMotorDutyInsteadOfMotorTemp;
-                updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
             }
+
+            // Bottom right
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 105.0));
+            arcBar.motorDCurrent.ProgressBarArc(movingAverages.motorDCurrent.moveAverage(backend.phase_currentDAxis));
+
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
+            arcBar.motorQCurrent.ProgressBarArc(movingAverages.motorQCurrent.moveAverage(backend.phase_currentQAxis));
+
         ImGui::EndGroup();
 
 
@@ -813,37 +920,38 @@ int main(int argc, char** argv)
             ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
             ImGui::BeginGroup();
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                    if (settings.showTripA) {
-                        double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
-                        if (whkm != whkm) {
-                            whkm = 0.0;
-                        }
+                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                        if (settings.showTripA) {
+                            double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
+                            if (whkm != whkm) {
+                                whkm = 0.0;
+                            }
 
-                        ImGui::Text("Wh/km: %0.1f¹", whkm);
+                            ImGui::Text("Wh/km: %0.1f¹", whkm);
+                        } else {
+                            double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
+                            if (whkm != whkm) {
+                                whkm = 0.0;
+                            }
+
+                            ImGui::Text("Wh/km: %0.1f²", whkm);
+                        }
                     } else {
-                        double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
-                        if (whkm != whkm) {
-                            whkm = 0.0;
-                        }
-
-                        ImGui::Text("Wh/km: %0.1f²", whkm);
+                        ImGui::Text("Wh/km: %0.1f", backend.rollingWhPerKmEstimation);
                     }
 
+                    // TODO: this is terrible...
                     if (ImGui::IsItemClicked()) {
-                        settings.showTripA = !settings.showTripA;
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
+                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
+                            settings.showTripA = false;
+                        else if (!settings.showTripA) {
+                            settings.showTripA = true;
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
+                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
+                        }
                     }
                 ImGui::PopFont();
-
-                if (ImGui::IsItemHovered()) {
-                    if (settings.showTripA) {
-                        ImGui::SetTooltip("Trip A\n"
-                                            "Range left: %0.1f", backend.trip_A.range);
-                    } else {
-                        ImGui::SetTooltip("Trip B\n"
-                                            "Range left: %0.1f", backend.trip_B.range);
-                    }
-                }
 
                 {
                     char text[128];
@@ -865,21 +973,27 @@ int main(int argc, char** argv)
                 }
 
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                    ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
-
-                    if (settings.showAcceleration) {
-                        ImGui::Text("Accel: %0.1f", backend.acceleration);
-
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
-                            ImGui::SetTooltip("measured in km/h per second");
-                            ImGui::PopFont();
-                        }
+                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                    if (settings.showTripA) {
+                        ImGui::Text("Range: %0.1lf¹", backend.trip_A.range);
+                    } else {
+                        ImGui::Text("Range: %0.1lf²", backend.trip_B.range);
+                    }
+                    } else {
+                        ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
                     }
 
-                    if (settings.showMotorRPM)
-                        ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
-
+                    // TODO: this is terrible...
+                    if (ImGui::IsItemClicked()) {
+                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
+                            settings.showTripA = false;
+                        else if (!settings.showTripA) {
+                            settings.showTripA = true;
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
+                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
+                        }
+                    }
                 ImGui::PopFont();
 
                 if (ImGui::IsItemHovered()) {
@@ -887,6 +1001,22 @@ int main(int argc, char** argv)
                                         "estimation calculated from the\n"
                                         "last few kilometers travelled");
                 }
+
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
+                    if (settings.showMotorRPM)
+                        ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
+
+                    if (settings.showAcceleration) {
+                        ImGui::Text("Accel: %0.1f", backend.acceleration);
+
+                        if (ImGui::IsItemHovered()) {
+                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
+                            ImGui::SetTooltip("Measured in km/h per second");
+                            ImGui::PopFont();
+                        }
+                    }
+                ImGui::PopFont();
+
             ImGui::EndGroup();
         ImGui::EndGroup();
 
@@ -909,7 +1039,6 @@ int main(int argc, char** argv)
                     TextCenteredOnLine(text, 1.0f, false);
                     if (ImGui::IsItemClicked()) {
                         settings.showTripA = !settings.showTripA;
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
                     }
                 ImGui::PopFont();
 
@@ -922,9 +1051,11 @@ int main(int argc, char** argv)
                     ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
 
                     ImGui::SetNextItemWidth(230.0);
-                    if (ImGui::Combo("##v", &backend.currentPowerProfile, availablePowerProfiles.data())) {
+                    if (ImGui::Combo("##v", &backend.currentPowerProfile, backend.availablePowerProfiles.data())) {
                         setPowerProfile(backend.currentPowerProfile);
-                        to_send_extra.append(std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF)));
+
+                        msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
+                        msg::end(toSendExtra);
                     }
 
                     // ImGui::PopFont();
@@ -933,10 +1064,10 @@ int main(int argc, char** argv)
                 ImGui::EndGroup();
             }
 
-            gesture.start();
+        if (gesture.start()) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0);
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
-                if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
+            if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
 
             ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - 72.0);
             ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - 3.0);
@@ -956,6 +1087,8 @@ int main(int argc, char** argv)
                     ImGui::PopStyleColor();
                     ImGui::PopFont();
 
+                    ImGui::Text("App Version: %s", GUI_VERSION);
+
                     if(ImGui::Button("SHUTDOWN")) {
                         std::system("sudo /sbin/shutdown -h now");
                     }
@@ -968,9 +1101,7 @@ int main(int argc, char** argv)
                         done = 1;
                     }
 
-                    if(ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
-                    }
+                    ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE);
 
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(100);
@@ -978,29 +1109,20 @@ int main(int argc, char** argv)
                     static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
                     if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
                         settings.TARGET_FPS = std::stof(items[item_current]);
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "framerate", settings.TARGET_FPS);
                     }
 
-                    if (ImGui::Checkbox("Show acceleration", &settings.showAcceleration)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showAcceleration", settings.showAcceleration);
-                    }
+                    ImGui::Checkbox("Show acceleration", &settings.showAcceleration);
+                    ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM);
+                    ImGui::Checkbox("Show trip A", &settings.showTripA);
+                    ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp);
+                    ImGui::Checkbox("Use Trip stats for displaying Range and Wh Per Km", &settings.useTripStatsForDisplayingRangeAndWhPerKm);
+                    ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen);
+                    ImGui::Checkbox("Limit framerate on switch off", &settings.limitFramerateOnSwitchOff);
+                    ImGui::Checkbox("Enable On-Demand Rendering (saves processing power)", &settings.useOnDemandRendering);
 
-                    if (ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorRPM", settings.showMotorRPM);
+                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        TOMLSave(table, SETTINGS_FILEPATH);
                     }
-
-                    if (ImGui::Checkbox("Show trip A", &settings.showTripA)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showTripA", settings.showTripA);
-                    }
-
-                    if (ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
-                    }
-
-                    if (ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "launchFullscreen", settings.launchFullscreen);
-                    }
-
 
                     ImGui::Dummy(ImVec2(0, 20));
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -1012,6 +1134,8 @@ int main(int argc, char** argv)
                     ImGui::Text("Status: %s", successfulCommunication ? "connected" : "disconnected");
                     ImGui::Text("Requests per second: %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedWrite.count()), msElapsedWrite.count());
                     ImGui::Text("Reads per second:    %03.1f Hz (%03.1f ms)", (1000.0 / msElapsedRead.count()), msElapsedRead.count());
+                    ImGui::Text("Bytes Sent:     %lu (%f MB)", IPC.amountOfDataSent, IPC.amountOfDataSent / 1000000.0);
+                    ImGui::Text("Bytes Received: %lu (%f MB)", IPC.amountOfDataReceived, IPC.amountOfDataReceived / 1000000.0);
                     // if (ImGui::Button("Reconnect")) {
                     //     IPC.begin();
                     // }
@@ -1019,9 +1143,7 @@ int main(int argc, char** argv)
                     ImGui::Text("Write wait time ");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(150.0f);
-                    if (ImGui::InputInt("ms", &settings.ipcWriteWaitMs, 1, 100)) {
-                        updateTableValue(SETTINGS_FILEPATH, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
-                    }
+                    ImGui::InputFloat("ms", &settings.ipcWriteWaitMs, 0.2, 100, "%.1f");
 
                     ImGui::Dummy(ImVec2(0, 20));
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -1063,9 +1185,16 @@ int main(int argc, char** argv)
                     ImGui::PopStyleColor();
                     ImGui::PopFont();
 
-                    if (ImGui::Checkbox("Minimize drivetrain backlash", &backend.minimizeDrivetrainBacklash)) {
-                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH), (int)backend.minimizeDrivetrainBacklash);
-                        to_send_extra.append(append);
+                    if (ImGui::Checkbox("Minimize Drivetrain Backlash", &backend.minimizeDrivetrainBacklash)) {
+                        msg::start(toSendExtra, COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH);
+                        msg::addValue(toSendExtra, backend.minimizeDrivetrainBacklash);
+                        msg::end(toSendExtra);
+                    }
+
+                    if (ImGui::Checkbox("Automatic Regenerative Braking", &backend.automaticRegenerativeBraking)) {
+                        msg::start(toSendExtra, COMMAND_ID::SET_AUTOMATIC_REGEN_BRAKING);
+                        msg::addValue(toSendExtra, backend.automaticRegenerativeBraking);
+                        msg::end(toSendExtra);
                     }
 
                     ImGui::Text("Powered on: %s", backend.power_on ? "True" : "False");
@@ -1085,16 +1214,14 @@ int main(int argc, char** argv)
                     ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
 
                     ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("main while loop: %0.0f us / %0.0f Hz", backend.timeCore0_us, 1000000 / backend.timeCore0_us);
-                    // ImGui::Text("Core 1 loop exec time: %0.0f us", backend.timeCore1_us);
-
-                    float buttonWidth = 170.0;
-                    float buttonHeight = 80.0;
+                    ImGui::Text("Main Loop Rate:                  %0.1f ms / %0.1f Hz", backend.loopTimeMain_ms, 1000.0 / backend.loopTimeMain_ms);
+                    ImGui::Text("Throttle Loop Rate:              %0.1f ms / %0.1f Hz", backend.loopTimeThrottle_ms, 1000.0 / backend.loopTimeThrottle_ms);
+                    ImGui::Text("Vesc Value Processing Loop Rate: %0.1f ms / %0.1f Hz", backend.loopTimeVescValueProcessing_ms, 1000.0 / backend.loopTimeVescValueProcessing_ms);
 
                     ImGui::Dummy(ImVec2(0, 20));
                     if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::SAVE_PREFERENCES));
-                        to_send_extra.append(append);
+                        msg::start(toSendExtra, COMMAND_ID::SAVE_PREFERENCES);
+                        msg::end(toSendExtra);
                     }
 
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -1121,8 +1248,8 @@ int main(int argc, char** argv)
 
                     ImGui::SameLine();
                     if (ImGui::Button("Reset##1", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_A));
-                        to_send_extra.append(append);
+                        msg::start(toSendExtra, COMMAND_ID::RESET_TRIP_A);
+                        msg::end(toSendExtra);
                     }
 
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
@@ -1142,14 +1269,9 @@ int main(int argc, char** argv)
                                 );
                     ImGui::SameLine();
                     if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_TRIP_B));
-                        to_send_extra.append(append);
+                        msg::start(toSendExtra, COMMAND_ID::RESET_TRIP_B);
+                        msg::end(toSendExtra);
                     }
-
-                    // if (ImGui::Button("Reset##3", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                    //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::RESET_ESTIMATED_RANGE));
-                    //     to_send_extra.append(append);
-                    // }
 
                     ImGui::Dummy(ImVec2(0, 20));
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
@@ -1165,8 +1287,9 @@ int main(int argc, char** argv)
                     ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
                     ImGui::SameLine();
                     if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_ODOMETER), newOdometerValue);
-                        to_send_extra.append(append);
+                        msg::start(toSendExtra, COMMAND_ID::SET_ODOMETER);
+                        msg::addString(toSendExtra, "{}", newOdometerValue);
+                        msg::end(toSendExtra);
                     }
 
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
@@ -1177,43 +1300,44 @@ int main(int argc, char** argv)
 
 
                     ImGui::Text("Charging: %s", battery.charging ? "true": "false");
-                    // TODO: amphours when new is hardcoded
                     ImGui::Text("State of Charge: %0.1f%%", battery.percentage);
-                    ImGui::Text("Battery Health: %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
-                    ImGui::Text("Wh Capacity (When fully discharged): %0.1f Wh", (battery.watthoursFullyDischarged));
-                    ImGui::Text("Wh Used: %0.5f Wh", battery.wattHoursUsed);
+                    ImGui::Text("Battery Health:  %0.1f%%", (battery.ampHoursFullyCharged / battery.ampHoursFullyChargedWhenNew) * 100.0);
+                    ImGui::Text("Wh Capacity:     %0.1f Wh", (battery.watthoursFullyDischarged));
+                    ImGui::Text("Wh Used:         %0.1f Wh", battery.wattHoursUsed);
                     ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::Text("Amphours when new: %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
-                    ImGui::Text("Amphours Rated: %0.2f Ah", battery.ampHoursFullyCharged);
-                    ImGui::Text("Amphours Used: %0.2f Ah", battery.ampHoursUsed);
+                    ImGui::Text("Amphours Rated (New):     %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
+                    ImGui::Text("Amphours Rated (Now):     %0.2f Ah", battery.ampHoursFullyCharged);
+                    ImGui::Text("Amphours Used:            %0.2f Ah", battery.ampHoursUsed);
                     // Amphours used lifetime since 22.09.2025
                     ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
 
                     ImGui::Dummy(ImVec2(0,40));
 
                     static char newAmphoursUsedLifetimeValue[30];
-                    ImGui::Text("Set Amphours Used (Lifetime) value = ");
+                    ImGui::Text("Set Amphours Used (Lifetime) = ");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(100.0);
                     ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
                     if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                         if (strlen(newAmphoursUsedLifetimeValue) > 0) {
-                            std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_USED_LIFETIME), newAmphoursUsedLifetimeValue);
-                            to_send_extra.append(append);
+                            msg::start(toSendExtra, COMMAND_ID::SET_AMPHOURS_USED_LIFETIME);
+                            msg::addString(toSendExtra, "{}", newAmphoursUsedLifetimeValue);
+                            msg::end(toSendExtra);
                         }
                     }
 
                     static char newAmphoursChargedValue[30];
-                    ImGui::Text("Set Amphours when charged = ");
+                    ImGui::Text("Set Amphours Rated (Now) = ");
                     ImGui::SameLine();
                     ImGui::SetNextItemWidth(100.0);
                     ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
                     if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                         if (strlen(newAmphoursChargedValue) > 0) {
-                            std::string append = std::format("{};{};\n", static_cast<int>(COMMAND_ID::SET_AMPHOURS_CHARGED), newAmphoursChargedValue);
-                            to_send_extra.append(append);
+                            msg::start(toSendExtra, COMMAND_ID::SET_AMPHOURS_CHARGED);
+                            msg::addString(toSendExtra, "{}", newAmphoursChargedValue);
+                            msg::end(toSendExtra);
                         }
                     }
 
@@ -1241,8 +1365,8 @@ int main(int argc, char** argv)
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
 
                         if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                            std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::GET_VESC_MCCONF));
-                            to_send_extra.append(append);
+                            msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
+                            msg::end(toSendExtra);
                         }
                         ImGui::SameLine();
                         if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1260,14 +1384,14 @@ int main(int argc, char** argv)
                     ImGui::BeginGroup();
                     {
                         float ItemWidth = 150.0;
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.15lf", analogReadings.analog0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.15lf", analogReadings.analog1);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.15lf", analogReadings.analog2);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.15lf", analogReadings.analog3);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.15lf", analogReadings.analog4);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.15lf", analogReadings.analog5);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.15lf", analogReadings.analog6);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.15lf", analogReadings.analog7);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.6lf", analogReadings.analog0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.6lf", analogReadings.analog1);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.6lf", analogReadings.analog2);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.6lf", analogReadings.analog3);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.6lf", analogReadings.analog4);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.6lf", analogReadings.analog5);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.6lf", analogReadings.analog6);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.6lf", analogReadings.analog7);
                     }
                     ImGui::EndGroup();
 
@@ -1277,25 +1401,51 @@ int main(int argc, char** argv)
 
                 if (ImGui::BeginTabItem("E-BIKE Log"))
                 {
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
                     std::string log_tmp = backend.log;
 
                     ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::PopFont();
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("Notes"))
+                {
+                    if (ImGui::Button("Get Note")) {
+                        msg::start(toSendExtra, COMMAND_ID::GET_NOTES);
+                        msg::end(toSendExtra);
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button("Save Note")) {
+                        msg::start(toSendExtra, COMMAND_ID::SET_NOTES);
+                        msg::addString(toSendExtra, "{}", backend.notes);
+                        msg::end(toSendExtra);
+                    }
+
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
+                    ImGui::InputTextMultiline("##", &backend.notes, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_None);
+                    ImGui::PopFont();
                     ImGui::EndTabItem();
                 }
 
                 ImGui::EndTabBar();
             }
-
         }
+
+        gesture.beforeEnd();
+
         ImGui::End();
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
+        }
         gesture.end();
 
         if (IPC.isConnected == false) {
             bool open = true;
 
             ImGui::OpenPopup("IPC Failed");
+            ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f,0.5f));
+            ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.85f, io.DisplaySize.y * 0.5f));
             if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
                 ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
 
@@ -1316,41 +1466,75 @@ int main(int argc, char** argv)
         // Rendering
         timer.render.start();
         ImGui::Render();
-        glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-        glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        ImDrawData* draw_data = ImGui::GetDrawData();
+        uint64_t draw_hash = 0;
+        if (settings.useOnDemandRendering)
+            draw_hash = ComputeDrawDataHash(draw_data, io.DisplaySize, clear_color);
+        bool content_changed = (draw_hash != prev_draw_hash);
 
-        // Update and Render additional Platform Windows
-        // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
-        //  For this specific demo app we could also call SDL_GL_MakeCurrent(window, gl_context) directly)
-        if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        {
-            SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
-            SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
-            ImGui::UpdatePlatformWindows();
-            ImGui::RenderPlatformWindowsDefault();
-            SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
+        if (content_changed || !settings.useOnDemandRendering) {
+            prev_draw_hash = draw_hash;
+            glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+            glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+            glClear(GL_COLOR_BUFFER_BIT);
+            ImGui_ImplOpenGL3_RenderDrawData(draw_data);
+            // Update and Render additional Platform Windows
+            // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
+            //  For this specific demo app we could also call SDL_GL_MakeCurrent(window, gl_context) directly)
+            if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+            {
+                SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
+                SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
+                ImGui::UpdatePlatformWindows();
+                ImGui::RenderPlatformWindowsDefault();
+                SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
+            }
+            SDL_GL_SwapWindow(window);
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
         }
 
-        SDL_GL_SwapWindow(window);
+        // // Rendering
+        // timer.render.start();
+        // ImGui::Render();
+        // glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+        // glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+        // glClear(GL_COLOR_BUFFER_BIT);
+        // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+
+        // // Update and Render additional Platform Windows
+        // // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
+        // //  For this specific demo app we could also call SDL_GL_MakeCurrent(window, gl_context) directly)
+        // if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+        // {
+        //     SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
+        //     SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
+        //     ImGui::UpdatePlatformWindows();
+        //     ImGui::RenderPlatformWindowsDefault();
+        //     SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
+        // }
+
+        // SDL_GL_SwapWindow(window);
 
         timer.render.end();
 
-        // limit framerate
-        static double lasttime = (float)(SDL_GetTicks() / 1000.0f);;
-        if (settings.LIMIT_FRAMERATE && backend.power_on) {
-            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0/settings.TARGET_FPS) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            lasttime += 1.0/settings.TARGET_FPS;
-        }
+        if (settings.LIMIT_FRAMERATE || settings.limitFramerateOnSwitchOff) {
+            bool isBikePoweredOff = (!backend.power_on && IPC.isConnected) ? true : false;
 
-        if (!backend.power_on && IPC.isConnected) {
-            while ((float)(SDL_GetTicks() / 1000.0f) < lasttime + 1.0 / 3.0/* target fps*/) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            double targetFrameTime;
+            if (settings.limitFramerateOnSwitchOff && isBikePoweredOff) {
+                targetFrameTime = 1e9 / 3.0;
+            } else {
+                targetFrameTime = 1e9 / settings.TARGET_FPS;
             }
-            lasttime += 1.0 / 3.0/* target fps*/;
+
+            if (settings.LIMIT_FRAMERATE || isBikePoweredOff) {
+                uint64_t frameTime = SDL_GetTicksNS() - frameStart;
+                if (frameTime < targetFrameTime)
+                {
+                    SDL_DelayNS(targetFrameTime - frameTime);
+                }
+            }
         }
 
         cpuUsage.ImGui.measureEnd(1);
@@ -1361,6 +1545,7 @@ int main(int argc, char** argv)
     done = true;
     IPC.stop();
     commThread.join();
+    TOMLSave(table, SETTINGS_FILEPATH);
 
     // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppQuit() function]
     ImGui_ImplOpenGL3_Shutdown();

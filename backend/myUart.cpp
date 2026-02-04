@@ -1,4 +1,10 @@
 #include "myUart.hpp"
+#include <stdio.h>
+#include <string.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <fcntl.h>
 
 int MyUart::begin(speed_t BAUDRATE) {
     struct termios options;
