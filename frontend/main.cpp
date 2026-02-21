@@ -34,7 +34,7 @@
 #include "messagingUtils.hpp"
 #include "waylandUtils.hpp"
 
-#define GUI_VERSION "0.2.0"
+#define GUI_VERSION "0.2.1"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -230,22 +230,18 @@ void setBrightnessHigh() {
 }
 
 void setMcconfCustomValues(VESC_MCCONF mcconf) {
-    std::string append = std::format("{};{};{};{};{};{};{};{};{};{};"
-                                        ,mcconf.l_current_min_scale
-                                        ,mcconf.l_current_max_scale
-                                        ,mcconf.l_min_erpm
-                                        ,mcconf.l_max_erpm
-                                        ,mcconf.l_min_duty
-                                        ,mcconf.l_max_duty
-                                        ,mcconf.l_watt_min
-                                        ,mcconf.l_watt_max
-                                        ,mcconf.l_in_current_min
-                                        ,mcconf.l_in_current_max
-                                        ,mcconf.c_current_phase_max
-    );
-
     msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE_CUSTOM);
-    msg::addString(toSendExtra, "{}", append);
+    msg::addValue(toSendExtra, mcconf.l_current_min_scale, 7);
+    msg::addValue(toSendExtra, mcconf.l_current_max_scale, 7);
+    msg::addValue(toSendExtra, mcconf.l_min_erpm, 7);
+    msg::addValue(toSendExtra, mcconf.l_max_erpm, 7);
+    msg::addValue(toSendExtra, mcconf.l_min_duty, 7);
+    msg::addValue(toSendExtra, mcconf.l_max_duty, 7);
+    msg::addValue(toSendExtra, mcconf.l_watt_min, 7);
+    msg::addValue(toSendExtra, mcconf.l_watt_max, 7);
+    msg::addValue(toSendExtra, mcconf.l_in_current_min, 7);
+    msg::addValue(toSendExtra, mcconf.l_in_current_max, 7);
+    msg::addValue(toSendExtra, mcconf.c_current_phase_max, 7);
     msg::end(toSendExtra);
 }
 
@@ -1422,20 +1418,20 @@ int main(int argc, char** argv)
                     ImGui::Text(" ");
 
                     ImGui::BeginGroup();
-                        float ItemWidth = 150.0;
+                        float ItemWidth = 180.0;
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf_vesc.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf_vesc.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf_vesc.c_current_phase_max);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf_vesc.c_current_phase_max, 1.0);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
 
                         if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {

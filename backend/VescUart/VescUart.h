@@ -14,24 +14,6 @@
 
 class VescUart
 {
-  struct dataCurrentMCCONFTemp {
-        float l_current_min_scale;
-        float l_current_max_scale;
-        float l_min_erpm;
-        float l_max_erpm;
-        float l_min_duty;
-        float l_max_duty;
-        float l_watt_min;
-        float l_watt_max;
-        float l_in_current_min;
-        float l_in_current_max;
-        std::string name = "Default"; // its being set by us, not by the VESC
-        float c_phase_current_max; // its being set by us, not by the VESC
-        // int motor_poles;
-        // float gear_ratio;
-        // float wheel_diameter;
-  };
-
 	/** Struct to hold the nunchuck values to send over UART */
 	struct nunchuckPackage {
 		int	valueX;
@@ -49,6 +31,24 @@ class VescUart
 	const uint32_t _TIMEOUT;
 
 	public:
+    struct mcconf_t {
+      float l_current_min_scale;
+      float l_current_max_scale;
+      float l_min_erpm;
+      float l_max_erpm;
+      float l_min_duty;
+      float l_max_duty;
+      float l_watt_min;
+      float l_watt_max;
+      float l_in_current_min;
+      float l_in_current_max;
+      std::string name = "Default"; // its being set by us, not by the VESC
+      float c_phase_current_max; // its being set by us, not by the VESC
+      // int motor_poles;
+      // float gear_ratio;
+      // float wheel_diameter;
+    };
+
     /** Struct to store the telemetry data returned by the VESC */
     struct dataPackage {
           float avgMotorCurrent;
@@ -79,7 +79,7 @@ class VescUart
 		/** Variabel to hold measurements returned from VESC */
 		dataPackage data; 
 
-    dataCurrentMCCONFTemp data_mcconf;
+    mcconf_t data_mcconf;
 
 		/** Variabel to hold nunchuck values */
 		nunchuckPackage nunchuck; 

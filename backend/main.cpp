@@ -40,7 +40,7 @@
 #include "rampLimiter.hpp"
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.2.0"
+#define EBIKE_VERSION "0.2.1"
 
 // MCP23017
 #define MCP23017_ADDRESS 0x20
@@ -786,21 +786,50 @@ void IPCReadFunction() {
                             msg::end(toSend);
                             break;
 
-                        case COMMAND_ID::GET_VESC_MCCONF:
+                        case COMMAND_ID::GET_VESC_MCCONF: {
+                            VescUart::mcconf_t _mcconf;
+                            int VESC1Success = false;
+                            int VESC2Success = false;
+
                             if (VESC.getMcconfTempValues()) {
+                                _mcconf = VESC.data_mcconf;
+
+                                VESC1Success = true;
+                            }
+
+                            if (settings.enableDualVESC) {
+                                if (VESC.getMcconfTempValues(settings.secondVESCID)) {
+                                    _mcconf.l_current_min_scale = (_mcconf.l_current_min_scale + VESC.data_mcconf.l_current_min_scale) / 2.0;
+                                    _mcconf.l_current_max_scale = (_mcconf.l_current_max_scale + VESC.data_mcconf.l_current_max_scale) / 2.0;
+                                    _mcconf.l_min_erpm = (_mcconf.l_min_erpm + VESC.data_mcconf.l_min_erpm) / 2.0;
+                                    _mcconf.l_max_erpm = (_mcconf.l_max_erpm + VESC.data_mcconf.l_max_erpm) / 2.0;
+                                    _mcconf.l_min_duty = (_mcconf.l_min_duty + VESC.data_mcconf.l_min_duty) / 2.0;
+                                    _mcconf.l_max_duty = (_mcconf.l_max_duty + VESC.data_mcconf.l_max_duty) / 2.0;
+                                    _mcconf.l_watt_min += VESC.data_mcconf.l_watt_min;
+                                    _mcconf.l_watt_max += VESC.data_mcconf.l_watt_max;
+                                    _mcconf.l_in_current_min += VESC.data_mcconf.l_in_current_min;
+                                    _mcconf.l_in_current_max += VESC.data_mcconf.l_in_current_max;
+                                    //
+                                    _mcconf.c_phase_current_max += VESC.data_mcconf.c_phase_current_max;
+
+                                    VESC2Success = true;
+                                }
+                            }
+
+                            if ((VESC1Success && !settings.enableDualVESC)|| (VESC1Success && VESC2Success && settings.enableDualVESC)) {
                                 msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
-                                msg::addValue(toSend, VESC.data_mcconf.l_current_min_scale, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_current_max_scale, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_min_erpm, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_max_erpm, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_min_duty, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_max_duty, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_watt_min, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_watt_max, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_in_current_min, 4);
-                                msg::addValue(toSend, VESC.data_mcconf.l_in_current_max, 4);
-                                msg::addString(toSend, "{}", VESC.data_mcconf.name);
-                                msg::addValue(toSend, VESC.data_mcconf.c_phase_current_max, 4);
+                                msg::addValue(toSend, _mcconf.l_current_min_scale, 7);
+                                msg::addValue(toSend, _mcconf.l_current_max_scale, 7);
+                                msg::addValue(toSend, _mcconf.l_min_erpm, 7);
+                                msg::addValue(toSend, _mcconf.l_max_erpm, 7);
+                                msg::addValue(toSend, _mcconf.l_min_duty, 7);
+                                msg::addValue(toSend, _mcconf.l_max_duty, 7);
+                                msg::addValue(toSend, _mcconf.l_watt_min, 7);
+                                msg::addValue(toSend, _mcconf.l_watt_max, 7);
+                                msg::addValue(toSend, _mcconf.l_in_current_min, 7);
+                                msg::addValue(toSend, _mcconf.l_in_current_max, 7);
+                                msg::addString(toSend, "{}", _mcconf.name);
+                                msg::addValue(toSend, _mcconf.c_phase_current_max, 7);
                                 msg::end(toSend);
 
                                 msg::start(toSend, COMMAND_ID::BACKEND_LOG);
@@ -812,7 +841,7 @@ void IPCReadFunction() {
                                 msg::end(toSend);
                             }
                             break;
-
+                        }
                         case COMMAND_ID::SET_POWER_PROFILE_CUSTOM:
                             PP.setProfile(PROFILE::CUSTOM);
 
