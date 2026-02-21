@@ -736,6 +736,8 @@ int main(int argc, char** argv)
     // style.FontScaleDpi = 2.0f;
     style.FontScaleDpi = 2.0f;
 
+    bool openAccelerationTester = false;
+
     // Main loop
     while (!done) {
         cpuUsage.ImGui.measureStart(1);
@@ -1071,6 +1073,61 @@ int main(int argc, char** argv)
                 ImGui::EndGroup();
             }
 
+        if (openAccelerationTester) {
+            static int width = 300;
+            static int maxSpeed = 90;
+            static int startSpeed = 0;
+            static int endSpeed = 0;
+            static float time = 0;
+            static float timeElapsed = 0;
+            static Timer accelTimer;
+            static bool startSpeedStarted = false;
+            static bool endSpeedStarted = false;
+
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0);
+            ImGui::SetNextWindowSize(ImVec2(width, 180));
+            if (ImGui::Begin("Acceleration Tester", &openAccelerationTester, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
+                ImGui::SetNextItemWidth(width - 16); ImGui::SliderInt("##Start km/h\n", &startSpeed, 0, maxSpeed, "Start speed: %d");
+                ImGui::SetNextItemWidth(width - 16); ImGui::SliderInt("##End km/h\n", &endSpeed, 0, maxSpeed, "End speed: %d");
+                ImGui::Text("%d - %d km/h = %0.3fs", startSpeed, endSpeed, time);
+                ImGui::Dummy(ImVec2(20,0));
+                ImGui::Text("Time elapsed: %0.3f", timeElapsed);
+
+                int temp = endSpeed;
+                if (startSpeed > endSpeed) {
+                    endSpeed = startSpeed;
+                }
+                if (temp < startSpeed) {
+                    startSpeed = temp;
+                }
+
+                if ((int)backend.speed_kmh > startSpeed) {
+                    if (!startSpeedStarted) {
+                        startSpeedStarted = true;
+                        accelTimer.start();
+                    }
+                } else {
+                    startSpeedStarted = false;
+                }
+
+                if ((int)backend.speed_kmh > endSpeed) {
+                    if (!endSpeedStarted) {
+                        endSpeedStarted = true;
+                        accelTimer.end();
+                        time = accelTimer.getTime_s();
+                    }
+                } else {
+                    endSpeedStarted = false;
+                    timeElapsed = accelTimer.getTime_ms_now() / 1000.0;
+                }
+
+                ImGui::End();
+            }
+            ImGui::PopStyleVar();
+            ImGui::PopStyleColor();
+        }
+
         if (gesture.start()) {
             ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0);
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
@@ -1126,6 +1183,9 @@ int main(int argc, char** argv)
                     ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen);
                     ImGui::Checkbox("Limit framerate on switch off", &settings.limitFramerateOnSwitchOff);
                     ImGui::Checkbox("Enable On-Demand Rendering (saves processing power)", &settings.useOnDemandRendering);
+                    if (ImGui::Checkbox("Open Acceleration Tester", &openAccelerationTester)) {
+                        gesture.closeGesture();
+                    }
 
                     if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                         TOMLSave(table, SETTINGS_FILEPATH);
