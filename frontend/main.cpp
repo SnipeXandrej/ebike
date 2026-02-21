@@ -34,7 +34,7 @@
 #include "messagingUtils.hpp"
 #include "waylandUtils.hpp"
 
-#define GUI_VERSION "0.1.0 (For server version 0.1.0)"
+#define GUI_VERSION "0.2.0"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -47,6 +47,7 @@ struct VESC_MCCONF {
     float l_watt_max;
     float l_in_current_min;
     float l_in_current_max;
+    float c_current_phase_max;
     std::string name;
     int id;
     // int motor_poles;
@@ -80,6 +81,8 @@ struct {
 
     float speed_kmh;
     float motor_rpm;
+    float motor_rpmPerKmh;
+    float motor_magnetPairs;
     float odometer_distance;
     float trip_distance;
     float phase_current;
@@ -238,6 +241,7 @@ void setMcconfCustomValues(VESC_MCCONF mcconf) {
                                         ,mcconf.l_watt_max
                                         ,mcconf.l_in_current_min
                                         ,mcconf.l_in_current_max
+                                        ,mcconf.c_current_phase_max
     );
 
     msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE_CUSTOM);
@@ -311,6 +315,8 @@ void processRead(std::string line) {
                         case COMMAND_ID::GET_STATS:
                             backend.speed_kmh = msg::getValueFromSplit(packet, index);
                             backend.motor_rpm = msg::getValueFromSplit(packet, index);
+                            backend.motor_rpmPerKmh = msg::getValueFromSplit(packet, index);
+                            backend.motor_magnetPairs = msg::getValueFromSplit(packet, index);
                             backend.odometer_distance = msg::getValueFromSplit(packet, index);
                             backend.trip_A.distance = msg::getValueFromSplit(packet, index);
                             backend.trip_A.wattHoursUsed = msg::getValueFromSplit(packet, index);
@@ -365,6 +371,7 @@ void processRead(std::string line) {
                             mcconf_vesc.l_in_current_min = msg::getValueFromSplit(packet, index);
                             mcconf_vesc.l_in_current_max = msg::getValueFromSplit(packet, index);
                             mcconf_vesc.name = msg::getValueFromSplit_string(packet, index);
+                            mcconf_vesc.c_current_phase_max = msg::getValueFromSplit(packet, index);
                             break;
 
                         case COMMAND_ID::GET_ANALOG_READINGS:
@@ -503,11 +510,11 @@ int main(int argc, char** argv)
     setupTOML(table, SETTINGS_FILEPATH);
 
     arcBar.WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
-    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Phase");
+    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
     arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
     arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
-    arcBar.motorDCurrent.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "PhD");
-    arcBar.motorQCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "PhQ");
+    arcBar.motorDCurrent.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "PhD");
+    arcBar.motorQCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "PhQ");
 
     // arcBar.motorDCurrent.setTextScaling(0.6);
     // arcBar.motorQCurrent.setTextScaling(0.6);
@@ -974,11 +981,11 @@ int main(int argc, char** argv)
 
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                     if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                    if (settings.showTripA) {
-                        ImGui::Text("Range: %0.1lf¹", backend.trip_A.range);
-                    } else {
-                        ImGui::Text("Range: %0.1lf²", backend.trip_B.range);
-                    }
+                        if (settings.showTripA) {
+                            ImGui::Text("Range: %0.1lf¹", backend.trip_A.range);
+                        } else {
+                            ImGui::Text("Range: %0.1lf²", backend.trip_B.range);
+                        }
                     } else {
                         ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
                     }
@@ -996,7 +1003,7 @@ int main(int argc, char** argv)
                     }
                 ImGui::PopFont();
 
-                if (ImGui::IsItemHovered()) {
+                if (ImGui::IsItemHovered() && !settings.useTripStatsForDisplayingRangeAndWhPerKm) {
                     ImGui::SetTooltip(  "This is a rolling range\n"
                                         "estimation calculated from the\n"
                                         "last few kilometers travelled");
@@ -1238,12 +1245,14 @@ int main(int argc, char** argv)
                                 "   Wh used:        %0.3f\n"
                                 "   Wh Consumed:    %0.3f\n"
                                 "   Wh Regenerated: %0.3f\n"
-                                "   Range left:     %0.3f\n\n"
+                                "   Range left:     %0.3f\n"
+                                "   Wh/km:          %0.3f\n\n"
                                 , backend.trip_A.distance
                                 , backend.trip_A.wattHoursUsed
                                 , backend.trip_A.wattHoursConsumed
                                 , backend.trip_A.wattHoursRegenerated
                                 , backend.trip_A.range
+                                , backend.trip_A.wattHoursUsed / backend.trip_A.distance
                                 );
 
                     ImGui::SameLine();
@@ -1260,12 +1269,14 @@ int main(int argc, char** argv)
                                 "   Wh used:        %0.3f\n"
                                 "   Wh Consumed:    %0.3f\n"
                                 "   Wh Regenerated: %0.3f\n"
-                                "   Range left:     %0.3f\n\n"
+                                "   Range left:     %0.3f\n"
+                                "   Wh/km:          %0.3f\n\n"
                                 , backend.trip_B.distance
                                 , backend.trip_B.wattHoursUsed
                                 , backend.trip_B.wattHoursConsumed
                                 , backend.trip_B.wattHoursRegenerated
                                 , backend.trip_B.range
+                                , backend.trip_B.wattHoursUsed / backend.trip_B.distance
                                 );
                     ImGui::SameLine();
                     if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1352,6 +1363,8 @@ int main(int argc, char** argv)
 
                     ImGui::BeginGroup();
                         float ItemWidth = 150.0;
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf_vesc.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf_vesc.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm);
@@ -1362,6 +1375,7 @@ int main(int argc, char** argv)
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf_vesc.c_current_phase_max);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
 
                         if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1468,12 +1482,19 @@ int main(int argc, char** argv)
         ImGui::Render();
         ImDrawData* draw_data = ImGui::GetDrawData();
         uint64_t draw_hash = 0;
-        if (settings.useOnDemandRendering)
+        static int toRender = 1;
+        if (settings.useOnDemandRendering && toRender < 1) {
             draw_hash = ComputeDrawDataHash(draw_data, io.DisplaySize, clear_color);
-        bool content_changed = (draw_hash != prev_draw_hash);
 
-        if (content_changed || !settings.useOnDemandRendering) {
-            prev_draw_hash = draw_hash;
+            bool content_changed = (draw_hash != prev_draw_hash);
+            if (content_changed) {
+                toRender = 2;
+                prev_draw_hash = draw_hash;
+            }
+        }
+
+        if (toRender > 0 || !settings.useOnDemandRendering) {
+            toRender--;
             glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
             glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
             glClear(GL_COLOR_BUFFER_BIT);
@@ -1491,7 +1512,7 @@ int main(int argc, char** argv)
             }
             SDL_GL_SwapWindow(window);
         } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+            std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
         // // Rendering

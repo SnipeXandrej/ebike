@@ -6,7 +6,7 @@ BUILD := build
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += server.cpp myUart.cpp ads1115.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp
+SOURCES += server.cpp myUart.cpp ads1115.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
 SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
 CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT)

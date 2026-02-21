@@ -37,9 +37,10 @@
 #include "rollingRangeEstimation.hpp"
 #include "messagingUtils.hpp"
 #include "loopRateLimiter.hpp"
+#include "rampLimiter.hpp"
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.1.0"
+#define EBIKE_VERSION "0.2.0"
 
 // MCP23017
 #define MCP23017_ADDRESS 0x20
@@ -92,6 +93,46 @@ PowerProfiles PP;
 RollingRangeEstimation rollingRangeEstimation;
 VescUart::dataPackage VESCData;
 
+std::vector<Point> throttleCurve = {
+    {0, 0},
+    {8, 8},
+    {15, 13},
+    {20, 18},
+    {30, 30},
+    {40, 60},
+    {50, 100},
+    {75, 180},
+    {87, 220},
+    {100, 250}
+};
+
+std::vector<Point> throttleCurveDualVESC = {
+    {0, 0},
+    {8, 8},
+    {15, 15},
+    {20, 25},
+    {30, 45},
+    {40, 70},
+    {50, 110},
+    {62, 170},
+    {75, 250},
+    {87, 350},
+    {100, 450}
+};
+
+std::vector<Point> brakeCurve = {
+    {0, 0},
+    {8, 8},
+    {15, 13},
+    {20, 18},
+    {30, 30},
+    {40, 45},
+    {60, 72},
+    {75, 105},
+    {87, 150},
+    {100, 200}
+};
+
 struct {
     MovingAverage potThrottle;
     MovingAverage brakeThrottle;
@@ -134,8 +175,7 @@ float throttleLevel = 0;
 float brakeLevel = 0;
 bool  powerOn = false;
 bool  done = false;
-float maxBrakingCurrent = 0.0;
-float maxMotorCurrent = 300.0;
+float maxBrakingCurrent = 200.0;
 int throttleLoopRate = 100.0;
 std::string toSendExtra;
 std::string notes;
@@ -277,17 +317,29 @@ float maxCurrentAtRPM(float rpm, float maxCurrent) {
 }
 
 void setMcconfFromCurrentProfile() {
-    VESC.data_mcconf.l_current_min_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE);
-    VESC.data_mcconf.l_current_max_scale = PP.get(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE);
-    VESC.data_mcconf.l_min_erpm = PP.get(PP.getProfile(), PP_VALS::L_MIN_ERPM) / 1000.0 / 1.101625333333333;
-    VESC.data_mcconf.l_max_erpm = PP.get(PP.getProfile(), PP_VALS::L_MAX_ERPM) / 1000.0 / 1.101625333333333;
-    VESC.data_mcconf.l_min_duty = PP.get(PP.getProfile(), PP_VALS::L_MIN_DUTY);
-    VESC.data_mcconf.l_max_duty = PP.get(PP.getProfile(), PP_VALS::L_MAX_DUTY);
-    VESC.data_mcconf.l_watt_min = PP.get(PP.getProfile(), PP_VALS::L_WATT_MIN);
-    VESC.data_mcconf.l_watt_max = PP.get(PP.getProfile(), PP_VALS::L_WATT_MAX);
-    VESC.data_mcconf.l_in_current_min = PP.get(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN);
-    VESC.data_mcconf.l_in_current_max = PP.get(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX);
-    VESC.data_mcconf.name = PROFILE_TO_STRING.at(static_cast<PROFILE>(PP.getProfile()));
+    int profile = PP.getProfile();
+
+    VESC.data_mcconf.l_current_min_scale = PP.get(profile, PP_VALS::L_CURRENT_MIN_SCALE);
+    VESC.data_mcconf.l_current_max_scale = PP.get(profile, PP_VALS::L_CURRENT_MAX_SCALE);
+    VESC.data_mcconf.l_min_erpm = PP.get(profile, PP_VALS::L_MIN_ERPM) / 1000.0 * 1.234625970641421;
+    VESC.data_mcconf.l_max_erpm = PP.get(profile, PP_VALS::L_MAX_ERPM) / 1000.0 * 1.234625970641421;
+    VESC.data_mcconf.l_min_duty = PP.get(profile, PP_VALS::L_MIN_DUTY);
+    VESC.data_mcconf.l_max_duty = PP.get(profile, PP_VALS::L_MAX_DUTY);
+    if (settings.enableDualVESC) {
+        VESC.data_mcconf.l_watt_min = PP.get(profile, PP_VALS::L_WATT_MIN) / 2.0;
+        VESC.data_mcconf.l_watt_max = PP.get(profile, PP_VALS::L_WATT_MAX) / 2.0;
+        VESC.data_mcconf.l_in_current_min = PP.get(profile, PP_VALS::L_IN_CURRENT_MIN) / 2.0;
+        VESC.data_mcconf.l_in_current_max = PP.get(profile, PP_VALS::L_IN_CURRENT_MAX) / 2.0;
+        VESC.data_mcconf.c_phase_current_max = PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX) / 2.0;
+    } else {
+        VESC.data_mcconf.l_watt_min = PP.get(profile, PP_VALS::L_WATT_MIN);
+        VESC.data_mcconf.l_watt_max = PP.get(profile, PP_VALS::L_WATT_MAX);
+        VESC.data_mcconf.l_in_current_min = PP.get(profile, PP_VALS::L_IN_CURRENT_MIN);
+        VESC.data_mcconf.l_in_current_max = PP.get(profile, PP_VALS::L_IN_CURRENT_MAX);
+        VESC.data_mcconf.c_phase_current_max = PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX);
+    }
+    VESC.data_mcconf.name = PROFILE_TO_STRING.at(static_cast<PROFILE>(profile));
+
     VESC.setMcconfTempValues();
     if (settings.enableDualVESC)
         VESC.setMcconfTempValues(settings.secondVESCID);
@@ -299,25 +351,30 @@ void setMcconfFromCurrentProfile() {
 
 void uptimeCounterFunction() {
     std::print("[uptimeThread] Started uptime counting\n");
-    static std::chrono::duration<double, std::micro> usElapsed;
+    auto t1 = std::chrono::high_resolution_clock::now().time_since_epoch();
     while (!done) {
-        auto t1 = std::chrono::high_resolution_clock::now();
-        uptimeInSeconds += usElapsed.count() / 1000000.0;
+        auto t2 = std::chrono::high_resolution_clock::now().time_since_epoch();
+        uptimeInSeconds = std::chrono::duration<double, std::milli>(t2 - t1).count() / 1000.0;
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        usElapsed = std::chrono::high_resolution_clock::now() - t1;
     }
 }
 
 void VESCApplyThrottle(float current) {
-    VESC.setCurrent(current);
-    if (settings.enableDualVESC)
-        VESC.setCurrent(current, settings.secondVESCID);
+    if (settings.enableDualVESC) {
+        VESC.setCurrent(current / 2.0);
+        VESC.setCurrent(current / 2.0, settings.secondVESCID);
+    } else {
+        VESC.setCurrent(current);
+    }
 }
 
 void VESCApplyBraking(float current) {
-    VESC.setBrakeCurrent(current);
-    if (settings.enableDualVESC)
-        VESC.setBrakeCurrent(current, settings.secondVESCID);
+    if (settings.enableDualVESC) {
+        VESC.setBrakeCurrent(current / 2.0);
+        VESC.setBrakeCurrent(current / 2.0, settings.secondVESCID);
+    } else {
+        VESC.setBrakeCurrent(current);
+    }
 }
 
 enum STATE {
@@ -334,25 +391,50 @@ void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
     float throttleCurrentToApply = 0.0;
     float brakingCurrentToApply = 0.0;
-    float minCurrent = 4.0;
-    float initialShockTransitionTime = 110.0;
-    float realThrottleTransitionTime = 90.0;
+    float minCurrent = 8.0;
+    float initialShockTransitionTime = 80.0;
+    float realThrottleTransitionTime = 60.0;
     float throttleToBrakeTransitionTime = 40.0;
     float realBrakeTransitionTime = 20.0;
     float automaticRegenerativeBrakingCurrent = 20.0; // 20A
+    float minSpeedKmh = 2.0; // used for automaticRegenerativeBraking and throttle transitioning
     int state = STATE::POWER_OFF_OR_CHARGING;
+    brakeMap.setCurve(brakeCurve);
+
     valueTransition.throttleReal.start();
 
     loopRateLimiter.threadThrottle.setRate(throttleLoopRate);
     while (!done) {
         loopRateLimiter.threadThrottle.start();
 
-        float throttleCurrent = clampValue(
-                                        throttleMap.map(throttleLevel),
-                                        maxCurrentAtRPM(VESCData.rpm / (float)motor.magnetPairs, maxMotorCurrent)
-                                        );
+        if (settings.enableDualVESC) {
+            throttleMap.setCurve(throttleCurveDualVESC);
+        } else {
+            throttleMap.setCurve(throttleCurve);
+        }
 
-        float brakeCurrent = brakeMap.map(brakeLevel);
+        static RampLimiter throttleRamp;
+        float throttleClampCurrent = settings.enableDualVESC ? VESC.data_mcconf.c_phase_current_max * 2.0 : VESC.data_mcconf.c_phase_current_max;
+        float throttleCurrent = throttleRamp.getValue(
+                                    clampValue(
+                                            throttleMap.map(throttleLevel),
+                                            throttleClampCurrent
+                                    ),
+                                    100,
+                                    20,
+                                    5
+                                );
+
+        static RampLimiter brakeRamp;
+        float brakeCurrent = brakeRamp.getValue(
+                                clampValue(
+                                        brakeMap.map(brakeLevel),
+                                        maxBrakingCurrent
+                                ),
+                                50,
+                                200,
+                                50
+                             );
 
         if (!powerOn || battery.charging) {
             if (brakeLevel > 0.0) {
@@ -372,6 +454,13 @@ void throttleFunction() {
 
             case STATE::THROTTLE:
                 if (!settings.minimizeDrivetrainBacklash) {
+
+                    if (settings.automaticRegenerativeBraking && throttleLevel == 0.0 && speed_kmh > minSpeedKmh) {
+                        state = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                        valueTransition.throttleToBrake.start();
+                        break;
+                    }
+
                     if (brakeLevel == 0.0) {
                         VESCApplyThrottle(throttleCurrent);
                     } else {
@@ -387,7 +476,7 @@ void throttleFunction() {
                 }
 
                 if (throttleLevel == 0.0) {
-                    if (speed_kmh > 2.0) {
+                    if (speed_kmh > minSpeedKmh) {
                         throttleCurrentToApply = minCurrent;
 
                         if (settings.automaticRegenerativeBraking) {
@@ -425,7 +514,7 @@ void throttleFunction() {
 
             case STATE::BRAKING:
                 static float _brakeCurrent;
-                if (brakeLevel == 0.0 && (throttleLevel != 0.0 || settings.minimizeDrivetrainBacklash)) {
+                if (brakeLevel == 0.0 && (throttleLevel != 0.0 || speed_kmh <= minSpeedKmh || (settings.minimizeDrivetrainBacklash && !settings.automaticRegenerativeBraking))) {
                     state = STATE::BRAKING_TRANSITION_TO_THROTTLE;
                     break;
                 }
@@ -500,6 +589,12 @@ void vescValueProcessingFunction() {
                 tempData.dutyCycleNow = tempData.dutyCycleNow / 2.0;
                 tempData.wattHours += VESC.data.wattHours;
                 tempData.wattHoursCharged += VESC.data.wattHoursCharged;
+                if (tempData.tempMotor < VESC.data.tempMotor) {
+                    tempData.tempMotor = VESC.data.tempMosfet;
+                }
+                if (tempData.tempMosfet < VESC.data.tempMosfet) {
+                    tempData.tempMosfet = VESC.data.tempMosfet;
+                }
             }
             VESCData = tempData;
 
@@ -537,10 +632,10 @@ void vescValueProcessingFunction() {
             speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
 
             double timeNow = timerAcceleration.getTime_ms_now();
-            if (timeNow >= 300.0 /*ms*/) {
+            if (timeNow >= 400.0 /*ms*/) {
                 timerAcceleration.start();
 
-                acceleration = (speed_kmh - speed_kmh_previous) * (1.0 / timeNow);
+                acceleration = (speed_kmh - speed_kmh_previous) * (1000.0 / timeNow);
                 speed_kmh_previous = speed_kmh;
             }
 
@@ -611,6 +706,8 @@ void IPCReadFunction() {
                             msg::start(toSend, COMMAND_ID::GET_STATS);
                             msg::addValue(toSend, speed_kmh, 1);
                             msg::addValue(toSend, motor_rpm, 0);
+                            msg::addValue(toSend, motor.rpmPerKmh, 7);
+                            msg::addValue(toSend, motor.magnetPairs, 0);
                             msg::addValue(toSend, odometer.distance, 7);
                             msg::addValue(toSend, trip_A.distance, 15);
                             msg::addValue(toSend, trip_A.wattHoursUsed, 15);
@@ -703,6 +800,7 @@ void IPCReadFunction() {
                                 msg::addValue(toSend, VESC.data_mcconf.l_in_current_min, 4);
                                 msg::addValue(toSend, VESC.data_mcconf.l_in_current_max, 4);
                                 msg::addString(toSend, "{}", VESC.data_mcconf.name);
+                                msg::addValue(toSend, VESC.data_mcconf.c_phase_current_max, 4);
                                 msg::end(toSend);
 
                                 msg::start(toSend, COMMAND_ID::BACKEND_LOG);
@@ -728,6 +826,7 @@ void IPCReadFunction() {
                             PP.set(PROFILE::CUSTOM, PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
                             PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
                             PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+                            PP.set(PROFILE::CUSTOM, PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
 
                             setMcconfFromCurrentProfile();
 
@@ -914,7 +1013,7 @@ void TOMLSave(toml::table &tbl, const char* filepath) {
         for (int var = 0; var < PP_VALS::VALS_COUNT; var++) {
             double ret = PP.get(profile, var);
 
-            updateTableValue(SETTINGS_FILEPATH,
+            updateTableValue(tbl,
                              PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)).c_str(),
                              PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var)).c_str(),
                              ret);
@@ -991,43 +1090,12 @@ int main() {
     }
     signal(SIGINT, my_handler);
 
-    maxMotorCurrent = 300.0;
-    maxBrakingCurrent = 100.0;
-
-    std::vector<Point> throttleCurve = {
-        {0, 0},
-        {8, 8},
-        {15, 13},
-        {20, 18},
-        {30, 30},
-        {40, 60},
-        {50, 100},
-        {75, 200},
-        {87, 250},
-        {100, 300}
-    };
-    throttleMap.setCurve(throttleCurve);
-
-    std::vector<Point> brakeCurve = {
-        {0, 0},
-        {8, 6},
-        {15, 10},
-        {20, 15},
-        {30, 25},
-        {40, 35},
-        {50, 50},
-        {75, 75},
-        {87, 87},
-        {100, 100}
-    };
-    brakeMap.setCurve(brakeCurve);
-
     movingAverages.potThrottle.smoothingFactor = 0.7;
     movingAverages.brakeThrottle.smoothingFactor = 0.7;
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
     movingAverages.brakingCurrent.smoothingFactor = 0.1;
 
-    wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/);
+    wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
     motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
 
     setupIPC();  // IPC
@@ -1054,7 +1122,7 @@ int main() {
         #ifndef NOT_RPI
         // Digital
         powerOn = digitalRead(pinPowerswitch);
-        battery.charging = digitalRead(pinChargerConnected);
+        // battery.charging = digitalRead(pinChargerConnected);
 
         // PWM
         pwmWrite(pinPWM_fan, 256); // 0 - 1023

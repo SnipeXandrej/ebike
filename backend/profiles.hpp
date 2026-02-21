@@ -11,6 +11,7 @@ enum PP_VALS {
     L_WATT_MAX = 7,
     L_IN_CURRENT_MIN = 8,
     L_IN_CURRENT_MAX = 9,
+    C_PHASE_CURRENT_MAX = 10,
     VALS_COUNT,
 };
 
@@ -25,6 +26,7 @@ std::map<PP_VALS, std::string> PP_VALS_TO_STRING = {
     {PP_VALS::L_WATT_MAX, "L_WATT_MAX"},
     {PP_VALS::L_IN_CURRENT_MIN, "L_IN_CURRENT_MIN"},
     {PP_VALS::L_IN_CURRENT_MAX, "L_IN_CURRENT_MAX"},
+    {PP_VALS::C_PHASE_CURRENT_MAX, "C_PHASE_CURRENT_MAX"},
 };
 
 std::map<std::string, PP_VALS> STRING_TO_PP_VALS = {
@@ -38,6 +40,7 @@ std::map<std::string, PP_VALS> STRING_TO_PP_VALS = {
     {"L_WATT_MAX", PP_VALS::L_WATT_MAX},
     {"L_IN_CURRENT_MIN", PP_VALS::L_IN_CURRENT_MIN},
     {"L_IN_CURRENT_MAX", PP_VALS::L_IN_CURRENT_MAX},
+    {"C_PHASE_CURRENT_MAX", PP_VALS::C_PHASE_CURRENT_MAX},
 };
 
 enum PROFILE {
