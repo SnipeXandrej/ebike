@@ -431,9 +431,9 @@ void throttleFunction() {
                                         brakeMap.map(brakeLevel),
                                         maxBrakingCurrent
                                 ),
-                                50,
-                                200,
-                                50
+                                100,
+                                40,
+                                15
                              );
 
         if (!powerOn || battery.charging) {
