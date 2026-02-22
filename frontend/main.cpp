@@ -125,6 +125,7 @@ struct {
     bool showAcceleration;
     bool showTripA;
     bool showMotorDutyInsteadOfMotorTemp;
+    bool showVolCurWatts;
     bool launchFullscreen;
     bool limitFramerateOnSwitchOff;
     bool useTripStatsForDisplayingRangeAndWhPerKm;
@@ -412,6 +413,7 @@ void setupTOML(toml::table &tbl, const char* filepath) {
     settings.showAcceleration                = tbl["settings"]["showAcceleration"].value_or<int8_t>(1);
     settings.showTripA                       = tbl["settings"]["showTripA"].value_or<int8_t>(1);
     settings.showMotorDutyInsteadOfMotorTemp = tbl["settings"]["showMotorDutyInsteadOfMotorTemp"].value_or<int8_t>(0);
+    settings.showVolCurWatts                 = tbl["settings"]["showVolCurWatts"].value_or<int8_t>(0);
     settings.useTripStatsForDisplayingRangeAndWhPerKm = tbl["settings"]["useTripStatsForDisplayingRangeAndWhPerKm"].value_or<int8_t>(1);
     settings.launchFullscreen                = tbl["settings"]["launchFullscreen"].value_or<int8_t>(0);
     settings.limitFramerateOnSwitchOff       = tbl["settings"]["limitFramerateOnSwitchOff"].value_or<int8_t>(1);
@@ -426,6 +428,7 @@ void TOMLSave(toml::table &tbl, const char* filepath) {
     updateTableValue(tbl, "settings", "showAcceleration", settings.showAcceleration);
     updateTableValue(tbl, "settings", "showTripA", settings.showTripA);
     updateTableValue(tbl, "settings", "showMotorDutyInsteadOfMotorTemp", settings.showMotorDutyInsteadOfMotorTemp);
+    updateTableValue(tbl, "settings", "showVolCurWatts", settings.showVolCurWatts);
     updateTableValue(tbl, "settings", "useTripStatsForDisplayingRangeAndWhPerKm", settings.useTripStatsForDisplayingRangeAndWhPerKm);
     updateTableValue(tbl, "settings", "launchFullscreen", settings.launchFullscreen);
     updateTableValue(tbl, "settings", "limitFramerateOnSwitchOff", settings.limitFramerateOnSwitchOff);
@@ -851,17 +854,19 @@ int main(int argc, char** argv)
         ImGui::Separator();
 
         ImGui::BeginGroup(); // Starts here
-            ImGui::BeginGroup();
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+            if (settings.showVolCurWatts) {
+                ImGui::BeginGroup();
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
 
-                movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
-                ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%6.2f V", battery.voltage);
-                ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%6.2f A", battery.current);
-                ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%6.1f W", battery.watts);
+                    movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
+                    ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%6.2f V", battery.voltage);
+                    ImGui::TextColored(ImVec4(1.0, 0.39, 0.196, 1.0), "%6.2f A", battery.current);
+                    ImGui::TextColored(ImVec4(1.0, 1.0, 0.0, 1.0), "%6.1f W", battery.watts);
 
-                ImGui::PopFont();
+                    ImGui::PopFont();
 
-            ImGui::EndGroup();
+                ImGui::EndGroup();
+            }
             //
             ImGui::SameLine();
             ImGui::Dummy(ImVec2(20,0));
@@ -1175,6 +1180,7 @@ int main(int argc, char** argv)
                     ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM);
                     ImGui::Checkbox("Show trip A", &settings.showTripA);
                     ImGui::Checkbox("Show motor duty instead of motor temp", &settings.showMotorDutyInsteadOfMotorTemp);
+                    ImGui::Checkbox("Show voltage/current/watts", &settings.showVolCurWatts);
                     ImGui::Checkbox("Use Trip stats for displaying Range and Wh Per Km", &settings.useTripStatsForDisplayingRangeAndWhPerKm);
                     ImGui::Checkbox("Launch fullscreen", &settings.launchFullscreen);
                     ImGui::Checkbox("Limit framerate on switch off", &settings.limitFramerateOnSwitchOff);
@@ -1493,7 +1499,7 @@ int main(int argc, char** argv)
                     }
 
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
-                    ImGui::InputTextMultiline("##", &backend.notes, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_None);
+                    ImGui::InputTextMultiline("##", &backend.notes, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_WordWrap);
                     ImGui::PopFont();
                     ImGui::EndTabItem();
                 }
