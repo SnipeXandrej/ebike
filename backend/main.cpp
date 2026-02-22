@@ -134,10 +134,8 @@ std::vector<Point> brakeCurve = {
 };
 
 struct {
-    MovingAverage potThrottle;
-    MovingAverage brakeThrottle;
-    MovingAverage brakingCurrent;
     MovingAverage batteryCurrentForFrontend;
+    MovingAverage batteryVoltageForFrontend;
 } movingAverages;
 
 struct {
@@ -195,6 +193,7 @@ struct Battery {
     float amphours_max_voltage = 82.0;
 
     double currentForFrontend;
+    double voltageForFrontend;
 
     double ampHoursUsed;
     double ampHoursUsedLifetime;
@@ -678,7 +677,7 @@ void IPCReadFunction() {
                     switch(packet_command_id) {
                         case COMMAND_ID::GET_BATTERY:
                             msg::start(toSend, COMMAND_ID::GET_BATTERY);
-                            msg::addValue(toSend, battery.voltage, 2);
+                            msg::addValue(toSend, battery.voltageForFrontend, 2);
                             msg::addValue(toSend, battery.currentForFrontend, 4);
                             msg::addValue(toSend, battery.watts, 1);
                             msg::addValue(toSend, battery.wattHoursUsed, 15);
@@ -1119,10 +1118,8 @@ int main() {
     }
     signal(SIGINT, my_handler);
 
-    movingAverages.potThrottle.smoothingFactor = 0.7;
-    movingAverages.brakeThrottle.smoothingFactor = 0.7;
-    movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.2;
-    movingAverages.brakingCurrent.smoothingFactor = 0.1;
+    movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.35;
+    movingAverages.batteryVoltageForFrontend.smoothingFactor = 0.35;
 
     wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
     motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
@@ -1184,7 +1181,7 @@ int main() {
         static double mvPerAmp = 1.345;
         double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */; // 256mV because the PGA gain is set to 16
         battery.current = batteryCurrentMv / mvPerAmp;
-        battery.currentForFrontend = movingAverages.batteryCurrentForFrontend.moveAverage(batteryCurrentMv / mvPerAmp);
+        battery.currentForFrontend = movingAverages.batteryCurrentForFrontend.moveAverage(battery.current);
 
         // throttleLevel
         static float throttleMinVoltage = 0.95;
@@ -1200,9 +1197,11 @@ int main() {
         static float batteryVoltageVMaxInput = 100;
         static float batteryVoltageVMax = (batteryVoltageVMaxInput * batteryVoltageR2) / (batteryVoltageR1 + batteryVoltageR2);
 
-        throttleLevel       = map_f(movingAverages.potThrottle.moveAverage(analogReadings.analog0), throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
-        brakeLevel          = map_f(movingAverages.brakeThrottle.moveAverage(analogReadings.analog1), brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
+        throttleLevel       = map_f(analogReadings.analog0, throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
+        brakeLevel          = map_f(analogReadings.analog1, brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
         battery.voltage     = map_f_nochecks(analogReadings.analog7, 0.0, batteryVoltageVMax, 0.0, batteryVoltageVMaxInput);
+
+        battery.voltageForFrontend = movingAverages.batteryVoltageForFrontend.moveAverage(battery.voltage);
 
         // Power on/off
         static bool powerOn_tmp = false;
