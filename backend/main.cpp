@@ -168,7 +168,7 @@ struct {
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
 std::chrono::duration<double, std::micro> whileLoopUsElapsed;
 float acceleration = 0;
-float uptimeInSeconds = 0;
+double uptimeInSeconds = 0;
 float motor_rpm = 0;
 float speed_kmh = 0;
 float throttleLevel = 0;
@@ -354,7 +354,7 @@ void uptimeCounterFunction() {
     auto t1 = std::chrono::high_resolution_clock::now().time_since_epoch();
     while (!done) {
         auto t2 = std::chrono::high_resolution_clock::now().time_since_epoch();
-        uptimeInSeconds = std::chrono::duration<double, std::milli>(t2 - t1).count() / 1000.0;
+        uptimeInSeconds = std::chrono::duration<double, std::ratio<1>>(t2 - t1).count();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
 }
