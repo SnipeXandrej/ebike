@@ -34,7 +34,7 @@
 #include "messagingUtils.hpp"
 #include "waylandUtils.hpp"
 
-#define GUI_VERSION "0.2.1"
+#define GUI_VERSION "0.2.2"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
