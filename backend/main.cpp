@@ -390,12 +390,12 @@ void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
     float throttleCurrentToApply = 0.0;
     float brakingCurrentToApply = 0.0;
-    float minCurrent = 8.0;
+    float minCurrent = 5.5; // used when minimizeDrivetrainBacklash is enabled
     float initialShockTransitionTime = 80.0;
     float realThrottleTransitionTime = 60.0;
     float throttleToBrakeTransitionTime = 40.0;
     float realBrakeTransitionTime = 20.0;
-    float automaticRegenerativeBrakingCurrent = 20.0; // 20A
+    float automaticRegenerativeBrakingCurrent = 12.0; // 12A
     float minSpeedKmh = 2.0; // used for automaticRegenerativeBraking and throttle transitioning
     int state = STATE::POWER_OFF_OR_CHARGING;
     brakeMap.setCurve(brakeCurve);
