@@ -256,11 +256,11 @@ void StyleColorsDarkBreeze(ImGuiStyle* dst) {
     colors[ImGuiCol_NavWindowingDimBg]      = ImVec4(0.20f, 0.23f, 0.26f, 0.20f);
     colors[ImGuiCol_ModalWindowDimBg]       = ImVec4(0.20f, 0.23f, 0.26f, 0.35f);
 
-    style->WindowRounding    = 5.0f;
-    style->FrameRounding     = 4.0f;
-    style->GrabRounding      = 3.0f;
-    style->ScrollbarRounding = 5.0f;
-    style->TabRounding       = 4.0f;
+    style->WindowRounding    = 6.0f;
+    style->FrameRounding     = 6.0f;
+    style->GrabRounding      = 6.0f;
+    style->ScrollbarRounding = 6.0f;
+    style->TabRounding       = 6.0f;
     style->ScrollbarSize     = 70.0f;
     style->TouchExtraPadding = ImVec2(5.0, 5.0);
 }

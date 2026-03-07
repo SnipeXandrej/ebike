@@ -8,15 +8,15 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
 
     bool isInputNegative = false;
     float inputMapped;
-    if (input >= min_input) {
-        inputMapped = map_f(input, min_input, max_input, 0, 100);
+    if (drawArcOutsideInputBoundary) {
+        if (input >= min_input) {
+            inputMapped = map_f(input, min_input, max_input, 0, 100);
+        } else {
+            isInputNegative = true;
+            inputMapped = map_f(input, min_input, min_input-(max_input+min_input), 0, 100);
+        }
     } else {
-        isInputNegative = true;
-        inputMapped = map_f(input, min_input, min_input-(max_input+min_input), 0, 100);
-    }
-
-    if (!drawArcOutsideInputBoundary) {
-        inputMapped = 0;
+        inputMapped = map_f(input, min_input, max_input, 0, 100);
     }
 
     float x = pos.x, y = pos.y;    // Position

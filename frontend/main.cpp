@@ -794,7 +794,6 @@ int main(int argc, char** argv)
 
         timer.draw.start();
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0);
         ImGui::Begin("Main", nullptr, ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove|ImGuiWindowFlags_NoCollapse|ImGuiWindowFlags_NoDecoration|ImGuiWindowFlags_NoBringToFrontOnFocus|ImGuiWindowFlags_NoScrollWithMouse); // Create a window called "Main" and append into it. //ImGuiWindowFlags_NoResize|ImGuiWindowFlags_NoTitleBar|ImGuiWindowFlags_NoMove
 
         ImGui::BeginGroup();
@@ -1535,7 +1534,6 @@ int main(int argc, char** argv)
         ImGui::EndGroup();
 
         ImGui::End();
-        ImGui::PopStyleVar();
         ImGui::PopStyleVar();
         timer.draw.end();
 
