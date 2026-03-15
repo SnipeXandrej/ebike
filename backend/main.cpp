@@ -16,14 +16,19 @@
 #include <print>
 #include <signal.h>
 #include <fcntl.h>
+#include <unistd.h>
 
+#ifdef __linux__
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <mcp23017.h>
 #include <mcp3004.h>
+#endif
 #include "toml.hpp"
 
+#ifdef __linux__
 #include "ads1115.hpp"
+#endif
 #include "myUart.hpp"
 #include "VescUart/VescUart.h"
 #include "server.hpp"
@@ -38,6 +43,20 @@
 #include "messagingUtils.hpp"
 #include "loopRateLimiter.hpp"
 #include "rampLimiter.hpp"
+
+#ifndef __linux__
+#define PWM_OUTPUT 0
+#define INPUT 0
+#define ADS1115_DR_128 0
+void wiringPiSetupGpio() {;};
+int pinMode(int, int) {return 0;};
+int pwmSetClock(int) {return 0;};
+int mcp23017Setup(int, int) {return 0;};
+int digitalWrite(int, int) {return 0;};
+int ads1115Setup_fd(int, int) {return 0;};
+int wiringPiI2CSetupInterface(char*, int) {return 0;};
+int mcp3004Setup(int, int) {return 0;};
+#endif
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "0.2.3"
@@ -162,8 +181,11 @@ struct {
 } loopRateLimiter;
 
 // TODO: do not hardcode filepaths
-// TODO: if the file doesnt exist, create it
+#ifdef __linux__
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebike/backend.toml";
+#elif __APPLE__
+const char* SETTINGS_FILEPATH = "/Users/snipex/.config/ebike/backend.toml";
+#endif
 std::chrono::duration<double, std::micro> whileLoopUsElapsed;
 float acceleration = 0;
 double uptimeInSeconds = 0;
@@ -1112,10 +1134,12 @@ void setupIPC() {
 }
 
 int main() {
+    #ifndef NOT_RPI
     if (getuid() != 0) {
         std::printf("Run me as root, please :(\n");
         return -1;
     }
+    #endif
     signal(SIGINT, my_handler);
 
     movingAverages.batteryCurrentForFrontend.smoothingFactor = 0.35;

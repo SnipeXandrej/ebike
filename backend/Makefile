@@ -6,14 +6,18 @@ BUILD := build
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += server.cpp myUart.cpp ads1115.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
+SOURCES += server.cpp myUart.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
 SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
 CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT)
-LIBS = -lwiringPi
 
 NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
 OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
+
+ifeq ($(UNAME_S), Linux) #LINUX
+	LIBS += -lwiringPi
+    SOURCEs += ads1115.cpp
+endif
 
 .PHONY: all clean notrpi
 
