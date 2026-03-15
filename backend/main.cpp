@@ -59,7 +59,7 @@ int mcp3004Setup(int, int) {return 0;};
 #endif
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.2.3"
+#define EBIKE_VERSION "0.2.4"
 
 // MCP23017
 #define MCP23017_ADDRESS 0x20
