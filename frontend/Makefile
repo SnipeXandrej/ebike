@@ -19,7 +19,7 @@ BUILD := build
 EXE = ebikegui
 IMGUI_DIR = ../submodules/imgui
 SOURCES = main.cpp
-SOURCES += client.cpp utils.cpp cpuUsage.cpp arc_progress_bar.cpp imguiGestures.cpp ../timer.cpp ../valueTransition.cpp ../cubicBezier.cpp ../messagingUtils.cpp ../commonUtils.cpp waylandUtils.cpp
+SOURCES += client.cpp utils.cpp cpuUsage.cpp arc_progress_bar.cpp imguiGestures.cpp ../timer.cpp ../valueTransition.cpp ../cubicBezier.cpp ../messagingUtils.cpp ../commonUtils.cpp
 SOURCES += $(IMGUI_DIR)/imgui.cpp $(IMGUI_DIR)/imgui_draw.cpp $(IMGUI_DIR)/imgui_tables.cpp $(IMGUI_DIR)/imgui_widgets.cpp $(IMGUI_DIR)/misc/cpp/imgui_stdlib.cpp
 SOURCES += $(IMGUI_DIR)/backends/imgui_impl_sdl3.cpp $(IMGUI_DIR)/backends/imgui_impl_opengl3.cpp
 
@@ -27,8 +27,7 @@ UNAME_S := $(shell uname -s)
 LINUX_GL_LIBS = -lGL
 
 CXXFLAGS = -std=c++23 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I$(IMGUI_DIR)/misc/cpp -I$(SRC_ROOT)
-CXXFLAGS += -g -Wall -Wformat -DIMGUI_IMPL_OPENGL_ES2
-LIBS = -lwayland-client
+CXXFLAGS += -g -Wall -Wformat
 
 NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
 OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
@@ -40,16 +39,19 @@ OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
 ifeq ($(UNAME_S), Linux) #LINUX
 	ECHO_MESSAGE = "Linux"
 	LIBS += $(LINUX_GL_LIBS) -ldl `pkg-config sdl3 --libs`
+	LIBS += -lwayland-client
+	SOURCES += waylandUtils.cpp -DIMGUI_IMPL_OPENGL_ES2
 
 	CXXFLAGS += `pkg-config sdl3 --cflags`
 	CFLAGS = $(CXXFLAGS)
 endif
 ifeq ($(UNAME_S), Darwin) #APPLE
 	ECHO_MESSAGE = "Mac OS X"
-	LIBS += -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo `sdl-config --libs`
+	LIBS += -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo
+	LIBS += `pkg-config --libs sdl3`
 	LIBS += -L/usr/local/lib -L/opt/local/lib
 
-	CXXFLAGS += `sdl-config --cflags`
+	CXXFLAGS += `pkg-config --cflags sdl3`
 	CXXFLAGS += -I/usr/local/include -I/opt/local/include
 	CFLAGS = $(CXXFLAGS)
 endif

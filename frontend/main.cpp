@@ -22,6 +22,9 @@
 #include <chrono>
 #include "toml.hpp"
 #include <print>
+#include <unistd.h>
+#include <fstream>
+#include <sys/stat.h>
 
 #include "client.hpp"
 #include "utils.hpp"
@@ -32,7 +35,9 @@
 #include "timer.hpp"
 #include "imguiGestures.hpp"
 #include "messagingUtils.hpp"
+#ifdef __linux__
 #include "waylandUtils.hpp"
+#endif
 
 #define GUI_VERSION "0.2.3"
 
@@ -175,7 +180,11 @@ bool done = false;
 char currentTimeAndDate[100];
 
 // TODO: do not hardcode filepaths :trol:
+#ifdef __linux__
 const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
+#elif __APPLE__
+const char* SETTINGS_FILEPATH = "/Users/snipex/.config/ebikegui/settings.toml";
+#endif
 char hostname[1024];
 char *desktopEnvironment;
 std::string serverAddress;
@@ -466,8 +475,10 @@ uint64_t prev_draw_hash = 0;
 // Main code
 int main(int argc, char** argv)
 {
+    #ifdef __linux__
     setenv("SDL_VIDEODRIVER", "wayland", 1);
     setenv("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0", 1);
+    #endif
 
     // ##########################
     // ##### Hostname stuff #####
@@ -530,7 +541,7 @@ int main(int argc, char** argv)
             std::printf("[IPC] Failed to initialize\n");
         }
 
-        std::jthread commThreadRead([&] {
+        std::thread commThreadRead([&] {
             while(!done) {
                 cpuUsage.ipcThreadRead.measureStart(1);
                 auto t1 = std::chrono::high_resolution_clock::now();
@@ -700,7 +711,9 @@ int main(int argc, char** argv)
     SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
     SDL_ShowWindow(window);
 
+    #ifdef __linux__
     wayland_utils::init(window);
+    #endif
 
     // Setup Dear ImGui context
     IMGUI_CHECKVERSION();
@@ -809,6 +822,7 @@ int main(int argc, char** argv)
             ImGui::PopFont();
         }
 
+        #ifdef __linux__
         {
             // Drag handle: center title (time/date) — drag to move window via xdg-shell (Wayland)
             const float dragHandleWidth = 450.f;
@@ -831,6 +845,7 @@ int main(int argc, char** argv)
             ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
             ImGui::Text("%s", currentTimeAndDate);
         }
+        #endif
 
         {
             // Bike Battery
