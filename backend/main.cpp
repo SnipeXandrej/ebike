@@ -25,6 +25,7 @@
 #include <mcp3004.h>
 #endif
 #include "toml.hpp"
+#include "magic_enum.hpp"
 
 #ifdef __linux__
 #include "ads1115.hpp"
@@ -199,6 +200,7 @@ float maxBrakingCurrent = 200.0;
 int throttleLoopRate = 100.0;
 std::string toSendExtra;
 std::string notes;
+std::string debuginfo;
 
 // forward declaration
 void TOMLSave(toml::table &tbl, const char* filepath);
@@ -408,6 +410,7 @@ enum STATE {
 };
 
 // TODO: move all the throttle functions and maps and other stuff into a centralized MotorController class
+int throttleState = 0;
 void throttleFunction() {
     std::printf("[throttleThread] Started thread\n");
     float throttleCurrentToApply = 0.0;
@@ -419,7 +422,7 @@ void throttleFunction() {
     float realBrakeTransitionTime = 20.0;
     float automaticRegenerativeBrakingCurrent = 12.0; // 12A
     float minSpeedKmh = 2.0; // used for automaticRegenerativeBraking and throttle transitioning
-    int state = STATE::POWER_OFF_OR_CHARGING;
+    throttleState = STATE::POWER_OFF_OR_CHARGING;
     brakeMap.setCurve(brakeCurve);
 
     valueTransition.throttleReal.start();
@@ -459,17 +462,17 @@ void throttleFunction() {
 
         if (!powerOn || battery.charging) {
             if (brakeLevel > 0.0) {
-                state = STATE::POWER_OFF_OR_CHARGING_BRAKING;
+                throttleState = STATE::POWER_OFF_OR_CHARGING_BRAKING;
             } else {
-                state = STATE::POWER_OFF_OR_CHARGING;
+                throttleState = STATE::POWER_OFF_OR_CHARGING;
             }
         }
 
-        switch (state) {
+        switch (throttleState) {
             case STATE::POWER_OFF_OR_CHARGING:
                 VESCApplyThrottle(0.0);
                 if (powerOn && !battery.charging) {
-                    state = STATE::THROTTLE;
+                    throttleState = STATE::THROTTLE;
                 }
                 break;
 
@@ -477,7 +480,7 @@ void throttleFunction() {
                 if (!settings.minimizeDrivetrainBacklash) {
 
                     if (settings.automaticRegenerativeBraking && throttleLevel == 0.0 && speed_kmh > minSpeedKmh) {
-                        state = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                        throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
                         valueTransition.throttleToBrake.start();
                         break;
                     }
@@ -491,7 +494,7 @@ void throttleFunction() {
                 }
 
                 if (brakeLevel > 0.0) {
-                    state = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                    throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
                     valueTransition.throttleToBrake.start();
                     break;
                 }
@@ -501,7 +504,7 @@ void throttleFunction() {
                         throttleCurrentToApply = minCurrent;
 
                         if (settings.automaticRegenerativeBraking) {
-                            state = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                            throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
                             valueTransition.throttleToBrake.start();
                         }
                     } else {
@@ -536,7 +539,7 @@ void throttleFunction() {
             case STATE::BRAKING:
                 static float _brakeCurrent;
                 if (brakeLevel == 0.0 && (throttleLevel != 0.0 || speed_kmh <= minSpeedKmh || (settings.minimizeDrivetrainBacklash && !settings.automaticRegenerativeBraking))) {
-                    state = STATE::BRAKING_TRANSITION_TO_THROTTLE;
+                    throttleState = STATE::BRAKING_TRANSITION_TO_THROTTLE;
                     break;
                 }
 
@@ -568,7 +571,7 @@ void throttleFunction() {
 
                     VESCApplyThrottle(_currentToApply);
                 } else {
-                    state = STATE::BRAKING;
+                    throttleState = STATE::BRAKING;
                     valueTransition.toRealBrake.start();
                 }
 
@@ -577,7 +580,7 @@ void throttleFunction() {
             case STATE::BRAKING_TRANSITION_TO_THROTTLE:
                 valueTransition.throttleShockCurrent.start();
 
-                state = STATE::THROTTLE;
+                throttleState = STATE::THROTTLE;
                 break;
 
             case STATE::POWER_OFF_OR_CHARGING_BRAKING:
@@ -971,6 +974,31 @@ void IPCReadFunction() {
 
                         case COMMAND_ID::SET_NOTES:
                             notes = msg::getValueFromSplit_string(packet, index);
+
+                            break;
+
+                        case COMMAND_ID::GET_DEBUGINFO:
+                            {
+                                std::string throttleFunctionDebugInfo;
+                                auto _state = magic_enum::enum_cast<STATE>(throttleState);
+                                std::string _enum;
+                                if (_state) {
+                                    _enum = magic_enum::enum_name(*_state);
+                                } else {
+                                    _enum = "-";
+                                }
+                                throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
+
+                                debuginfo = std::format("Speed: {} km/h\n"
+                                                        "{}"
+                                                        , speed_kmh
+                                                        , throttleFunctionDebugInfo
+                                                        );
+                            }
+
+                            msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
+                            msg::addString(toSend, "{}", debuginfo);
+                            msg::end(toSend);
 
                             break;
                     }

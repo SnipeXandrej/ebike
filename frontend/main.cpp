@@ -118,6 +118,7 @@ struct {
     std::string availablePowerProfiles;
 
     std::string notes;
+    std::string debuginfo;
 } backend;
 
 // Limit FPS
@@ -404,6 +405,11 @@ void processRead(std::string line) {
                             backend.notes = msg::getValueFromSplit_string(packet, index);
 
                             break;
+
+                        case COMMAND_ID::GET_DEBUGINFO:
+                            backend.debuginfo = msg::getValueFromSplit_string(packet, index);
+
+                            break;
                     }
                 }
             }
@@ -611,6 +617,9 @@ int main(int argc, char** argv)
                 msg::end(toSend);
 
                 msg::start(toSend, COMMAND_ID::GET_ANALOG_READINGS);
+                msg::end(toSend);
+
+                msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
                 msg::end(toSend);
 
                 msg::mtx.lock();
@@ -1495,6 +1504,14 @@ int main(int argc, char** argv)
                     std::string log_tmp = backend.log;
 
                     ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
+                    ImGui::PopFont();
+                    ImGui::EndTabItem();
+                }
+
+                if (ImGui::BeginTabItem("E-BIKE Debug"))
+                {
+                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
+                    ImGui::Text(backend.debuginfo.data());
                     ImGui::PopFont();
                     ImGui::EndTabItem();
                 }
