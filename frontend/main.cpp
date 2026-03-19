@@ -39,7 +39,7 @@
 #include "waylandUtils.hpp"
 #endif
 
-#define GUI_VERSION "0.2.4"
+#define GUI_VERSION "0.3.0"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
