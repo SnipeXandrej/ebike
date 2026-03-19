@@ -393,7 +393,7 @@ void processRead(std::string line) {
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
-                            backend.log.append(std::format("[{}] {}\n", currentTimeAndDate, msg::getValueFromSplit_string(packet, index)));
+                            backend.log.append(std::format("[{}] {}\n", std::string(currentTimeAndDate), msg::getValueFromSplit_string(packet, index)));
                             break;
 
                         case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
