@@ -29,9 +29,6 @@ LINUX_GL_LIBS = -lGL
 CXXFLAGS = -std=c++23 -I$(IMGUI_DIR) -I$(IMGUI_DIR)/backends -I$(IMGUI_DIR)/misc/cpp -I$(SRC_ROOT)
 CXXFLAGS += -g -Wall -Wformat
 
-NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
-OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
-
 ##---------------------------------------------------------------------
 ## BUILD FLAGS PER PLATFORM
 ##---------------------------------------------------------------------
@@ -40,9 +37,9 @@ ifeq ($(UNAME_S), Linux) #LINUX
 	ECHO_MESSAGE = "Linux"
 	LIBS += $(LINUX_GL_LIBS) -ldl `pkg-config sdl3 --libs`
 	LIBS += -lwayland-client
-	SOURCES += waylandUtils.cpp -DIMGUI_IMPL_OPENGL_ES2
+	SOURCES += waylandUtils.cpp
 
-	CXXFLAGS += `pkg-config sdl3 --cflags`
+	CXXFLAGS += `pkg-config sdl3 --cflags` -DIMGUI_IMPL_OPENGL_ES2
 	CFLAGS = $(CXXFLAGS)
 endif
 ifeq ($(UNAME_S), Darwin) #APPLE
@@ -63,6 +60,9 @@ ifeq ($(OS), Windows_NT)
 	CXXFLAGS += `pkg-config --cflags sdl3`
 	CFLAGS = $(CXXFLAGS)
 endif
+
+NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
+OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
 
 ##---------------------------------------------------------------------
 ## BUILD RULES

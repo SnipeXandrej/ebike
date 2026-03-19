@@ -12,16 +12,17 @@ SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT)
 CXXFLAGS += -I../submodules/magic_enum/include/magic_enum
 
-NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
-OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
-
 # CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g
 # LIBS  += -fsanitize=address
 
+UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Linux) #LINUX
 	LIBS += -lwiringPi
     SOURCES += ads1115.cpp
 endif
+
+NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
+OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
 
 .PHONY: all clean notrpi
 
