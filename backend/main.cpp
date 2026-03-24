@@ -585,6 +585,9 @@ void throttleFunction() {
 
             case STATE::POWER_OFF_OR_CHARGING_BRAKING:
                 VESCApplyBraking(brakeCurrent);
+                if (powerOn && !battery.charging) {
+                    throttleState = STATE::THROTTLE;
+                }
                 break;
         }
 
