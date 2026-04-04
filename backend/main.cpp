@@ -243,12 +243,13 @@ struct Trip {
 
     double range; // calculated at runtime
     double WhPerKm; // calculated at runtime
+    double rideTime; // in seconds
 };
 Trip trip_A, trip_B;
 
 struct {
-    double trip_distance;    // in km
-    double distance;         // in km
+    double rideTime; // in seconds
+    double distance; // in km
 } odometer;
 
 struct {
@@ -294,6 +295,7 @@ void tripReset(Trip *trip) {
     trip->wattHoursRegenerated = 0;
     trip->range = 0;
     trip->WhPerKm = 0;
+    trip->rideTime = 0;
 }
 
 void my_handler(int s) {
@@ -736,16 +738,19 @@ void IPCReadFunction() {
                             msg::addValue(toSend, motor.rpmPerKmh, 7);
                             msg::addValue(toSend, motor.magnetPairs, 0);
                             msg::addValue(toSend, odometer.distance, 7);
+                            msg::addValue(toSend, odometer.rideTime, 7);
                             msg::addValue(toSend, trip_A.distance, 15);
                             msg::addValue(toSend, trip_A.wattHoursUsed, 15);
                             msg::addValue(toSend, trip_A.wattHoursConsumed, 15);
                             msg::addValue(toSend, -(trip_A.wattHoursRegenerated), 15);
                             msg::addValue(toSend, trip_A.range, 15);
+                            msg::addValue(toSend, trip_A.rideTime, 15);
                             msg::addValue(toSend, trip_B.distance, 15);
                             msg::addValue(toSend, trip_B.wattHoursUsed, 15);
                             msg::addValue(toSend, trip_B.wattHoursConsumed, 15);
                             msg::addValue(toSend, -(trip_B.wattHoursRegenerated), 15);
                             msg::addValue(toSend, trip_B.range, 15);
+                            msg::addValue(toSend, trip_B.rideTime, 15);
                             msg::addValue(toSend, VESCData.avgMotorCurrent, 1);
                             msg::addValue(toSend, VESCData.avgCurrentDAxis, 1);
                             msg::addValue(toSend, VESCData.avgCurrentQAxis, 1);
@@ -1026,12 +1031,15 @@ void setupTOML(toml::table &tbl, const char* filepath) {
 
     // values
     odometer.distance                       = tbl["odometer"]["distance"].value_or<double>(0);
+    odometer.rideTime                       = tbl["odometer"]["rideTime"].value_or<double>(0);
     trip_A.distance                         = tbl["trip"]["distance"].value_or<double>(0);
     trip_A.wattHoursConsumed                = tbl["trip"]["wattHoursConsumed"].value_or<double>(0);
     trip_A.wattHoursRegenerated             = tbl["trip"]["wattHoursRegenerated"].value_or<double>(0);
+    trip_A.rideTime                         = tbl["trip"]["rideTime"].value_or<double>(0);
     trip_B.distance                         = tbl["trip_B"]["distance"].value_or<double>(0);
     trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"].value_or<double>(0);
     trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"].value_or<double>(0);
+    trip_B.rideTime                         = tbl["trip_B"]["rideTime"].value_or<double>(0);
     battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(0);
     battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(0);
     battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(0);
@@ -1067,12 +1075,15 @@ void setupTOML(toml::table &tbl, const char* filepath) {
 
 void TOMLSave(toml::table &tbl, const char* filepath) {
     updateTableValue(tbl, "odometer", "distance", odometer.distance);
+    updateTableValue(tbl, "odometer", "rideTime", odometer.rideTime);
     updateTableValue(tbl, "trip", "distance", trip_A.distance);
     updateTableValue(tbl, "trip", "wattHoursConsumed", trip_A.wattHoursConsumed);
     updateTableValue(tbl, "trip", "wattHoursRegenerated", trip_A.wattHoursRegenerated);
+    updateTableValue(tbl, "trip", "rideTime", trip_A.rideTime);
     updateTableValue(tbl, "trip_B", "distance", trip_B.distance);
     updateTableValue(tbl, "trip_B", "wattHoursConsumed", trip_B.wattHoursConsumed);
     updateTableValue(tbl, "trip_B", "wattHoursRegenerated", trip_B.wattHoursRegenerated);
+    updateTableValue(tbl, "trip_B", "rideTime", trip_B.rideTime);
     updateTableValue(tbl, "battery", "ampHoursUsed", battery.ampHoursUsed);
     updateTableValue(tbl, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
     updateTableValue(tbl, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
@@ -1354,6 +1365,20 @@ int main() {
 
         estimatedRangeCalculateStats(&trip_A, battery.wattHoursRemaining);
         estimatedRangeCalculateStats(&trip_B, battery.wattHoursRemaining);
+
+        {
+            static double uptimeInSeconds_rideTime_tmp;
+            double uptimeInSeconds_rideTime_freeze = uptimeInSeconds;
+            if (speed_kmh == 0.0) {
+                uptimeInSeconds_rideTime_tmp = uptimeInSeconds_rideTime_freeze;
+            } else {
+                double delta = uptimeInSeconds_rideTime_freeze - uptimeInSeconds_rideTime_tmp;
+                trip_A.rideTime += delta;
+                trip_B.rideTime += delta;
+                odometer.rideTime += delta;
+                uptimeInSeconds_rideTime_tmp = uptimeInSeconds_rideTime_freeze;
+            }
+        }
 
         static double uptimeInSeconds_tmp = 0;
         if ((uptimeInSeconds - uptimeInSeconds_tmp) >= 1800) { // 30 minutes

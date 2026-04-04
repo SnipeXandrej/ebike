@@ -69,6 +69,7 @@ struct trip {
 
     double range; // calculated at runtime
     double WhPerKm; // calculated at runtime
+    double rideTime; // in seconds
 };
 
 struct estRange {
@@ -89,6 +90,7 @@ struct {
     float motor_rpmPerKmh;
     float motor_magnetPairs;
     float odometer_distance;
+    float odometer_rideTime;
     float trip_distance;
     float phase_current;
     float phase_currentDAxis;
@@ -325,16 +327,19 @@ void processRead(std::string line) {
                             backend.motor_rpmPerKmh = msg::getValueFromSplit(packet, index);
                             backend.motor_magnetPairs = msg::getValueFromSplit(packet, index);
                             backend.odometer_distance = msg::getValueFromSplit(packet, index);
+                            backend.odometer_rideTime = msg::getValueFromSplit(packet, index);
                             backend.trip_A.distance = msg::getValueFromSplit(packet, index);
                             backend.trip_A.wattHoursUsed = msg::getValueFromSplit(packet, index);
                             backend.trip_A.wattHoursConsumed = msg::getValueFromSplit(packet, index);
                             backend.trip_A.wattHoursRegenerated = msg::getValueFromSplit(packet, index);
                             backend.trip_A.range = msg::getValueFromSplit(packet, index);
+                            backend.trip_A.rideTime = msg::getValueFromSplit(packet, index);
                             backend.trip_B.distance = msg::getValueFromSplit(packet, index);
                             backend.trip_B.wattHoursUsed = msg::getValueFromSplit(packet, index);
                             backend.trip_B.wattHoursConsumed = msg::getValueFromSplit(packet, index);
                             backend.trip_B.wattHoursRegenerated = msg::getValueFromSplit(packet, index);
                             backend.trip_B.range = msg::getValueFromSplit(packet, index);
+                            backend.trip_B.rideTime = msg::getValueFromSplit(packet, index);
                             backend.phase_current = msg::getValueFromSplit(packet, index);
                             backend.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
                             backend.phase_currentQAxis = msg::getValueFromSplit(packet, index);
@@ -1331,13 +1336,18 @@ int main(int argc, char** argv)
                                 "   Wh Consumed:    %0.3f\n"
                                 "   Wh Regenerated: %0.3f\n"
                                 "   Range left:     %0.3f\n"
-                                "   Wh/km:          %0.3f\n\n"
+                                "   Wh/km:          %0.3f\n"
+                                "   Ride time:      %dd %dh %dm %ds\n\n"
                                 , backend.trip_A.distance
                                 , backend.trip_A.wattHoursUsed
                                 , backend.trip_A.wattHoursConsumed
                                 , backend.trip_A.wattHoursRegenerated
                                 , backend.trip_A.range
                                 , backend.trip_A.wattHoursUsed / backend.trip_A.distance
+                                , (int)(backend.trip_A.rideTime / 60.0 / 60.0 / 24.0) // days
+                                , (int)(backend.trip_A.rideTime / 60.0 / 60.0) % 24 // hours
+                                , (int)(backend.trip_A.rideTime / 60.0) % 60 // minutes
+                                , (int)backend.trip_A.rideTime % 60 // seconds
                                 );
 
                     ImGui::SameLine();
@@ -1355,13 +1365,18 @@ int main(int argc, char** argv)
                                 "   Wh Consumed:    %0.3f\n"
                                 "   Wh Regenerated: %0.3f\n"
                                 "   Range left:     %0.3f\n"
-                                "   Wh/km:          %0.3f\n\n"
+                                "   Wh/km:          %0.3f\n"
+                                "   Ride time:      %dd %dh %dm %ds\n\n"
                                 , backend.trip_B.distance
                                 , backend.trip_B.wattHoursUsed
                                 , backend.trip_B.wattHoursConsumed
                                 , backend.trip_B.wattHoursRegenerated
                                 , backend.trip_B.range
                                 , backend.trip_B.wattHoursUsed / backend.trip_B.distance
+                                , (int)backend.trip_B.rideTime / 60 / 60 / 24 // days
+                                , (int)backend.trip_B.rideTime / 60 / 60 % 24 // hours
+                                , (int)backend.trip_B.rideTime / 60 % 60 // minutes
+                                , (int)backend.trip_B.rideTime % 60 // seconds
                                 );
                     ImGui::SameLine();
                     if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1369,10 +1384,19 @@ int main(int argc, char** argv)
                         msg::end(toSendExtra);
                     }
 
+
+                    ImVec4 textHighlightColor = ImVec4(0.0, 1.0, 0.78, 1.0);
                     ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::Text("Odometer: ");
-                    ImGui::PopStyleColor();
+                    ImGui::TextColored(textHighlightColor, "Ride time (total): ");
+                    ImGui::SameLine();
+                    ImGui::Text("%dd %dh %dm %ds"
+                                , (int)backend.odometer_rideTime / 60 / 60 / 24 // days
+                                , (int)backend.odometer_rideTime / 60 / 60 % 24 // hours
+                                , (int)backend.odometer_rideTime / 60 % 60 // minutes
+                                , (int)backend.odometer_rideTime % 60 // seconds);
+                    );
+
+                    ImGui::TextColored(textHighlightColor, "Odometer: ");
                     ImGui::SameLine();
                     ImGui::Text("%0.3f km", backend.odometer_distance);
 
