@@ -24,3 +24,7 @@ double RampLimiter::getValue(double targetValue, double rampValueOverTime, doubl
     timer.start();
     return output;
 }
+
+double RampLimiter::getValue() {
+    return output;
+}
