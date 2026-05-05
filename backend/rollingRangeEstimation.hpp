@@ -1,6 +1,6 @@
 class RollingRangeEstimation {
 private:
-    const double NUM_OF_KILOMETERS = 2.0;
+    const double NUM_OF_KILOMETERS = 5.0;
     const double PERCENT = 10.0;
 
     double currentDistanceKm = 0.0;
