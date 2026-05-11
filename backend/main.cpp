@@ -60,7 +60,7 @@ int mcp3004Setup(int, int) {return 0;};
 #endif
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.4.0"
+#define EBIKE_VERSION "0.5.0"
 
 // MCP23017
 #define MCP23017_ADDRESS 0x20
@@ -259,6 +259,7 @@ struct {
     bool automaticRegenerativeBraking = 0;
     bool minimizeDrivetrainBacklash = 0;
     bool enableDualVESC = 0;
+    int dualMotorDriveStyle = 0;
     int secondVESCID = 0;
 } settings;
 
@@ -435,7 +436,7 @@ void throttleFunction() {
     float throttleToBrakeTransitionTime = 40.0;
     float realBrakeTransitionTime = 20.0;
     float automaticRegenerativeBrakingCurrent = 12.0; // 12A
-    float minSpeedKmh = 2.0; // used for automaticRegenerativeBraking and throttle transitioning
+    float minSpeedKmh = 0.1; // used for automaticRegenerativeBraking and throttle transitioning
     throttleState = STATE::POWER_OFF_OR_CHARGING;
     brakeMap.setCurve(brakeCurve);
 
@@ -459,8 +460,8 @@ void throttleFunction() {
                                             throttleClampCurrent
                                     ),
                                     100,
-                                    20,
-                                    5
+                                    40,
+                                    50
                                 );
 
         static RampLimiter brakeRamp;
@@ -512,15 +513,21 @@ void throttleFunction() {
                     break;
                 }
 
+                static bool movingBecauseThrottle = false;
+
                 if (throttleLevel == 0.0) {
                     if (speed_kmh > minSpeedKmh) {
-                        throttleCurrentToApply = minCurrent;
+                        if (movingBecauseThrottle)
+                            throttleCurrentToApply = minCurrent;
+                        else
+                            throttleCurrentToApply = 0;
 
                         if (settings.automaticRegenerativeBraking) {
                             throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
                             valueTransition.throttleToBrake.start();
                         }
                     } else {
+                        movingBecauseThrottle = false;
                         valueTransition.throttleShockCurrent.start();
                         throttleCurrentToApply = 0.0;
                     }
@@ -530,6 +537,7 @@ void throttleFunction() {
                 }
 
                 if (throttleLevel > 0.0) {
+                    movingBecauseThrottle = true;
                     if (valueTransition.throttleShockCurrent.timer.getTime_ms_now() < initialShockTransitionTime) {
                         throttleCurrentToApply = valueTransition.throttleShockCurrent.getValueDifference(0.0, minCurrent, initialShockTransitionTime);
                         valueTransition.throttleReal.start();
@@ -608,10 +616,16 @@ void throttleFunction() {
     } // while()
 }
 
+enum DUAL_MOTOR_DRIVE_STYLE {
+    SIMPLE = 0,
+    ADVANCED_1 = 1,
+    ADVANCED_2 = 2,
+};
+
 float primaryCurrent = 0.0;
 float secondaryCurrent = 0.0;
 float primaryVESCSaturatedLeftoverCurrent = 0;
-float moveOverCurrent = 0.0;
+
 void vescValueProcessingFunction() {
     std::printf("[vescValueProcessingThread] Started thread\n");
     Timer timerAcceleration;
@@ -623,33 +637,50 @@ void vescValueProcessingFunction() {
         switch (throttle_info.is_accelerating) {
             case true:
                 if (settings.enableDualVESC) {
-                    const float singleMotorCurrent = 150;
-                    const float defaultRatio = 0.96;
+                    if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::SIMPLE) {
+                        primaryCurrent = throttle_info.requested_current / 2.0;
+                        secondaryCurrent = throttle_info.requested_current / 2.0;
+                    } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_1) {
+                        float singleMotorCurrent = 200;
 
-                    if (throttle_info.requested_current > throttle_info.maximum_current)
-                        throttle_info.requested_current = throttle_info.maximum_current;
+                        if (throttle_info.requested_current < singleMotorCurrent) {
+                            primaryCurrent = throttle_info.requested_current;
+                            secondaryCurrent = 0.0;
+                        } else {
+                            float ratio = 1.0 - ((0.5 / (throttle_info.maximum_current - singleMotorCurrent)) * (throttle_info.requested_current - singleMotorCurrent));
 
-                    float ratio = defaultRatio - (((0.5 - (1.0 - defaultRatio)) / (throttle_info.maximum_current - singleMotorCurrent)) * (throttle_info.requested_current - singleMotorCurrent));
-                    if (ratio > defaultRatio)
-                        ratio = defaultRatio;
+                            float extraCurrent = 0.0;
+                            float _primaryVesc = throttle_info.requested_current * ratio;
+                            if (_primaryVesc > (throttle_info.maximum_current * 0.5)) {
+                                extraCurrent = _primaryVesc - (throttle_info.maximum_current * 0.5);
+                            }
+                            primaryCurrent = _primaryVesc - extraCurrent;
+                            secondaryCurrent = throttle_info.requested_current * (1.0 - ratio) + extraCurrent;
+                        }
+                    } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_2) {
+                        float singleMotorCurrent = 200;
+                        const float defaultRatio = 1.0;
+                        float ratioMaximumCurrent = 225;
 
-                    if (ratio < 0.5)
-                        ratio = 0.5;
+                        if (throttle_info.requested_current > throttle_info.maximum_current)
+                            throttle_info.requested_current = throttle_info.maximum_current;
 
-                    float _primaryCurrent = throttle_info.requested_current * ratio;
-                    if (_primaryCurrent > (throttle_info.maximum_current * 0.5)) {
-                        moveOverCurrent = _primaryCurrent - (throttle_info.maximum_current * 0.5);
-                    } else {
-                        moveOverCurrent = 0.0;
+                        float ratio = defaultRatio - (((0.5 - (1.0 - defaultRatio)) / (ratioMaximumCurrent - singleMotorCurrent)) * (throttle_info.requested_current - singleMotorCurrent));
+                        if (ratio > defaultRatio)
+                            ratio = defaultRatio;
+
+                        if (ratio < 0.5)
+                            ratio = 0.5;
+
+                        primaryCurrent = throttle_info.requested_current * ratio;
+                        secondaryCurrent = (throttle_info.requested_current * (1.0 - ratio)) + primaryVESCSaturatedLeftoverCurrent;
+
+                        if (primaryCurrent > throttle_info.maximum_current / 2.0)
+                            primaryCurrent = throttle_info.maximum_current / 2.0;
+
+                        if (secondaryCurrent > throttle_info.maximum_current / 2.0)
+                            secondaryCurrent = throttle_info.maximum_current / 2.0;
                     }
-                    primaryCurrent = _primaryCurrent - moveOverCurrent;
-                    secondaryCurrent = (throttle_info.requested_current * (1.0 - ratio)) + moveOverCurrent + primaryVESCSaturatedLeftoverCurrent;
-
-                    if (primaryCurrent > throttle_info.maximum_current / 2.0)
-                        primaryCurrent = throttle_info.maximum_current / 2.0;
-
-                    if (secondaryCurrent > throttle_info.maximum_current / 2.0)
-                        secondaryCurrent = throttle_info.maximum_current / 2.0;
 
                     VESC.setCurrent(primaryCurrent);
                     VESC.setCurrent(secondaryCurrent, settings.secondVESCID);
@@ -660,8 +691,8 @@ void vescValueProcessingFunction() {
 
             case false:
                 if (settings.enableDualVESC) {
-                    VESC.setBrakeCurrent(0.0);
-                    VESC.setBrakeCurrent(throttle_info.requested_current, settings.secondVESCID);
+                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.1);
+                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.9, settings.secondVESCID);
                 } else {
                     VESC.setBrakeCurrent(throttle_info.requested_current);
                 }
@@ -683,8 +714,9 @@ void vescValueProcessingFunction() {
                 tempData.avgCurrentQAxis += VESCSecondary.avgCurrentQAxis;
                 tempData.avgInputCurrent += VESCSecondary.avgInputCurrent;
                 tempData.avgMotorCurrent += VESCSecondary.avgMotorCurrent;
-                tempData.dutyCycleNow += VESCSecondary.dutyCycleNow;
-                tempData.dutyCycleNow = tempData.dutyCycleNow / 2.0;
+                if (tempData.dutyCycleNow < VESCSecondary.dutyCycleNow) {
+                    tempData.dutyCycleNow = VESCSecondary.dutyCycleNow;
+                }
                 tempData.wattHours += VESCSecondary.wattHours;
                 tempData.wattHoursCharged += VESCSecondary.wattHoursCharged;
                 if (tempData.tempMotor < VESCSecondary.tempMotor) {
@@ -697,15 +729,14 @@ void vescValueProcessingFunction() {
             VESCCombined = tempData;
 
             static RampLimiter _tempPrimaryAvgMotorCurrent;
-            _tempPrimaryAvgMotorCurrent.getValue(VESCPrimary.avgMotorCurrent, 50, 100, 20);
-            if (_tempPrimaryAvgMotorCurrent.getValue() < primaryCurrent) {
-                float _temp = primaryCurrent - _tempPrimaryAvgMotorCurrent.getValue();
+            if (VESCPrimary.avgMotorCurrent < primaryCurrent) {
+                float _temp = primaryCurrent - VESCPrimary.avgMotorCurrent;
                 if (_temp < 0.0)
                     _temp = 0.0;
 
-                primaryVESCSaturatedLeftoverCurrent = _temp;
+                primaryVESCSaturatedLeftoverCurrent = _tempPrimaryAvgMotorCurrent.getValue(_temp, 100, 300, 100);
             } else {
-                primaryVESCSaturatedLeftoverCurrent = 0.0;
+                primaryVESCSaturatedLeftoverCurrent = _tempPrimaryAvgMotorCurrent.getValue(0.0, 100, 1000, 100);
             }
 
             static double tachometer_abs_previous;
@@ -832,6 +863,18 @@ void IPCReadFunction() {
                             msg::addValue(toSend, -(trip_B.wattHoursRegenerated), 15);
                             msg::addValue(toSend, trip_B.range, 15);
                             msg::addValue(toSend, trip_B.rideTime, 15);
+                            msg::addValue(toSend, VESCPrimary.avgMotorCurrent, 1);
+                            msg::addValue(toSend, VESCPrimary.avgCurrentDAxis, 1);
+                            msg::addValue(toSend, VESCPrimary.avgCurrentQAxis, 1);
+                            msg::addValue(toSend, VESCPrimary.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+                            msg::addValue(toSend, VESCPrimary.tempMotor, 1);
+                            msg::addValue(toSend, VESCPrimary.tempMosfet, 1);
+                            msg::addValue(toSend, VESCSecondary.avgMotorCurrent, 1);
+                            msg::addValue(toSend, VESCSecondary.avgCurrentDAxis, 1);
+                            msg::addValue(toSend, VESCSecondary.avgCurrentQAxis, 1);
+                            msg::addValue(toSend, VESCSecondary.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+                            msg::addValue(toSend, VESCSecondary.tempMotor, 1);
+                            msg::addValue(toSend, VESCSecondary.tempMosfet, 1);
                             msg::addValue(toSend, VESCCombined.avgMotorCurrent, 1);
                             msg::addValue(toSend, VESCCombined.avgCurrentDAxis, 1);
                             msg::addValue(toSend, VESCCombined.avgCurrentQAxis, 1);
@@ -1080,14 +1123,13 @@ void IPCReadFunction() {
 
                                 debuginfo = std::format("Speed: {} km/h\n"
                                                         "{}\n"
-                                                        "VESC Primary\n"
+                                                        "VESC Primary Current\n"
                                                         "       Requested: {} A\n"
-                                                        "       Current:   {} A\n"
-                                                        "VESC Primary\n"
+                                                        "       Actual:    {} A\n"
+                                                        "VESC Secondary Current\n"
                                                         "       Requested: {} A\n"
-                                                        "       Current:   {} A\n"
+                                                        "       Actual:    {} A\n"
                                                         "\n"
-                                                        "moveOverCurrent:  {} A\n"
                                                         "primaryVESCSaturatedLeftoverCurrent: {} A\n"
                                                         , speed_kmh
                                                         , throttleFunctionDebugInfo
@@ -1095,7 +1137,6 @@ void IPCReadFunction() {
                                                         , VESCPrimary.avgCurrentQAxis
                                                         , secondaryCurrent //VESCSecondary.avgCurrentQAxis
                                                         , VESCSecondary.avgCurrentQAxis
-                                                        , moveOverCurrent
                                                         , primaryVESCSaturatedLeftoverCurrent
                                                         );
                             }
@@ -1146,6 +1187,7 @@ void setupTOML(toml::table &tbl, const char* filepath) {
     settings.automaticRegenerativeBraking   = tbl["settings"]["automaticRegenerativeBraking"].value_or(0);
     settings.minimizeDrivetrainBacklash     = tbl["settings"]["minimizeDrivetrainBacklash"].value_or(0);
     settings.enableDualVESC                 = tbl["settings"]["enableDualVESC"].value_or(0);
+    settings.dualMotorDriveStyle            = tbl["settings"]["dualMotorDriveStyle"].value_or(0);
     settings.secondVESCID                 = tbl["settings"]["secondVESCID"].value_or(0);
     PP.setProfile(tbl["PP"]["setProfile"].value_or(0));
 
@@ -1190,6 +1232,7 @@ void TOMLSave(toml::table &tbl, const char* filepath) {
     updateTableValue(tbl, "settings", "automaticRegenerativeBraking", settings.automaticRegenerativeBraking);
     updateTableValue(tbl, "settings", "minimizeDrivetrainBacklash", settings.minimizeDrivetrainBacklash);
     updateTableValue(tbl, "settings", "enableDualVESC", settings.enableDualVESC);
+    updateTableValue(tbl, "settings", "dualMotorDriveStyle", settings.dualMotorDriveStyle);
     updateTableValue(tbl, "settings", "secondVESCID", settings.secondVESCID);
     updateTableValue(tbl, "PP", "setProfile", PP.getProfile());
 
@@ -1248,7 +1291,8 @@ void setupADC() {
 }
 
 void setupADC2() {
-    int dev0 = wiringPiI2CSetupInterface("/dev/i2c-0", ADS1115_ADDRESS);
+    char devPath[11] = "/dev/i2c-0";
+    int dev0 = wiringPiI2CSetupInterface(devPath, ADS1115_ADDRESS);
 	ads1115Setup_fd(ADS1115_BASEPIN, dev0);
     digitalWrite(ADS1115_BASEPIN, 5); // Diff between ch2 and ch3
     digitalWrite(ADS1115_BASEPIN+1, ADS1115_DR_128);

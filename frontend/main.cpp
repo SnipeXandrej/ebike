@@ -39,7 +39,7 @@
 #include "waylandUtils.hpp"
 #endif
 
-#define GUI_VERSION "0.4.0"
+#define GUI_VERSION "0.5.0"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -78,6 +78,16 @@ struct estRange {
     float WhPerKm;
 };
 
+
+struct VESCMotorStats {
+    float phase_current;
+    float phase_currentDAxis;
+    float phase_currentQAxis;
+    float duty_cycle;
+    float temperature_motor;
+    float temperature_vesc;
+};
+
 struct {
     float totalSecondsSinceBoot = 0;
     uint64_t clockSecondsSinceBoot = 0;
@@ -92,12 +102,9 @@ struct {
     float odometer_distance;
     float odometer_rideTime;
     float trip_distance;
-    float phase_current;
-    float phase_currentDAxis;
-    float phase_currentQAxis;
-    float duty_cycle;
-    float temperature_motor;
-    float temperature_vesc;
+    VESCMotorStats VESCPrimary;
+    VESCMotorStats VESCSecondary;
+    VESCMotorStats VESCCombined;
     float loopTimeMain_ms;
     float loopTimeThrottle_ms;
     float loopTimeVescValueProcessing_ms;
@@ -163,8 +170,8 @@ struct {
 struct {
     MovingAverage wattageMoreSmooth;
     MovingAverage whOverKm;
-    MovingAverage motorDCurrent;
-    MovingAverage motorQCurrent;
+    MovingAverage motorPrimaryCurrent;
+    MovingAverage motorSecondaryCurrent;
 } movingAverages;
 
 struct {
@@ -217,8 +224,8 @@ struct {
     ArcProgressBar phaseCurrent;
     ArcProgressBar motorTemp;
     ArcProgressBar motorDutyCycle;
-    ArcProgressBar motorDCurrent;
-    ArcProgressBar motorQCurrent;
+    ArcProgressBar motorPrimaryCurrent;
+    ArcProgressBar motorSecondaryCurrent;
 } arcBar;
 
 float buttonWidth = 170.0;
@@ -340,12 +347,24 @@ void processRead(std::string line) {
                             backend.trip_B.wattHoursRegenerated = msg::getValueFromSplit(packet, index);
                             backend.trip_B.range = msg::getValueFromSplit(packet, index);
                             backend.trip_B.rideTime = msg::getValueFromSplit(packet, index);
-                            backend.phase_current = msg::getValueFromSplit(packet, index);
-                            backend.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
-                            backend.phase_currentQAxis = msg::getValueFromSplit(packet, index);
-                            backend.duty_cycle = msg::getValueFromSplit(packet, index);
-                            backend.temperature_motor = msg::getValueFromSplit(packet, index);
-                            backend.temperature_vesc = msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.phase_current = msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.phase_currentQAxis = msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.duty_cycle = msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.temperature_motor = msg::getValueFromSplit(packet, index);
+                            backend.VESCPrimary.temperature_vesc = msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.phase_current = msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.phase_currentQAxis = msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.duty_cycle = msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.temperature_motor = msg::getValueFromSplit(packet, index);
+                            backend.VESCSecondary.temperature_vesc = msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.phase_current = msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.phase_currentDAxis = -msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.phase_currentQAxis = msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.duty_cycle = msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.temperature_motor = msg::getValueFromSplit(packet, index);
+                            backend.VESCCombined.temperature_vesc = msg::getValueFromSplit(packet, index);
                             backend.totalSecondsSinceBoot = msg::getValueFromSplit(packet, index);
                             backend.loopTimeMain_ms = msg::getValueFromSplit(packet, index);
                             backend.loopTimeThrottle_ms = msg::getValueFromSplit(packet, index);
@@ -519,8 +538,8 @@ int main(int argc, char** argv)
 
     movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
     movingAverages.whOverKm.smoothingFactor = 0.05f;
-    movingAverages.motorDCurrent.smoothingFactor = 0.4f;
-    movingAverages.motorQCurrent.smoothingFactor = 0.4f;
+    movingAverages.motorPrimaryCurrent.smoothingFactor = 0.4f;
+    movingAverages.motorSecondaryCurrent.smoothingFactor = 0.4f;
 
     // ########################
     // ######### TOML #########
@@ -534,11 +553,8 @@ int main(int argc, char** argv)
     arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
     arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
     arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
-    arcBar.motorDCurrent.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "PhD");
-    arcBar.motorQCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "PhQ");
-
-    // arcBar.motorDCurrent.setTextScaling(0.6);
-    // arcBar.motorQCurrent.setTextScaling(0.6);
+    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 225.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
+    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 225.0, true, "Ph Sec");
 
     // ################
     // ##### IPC ######
@@ -830,7 +846,7 @@ int main(int argc, char** argv)
             ImGui::PushFont(nerdFont);
                 ImGui::SetCursorPosY(ImGui::GetCursorPosY() - 5.0);
                 ImGui::Text("\uf013");
-                if (ImGui::IsItemClicked()) {
+                if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                     gesture.openGesture();
                 }
             ImGui::PopFont();
@@ -870,7 +886,7 @@ int main(int argc, char** argv)
             ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
             ImGui::TextColored(color, "%s", text);
 
-            if (ImGui::IsItemClicked()) {
+            if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 msg::start(toSendExtra, COMMAND_ID::TOGGLE_CHARGING_STATE);
                 msg::end(toSendExtra);
             }
@@ -928,20 +944,20 @@ int main(int argc, char** argv)
 
             ImGui::SetCursorPos(ImVec2(30.0f, io.DisplaySize.y - 0.0f - 150.0));
             if (settings.showMotorDutyInsteadOfMotorTemp) {
-                arcBar.motorDutyCycle.ProgressBarArc(backend.duty_cycle);
+                arcBar.motorDutyCycle.ProgressBarArc(backend.VESCCombined.duty_cycle);
             } else {
-                arcBar.motorTemp.ProgressBarArc(backend.temperature_motor);
+                arcBar.motorTemp.ProgressBarArc(backend.VESCCombined.temperature_motor);
             }
-            if (ImGui::IsItemClicked()) {
+            if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 settings.showMotorDutyInsteadOfMotorTemp = !settings.showMotorDutyInsteadOfMotorTemp;
             }
 
             // Bottom right
             ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 105.0));
-            arcBar.motorDCurrent.ProgressBarArc(movingAverages.motorDCurrent.moveAverage(backend.phase_currentDAxis));
+            arcBar.motorPrimaryCurrent.ProgressBarArc(movingAverages.motorPrimaryCurrent.moveAverage(backend.VESCPrimary.phase_current));
 
             ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
-            arcBar.motorQCurrent.ProgressBarArc(movingAverages.motorQCurrent.moveAverage(backend.phase_currentQAxis));
+            arcBar.motorSecondaryCurrent.ProgressBarArc(movingAverages.motorSecondaryCurrent.moveAverage(backend.VESCSecondary.phase_current));
 
         ImGui::EndGroup();
 
@@ -979,7 +995,7 @@ int main(int argc, char** argv)
                     }
 
                     // TODO: this is terrible...
-                    if (ImGui::IsItemClicked()) {
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                         if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
                             settings.showTripA = false;
                         else if (!settings.showTripA) {
@@ -1022,7 +1038,7 @@ int main(int argc, char** argv)
                     }
 
                     // TODO: this is terrible...
-                    if (ImGui::IsItemClicked()) {
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                         if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
                             settings.showTripA = false;
                         else if (!settings.showTripA) {
@@ -1075,7 +1091,7 @@ int main(int argc, char** argv)
                     }
                 ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
                     TextCenteredOnLine(text, 1.0f, false);
-                    if (ImGui::IsItemClicked()) {
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                         settings.showTripA = !settings.showTripA;
                     }
                 ImGui::PopFont();
@@ -1467,7 +1483,7 @@ int main(int argc, char** argv)
                     ImGui::PopStyleColor();
                     ImGui::PopFont();
 
-                    ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.temperature_vesc);
+                    ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.VESCCombined.temperature_vesc);
                     ImGui::Text(" ");
 
                     ImGui::BeginGroup();
