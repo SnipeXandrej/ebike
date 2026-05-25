@@ -1,4 +1,5 @@
 #include "client.hpp"
+#include "messagingUtils.hpp"
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -17,6 +18,12 @@ int ClientSocket::createClientSocket(int PORT) {
 int ClientSocket::createClientSocket(int PORT, const char* ADDRESS) {
     lastServerAddress = (char*)ADDRESS;
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct timeval tv;
+    tv.tv_sec = connectionTimeoutS;
+    tv.tv_usec = 0;
+    setsockopt(clientSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(clientSocket, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     int yes = 1;
     setsockopt(clientSocket, SOL_SOCKET, SO_KEEPALIVE, &yes, sizeof(yes));
@@ -52,27 +59,24 @@ std::string ClientSocket::read() {
 
     while (true) {
         // Check if there is at least one complete line in the buffer
-        size_t newlinePos = receivedBuffer.find('\n');
-        if (newlinePos != std::string::npos) {
-            // get all complete lines
-            size_t pos = 0;
-            while (true) {
-                newlinePos = receivedBuffer.find('\n', pos);
-                if (newlinePos == std::string::npos) break;
+        // Complete lines end with msg::messageEnd ("@@!!\n")
+        size_t consumed = 0;
+        while (true) {
+            size_t endPos = receivedBuffer.find(msg::messageEnd, consumed);
+            if (endPos == std::string::npos)
+                break;
 
-                // include '\n' in the extracted line (+1)
-                std::string line = receivedBuffer.substr(pos, newlinePos - pos + 1);
+            size_t frameEnd = endPos + msg::messageEnd.size();
+            output.append(receivedBuffer, consumed, frameEnd - consumed);
+            consumed = frameEnd;
+        }
 
-                output += line;
-                pos = newlinePos + 1;
-            }
-
-            // Remove processed lines from the buffer
-            receivedBuffer.erase(0, pos);
+        if (consumed > 0) {
+            receivedBuffer.erase(0, consumed);
 
             receivedLength = output.size();
 
-            return output;  // return all complete lines
+            return output;
         }
 
         // if theres no complete line then try receiving more data

@@ -1,4 +1,5 @@
 #include "server.hpp"
+#include "messagingUtils.hpp"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -10,6 +11,12 @@
 
 int ServerSocket::createServerSocket(int PORT) {
     serverSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    struct timeval tv;
+    tv.tv_sec = connectionTimeoutS;
+    tv.tv_usec = 0;
+    setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(serverSocket, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
     int opt = 1;
     setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -51,18 +58,20 @@ std::string ServerSocket::read() {
 
     while (true) {
         // Check if there is at least one complete line in the buffer
-        size_t newlinePos = receivedBuffer.find('\n');
-        if (newlinePos != std::string::npos) {
-            size_t pos = 0;
-            while (true) {
-                newlinePos = receivedBuffer.find('\n', pos);
-                if (newlinePos == std::string::npos) break;
+        // Complete lines end with msg::messageEnd ("@@!!\n")
+        size_t consumed = 0;
+        while (true) {
+            size_t endPos = receivedBuffer.find(msg::messageEnd, consumed);
+            if (endPos == std::string::npos)
+                break;
 
-                output += receivedBuffer.substr(pos, (newlinePos - pos) + 1);
-                pos = newlinePos + 1;
-            }
+            size_t frameEnd = endPos + msg::messageEnd.size();
+            output.append(receivedBuffer, consumed, frameEnd - consumed);
+            consumed = frameEnd;
+        }
 
-            receivedBuffer.erase(0, pos);
+        if (consumed > 0) {
+            receivedBuffer.erase(0, consumed);
             receivedLength = output.size();
 
             return output;

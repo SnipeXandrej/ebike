@@ -1,6 +1,8 @@
 #include "utils.hpp"
 #include "commonUtils.hpp"
-#include <math.h>
+#include <cmath>
+#include <cfloat>
+#include <cstdio>
 
 void addVUMeter(float input, float input_min, float input_max, const char *label, int precision, int LED_COUNT) {
     // int LED_COUNT = 18;
@@ -177,7 +179,7 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
 
         drawRotatedRect(draw_list, pos, size, 65.0f, color, 2.0f); // the actual bar
 
-        pos.x += 4.0f;
+        pos.x += 5.0f;
     }
 
     for (int i = 0; i <= numOfBars; i++) {
@@ -190,13 +192,21 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
             drawRotatedRect(draw_list, pos2, size, 65.0f, colorPoints, 2.0f);
 
             ImGui::BeginGroup();
-                ImGui::SetCursorPos(ImVec2(pos2.x + 5.0, pos2.y + 20));
+                ImVec2 textSize = ImGui::CalcTextSize(std::to_string(10).c_str());
+                int textComp = 0;
+                if (kw_point > 9) {
+                    textComp = textSize.x / 4.0;
+                } else {
+                    textComp = 0;
+                }
+
+                ImGui::SetCursorPos(ImVec2(pos2.x + 4.0 - textComp, pos2.y + 20));
                 ImGui::Text("%0.0f", kw_point);
                 kw_point += indicatorEveryWatts / 1000.0;
             ImGui::EndGroup();
         }
 
-        pos2.x += 4.0f;
+        pos2.x += 5.0f;
     }
 }
 

@@ -18,4 +18,7 @@ public:
     int serverSocket = -1;
     int receivedLength = 0;
     bool isShutdown = 0;
+
+private:
+    int connectionTimeoutS = 30;
 };

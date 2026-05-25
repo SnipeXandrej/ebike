@@ -25,4 +25,5 @@ public:
 
 private:
     bool isShutdown = false;
+    int connectionTimeoutS = 30;
 };

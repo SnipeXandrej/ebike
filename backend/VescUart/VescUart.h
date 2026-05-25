@@ -44,6 +44,7 @@ class VescUart
       float l_in_current_max;
       std::string name = "Default"; // its being set by us, not by the VESC
       float c_phase_current_max; // its being set by us, not by the VESC
+      bool c_force_single_motor_acceleration; // its being set by us, not by the VESC
       // int motor_poles;
       // float gear_ratio;
       // float wheel_diameter;

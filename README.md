@@ -46,9 +46,9 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 - [ ] Motor fan cooling
 - [ ] Bike unlocking (through a card? NFC? 1-Wire?)
 - [ ] Water resistant
-- [x] 100km range (at maybe like 30-35km/h)
+- [x] 100km range (at maybe like 30km/h)
 - [ ] Charge the battery with USB-C PD Charger
-- [ ] Charge the battery with a custom power supply
+- [x] Charge the battery with a custom power supply (84V 16A Max)
 - [ ] Onboard USB-C PD Charger 65W + 18W (USB-C + USB-A) (for a phone for example)
 - [ ] Logging of stats like the battery voltage, current, motor speed, phase current, etc.
 - [ ] Screen recording

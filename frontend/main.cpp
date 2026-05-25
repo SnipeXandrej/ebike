@@ -39,7 +39,7 @@
 #include "waylandUtils.hpp"
 #endif
 
-#define GUI_VERSION "0.5.0"
+#define GUI_VERSION "0.6.0"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -53,6 +53,7 @@ struct VESC_MCCONF {
     float l_in_current_min;
     float l_in_current_max;
     float c_current_phase_max;
+    bool c_force_single_motor_acceleration;
     std::string name;
     int id;
     // int motor_poles;
@@ -77,7 +78,6 @@ struct estRange {
     float distance;
     float WhPerKm;
 };
-
 
 struct VESCMotorStats {
     float phase_current;
@@ -174,17 +174,6 @@ struct {
     MovingAverage motorSecondaryCurrent;
 } movingAverages;
 
-struct {
-    double analog0;
-    double analog1;
-    double analog2;
-    double analog3;
-    double analog4;
-    double analog5;
-    double analog6;
-    double analog7;
-} analogReadings;
-
 bool done = false;
 
 char currentTimeAndDate[100];
@@ -262,6 +251,7 @@ void setMcconfCustomValues(VESC_MCCONF mcconf) {
     msg::addValue(toSendExtra, mcconf.l_in_current_min, 7);
     msg::addValue(toSendExtra, mcconf.l_in_current_max, 7);
     msg::addValue(toSendExtra, mcconf.c_current_phase_max, 7);
+    msg::addValue(toSendExtra, mcconf.c_force_single_motor_acceleration, 0);
     msg::end(toSendExtra);
 }
 
@@ -299,6 +289,7 @@ void processRead(std::string line) {
                     command_id = std::stoi(packet[0]);
                 } catch(...) {
                     std::println("Failed to convert command_id stoi()");
+                    std::print("Packet:\n{}\n\n\n\nEND\n", packet[0]);
                     command_id = -1;
                 }
 
@@ -403,17 +394,7 @@ void processRead(std::string line) {
                             mcconf_vesc.l_in_current_max = msg::getValueFromSplit(packet, index);
                             mcconf_vesc.name = msg::getValueFromSplit_string(packet, index);
                             mcconf_vesc.c_current_phase_max = msg::getValueFromSplit(packet, index);
-                            break;
-
-                        case COMMAND_ID::GET_ANALOG_READINGS:
-                            analogReadings.analog0 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog1 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog2 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog3 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog4 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog5 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog6 = msg::getValueFromSplit(packet, index);
-                            analogReadings.analog7 = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc.c_force_single_motor_acceleration = msg::getValueFromSplit(packet, index);
                             break;
 
                         case COMMAND_ID::BACKEND_LOG:
@@ -432,6 +413,12 @@ void processRead(std::string line) {
 
                         case COMMAND_ID::GET_DEBUGINFO:
                             backend.debuginfo = msg::getValueFromSplit_string(packet, index);
+
+                            break;
+
+                        default:
+                            if (command_id != COMMAND_ID::ARE_YOU_ALIVE)
+                                std::print("Invalid command '{}'", command_id);
 
                             break;
                     }
@@ -502,6 +489,20 @@ static uint64_t ComputeDrawDataHash(ImDrawData* draw_data, const ImVec2& display
 }
 uint64_t prev_draw_hash = 0;
 
+void widgetPerformanceSelector(int width) {
+    ImVec2 cursorPos = ImGui::GetContentRegionAvail();
+    // cursorPos.x = (cursorPos.x / 2.0) - (width / 2.0);
+    // ImGui::SetCursorPos(ImVec2(cursorPos.x, ImGui::GetIO().DisplaySize.y - 44.0f));
+
+    ImGui::SetNextItemWidth(width);
+    if (ImGui::Combo("##v", &backend.currentPowerProfile, backend.availablePowerProfiles.data())) {
+        setPowerProfile(backend.currentPowerProfile);
+
+        msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
+        msg::end(toSendExtra);
+    }
+}
+
 // Main code
 int main(int argc, char** argv)
 {
@@ -553,8 +554,8 @@ int main(int argc, char** argv)
     arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
     arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
     arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
-    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 225.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
-    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 225.0, true, "Ph Sec");
+    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
+    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Sec");
 
     // ################
     // ##### IPC ######
@@ -635,9 +636,6 @@ int main(int argc, char** argv)
                 msg::end(toSend);
 
                 msg::start(toSend, COMMAND_ID::GET_STATS);
-                msg::end(toSend);
-
-                msg::start(toSend, COMMAND_ID::GET_ANALOG_READINGS);
                 msg::end(toSend);
 
                 msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
@@ -775,7 +773,6 @@ int main(int argc, char** argv)
 
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    // style.FontScaleDpi = 2.0f;
     style.FontScaleDpi = 2.0f;
 
     bool openAccelerationTester = false;
@@ -870,12 +867,12 @@ int main(int argc, char** argv)
             } else {
                 drag_was_active = false;
             }
-
-            ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
-            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
-            ImGui::Text("%s", currentTimeAndDate);
         }
         #endif
+
+        ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
+        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
+        ImGui::Text("%s", currentTimeAndDate);
 
         {
             // Bike Battery
@@ -966,9 +963,10 @@ int main(int argc, char** argv)
         ImGui::SetCursorPosX(200);
         ImGui::SetCursorPosY(75);
         ImGui::BeginGroup();
-            int numOfBars = 100;
-            float maxWatts = 9000;
+            int numOfBars = 96;
+            float maxWatts = 12000;
             float indicateEveryWatts = 1000;
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() - 33.0, ImGui::GetCursorPosY()));
             powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
 
             ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
@@ -1085,9 +1083,9 @@ int main(int argc, char** argv)
                     sprintf(text, "O: %0.0f", backend.odometer_distance);
                     TextCenteredOnLine(text, 0.0f, false);
                     if (settings.showTripA) {
-                        sprintf(text, "T: %4.1f¹", backend.trip_A.distance);
+                        sprintf(text, "%4.1f¹:T", backend.trip_A.distance);
                     } else {
-                        sprintf(text, "T: %4.1f²", backend.trip_B.distance);
+                        sprintf(text, "%4.1f²:T", backend.trip_B.distance);
                     }
                 ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
                     TextCenteredOnLine(text, 1.0f, false);
@@ -1096,24 +1094,8 @@ int main(int argc, char** argv)
                     }
                 ImGui::PopFont();
 
-                {
-                    // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.25);
-
-                    ImVec2 cursorPos = ImGui::GetContentRegionAvail();
-                    cursorPos.x = (cursorPos.x / 2.0) - 115;
-
-                    ImGui::SetCursorPos(ImVec2(cursorPos.x, io.DisplaySize.y - 44.0f));
-
-                    ImGui::SetNextItemWidth(230.0);
-                    if (ImGui::Combo("##v", &backend.currentPowerProfile, backend.availablePowerProfiles.data())) {
-                        setPowerProfile(backend.currentPowerProfile);
-
-                        msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
-                        msg::end(toSendExtra);
-                    }
-
-                    // ImGui::PopFont();
-                }
+                ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 115.0f, io.DisplaySize.y - 44.0f));
+                widgetPerformanceSelector(230);
 
                 ImGui::EndGroup();
             }
@@ -1501,6 +1483,7 @@ int main(int argc, char** argv)
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min, 1.0);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max, 1.0);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf_vesc.c_current_phase_max, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Checkbox("Single Motor Acceleration", &mcconf_vesc.c_force_single_motor_acceleration);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
 
                         if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1511,27 +1494,6 @@ int main(int argc, char** argv)
                         if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
                             setMcconfCustomValues(mcconf_vesc);
                         }
-                    ImGui::EndGroup();
-
-
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("Analog Readings");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    ImGui::BeginGroup();
-                    {
-                        float ItemWidth = 150.0;
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog0:     %0.6lf", analogReadings.analog0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog1:     %0.6lf", analogReadings.analog1);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog2:     %0.6lf", analogReadings.analog2);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog3:     %0.6lf", analogReadings.analog3);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog4:     %0.6lf", analogReadings.analog4);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog5:     %0.6lf", analogReadings.analog5);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog6:     %0.6lf", analogReadings.analog6);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Analog7:     %0.6lf", analogReadings.analog7);
-                    }
                     ImGui::EndGroup();
 
                     ImGui::EndChild();
@@ -1550,8 +1512,9 @@ int main(int argc, char** argv)
 
                 if (ImGui::BeginTabItem("E-BIKE Debug"))
                 {
+                    std::string debuglog_tmp = backend.debuginfo;
                     ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
-                    ImGui::Text(backend.debuginfo.data());
+                    ImGui::InputTextMultiline("##", debuglog_tmp.data(), debuglog_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                     ImGui::PopFont();
                     ImGui::EndTabItem();
                 }
