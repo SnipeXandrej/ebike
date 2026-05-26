@@ -960,16 +960,16 @@ int main(int argc, char** argv)
 
 
         // Wh/km
-        ImGui::SetCursorPosX(200);
-        ImGui::SetCursorPosY(75);
+        int powerWidgetWidth = 112.5;
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * style.FontScaleDpi));
+        ImGui::SetCursorPosY(37 * style.FontScaleDpi);
         ImGui::BeginGroup();
             int numOfBars = 96;
             float maxWatts = 12000;
             float indicateEveryWatts = 1000;
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() - 33.0, ImGui::GetCursorPosY()));
             powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 100.0, ImGui::GetCursorPosY() - 35.0));
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (65.0 * style.FontScaleDpi), ImGui::GetCursorPosY() - 50.0));
             ImGui::BeginGroup();
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
                     if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {

@@ -5,6 +5,7 @@
 void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, float thickness, ImVec2 pos, float min_input, float max_input)
 {
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
+    float fontScale = ImGui::GetStyle().FontScaleDpi;
 
     bool isInputNegative = false;
     float inputMapped;
@@ -32,17 +33,17 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     float a_factor_delta_green = (a_max_factor_100percentage - a_min_factor) * ((inputMapped) * 0.01f);
     float a_max_factor_green = a_min_factor + a_factor_delta_green;
 
-    ImGui::SetCursorPos(ImVec2(x - 7.0, y + size * 0.5f));
+    ImGui::SetCursorPos(ImVec2(x - 3.5 * fontScale, y + size * 0.25f * fontScale));
     ImGui::Text("%0.0f", min_input);
 
-    ImGui::SetCursorPos(ImVec2(x + size - 15.0, y + size * 0.5f));
+    ImGui::SetCursorPos(ImVec2(x + (size - 15.0) * 0.5 * fontScale, y + size * 0.25f * fontScale));
     ImGui::Text("%0.0f", max_input);
 
     {
-        ImGui::PushFont(ImGui::GetFont(), ImGui::GetFontSize() * textScale);
+        ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.9);
         std::string text = std::format("{:.0f}", input);
         ImVec2 textSize = ImGui::CalcTextSize(text.data());
-        ImGui::SetCursorPos(ImVec2((x + (size * 0.5f)) - (textSize.x * 0.5), y + (size * 0.20)));
+        ImGui::SetCursorPos(ImVec2(x + (size * 0.25 * fontScale) - (textSize.x / 2.0), y + (size * 0.25f * fontScale) - (22.5 * fontScale)));
         ImGui::Text("%s", text.data());
         ImGui::PopFont();
     }
@@ -50,20 +51,20 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     {
         // std::string text = std::format("{:.0f}", input);
         ImVec2 textSize = ImGui::CalcTextSize(name.data());
-        ImGui::SetCursorPos(ImVec2((x + (size * 0.5f)) - (textSize.x * 0.5), y + (size * 0.5)));
+        ImGui::SetCursorPos(ImVec2(x + (size * 0.25 * fontScale) - (textSize.x / 2.0), y + (size * 0.25f * fontScale)));
         ImGui::Text("%s", name.data());
     }
 
     ImColor green = ImVec4(0.0f, 0.85f, 0.0f, 1.0f);
 
-    draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
-    draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness);
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
+    draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness * 0.5 * fontScale);
 
     // Path for progress filling (highlighted arc)
-    draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor_green);
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor_green);
     draw_list->PathStroke(green, ImDrawFlags_None, thickness);
 
-    draw_list->PathArcTo(ImVec2(x + size * 0.5f, y + size * 0.5f), size * 0.5f, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
 
     if (!isInputNegative) {
         draw_list->PathStroke(ColorInside, ImDrawFlags_None, thickness);

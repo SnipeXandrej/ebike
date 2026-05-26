@@ -164,7 +164,9 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
 
     float modulusCounter = 0;
 
-    ImVec2 size = ImVec2(45, 4); // Width x Height
+    float fontScale = ImGui::GetStyle().FontScaleDpi;
+
+    ImVec2 size = ImVec2(22.0 * fontScale, 2.0 * fontScale); // Width x Height
     for (int i = 0; i < numOfBars+1; i++) {
         if (mapped < i) {
             color = greenDark;
@@ -179,7 +181,7 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
 
         drawRotatedRect(draw_list, pos, size, 65.0f, color, 2.0f); // the actual bar
 
-        pos.x += 5.0f;
+        pos.x += 2.5f * fontScale;
     }
 
     for (int i = 0; i <= numOfBars; i++) {
@@ -200,13 +202,13 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
                     textComp = 0;
                 }
 
-                ImGui::SetCursorPos(ImVec2(pos2.x + 4.0 - textComp, pos2.y + 20));
+                ImGui::SetCursorPos(ImVec2(pos2.x + (2.0 * fontScale) - textComp, pos2.y + (10 * fontScale)));
                 ImGui::Text("%0.0f", kw_point);
                 kw_point += indicatorEveryWatts / 1000.0;
             ImGui::EndGroup();
         }
 
-        pos2.x += 5.0f;
+        pos2.x += 2.5f * fontScale;
     }
 }
 
