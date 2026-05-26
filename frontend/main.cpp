@@ -7,14 +7,66 @@
 // - Documentation        https://dearimgui.com/docs (same as your local docs/ folder).
 // - Introduction, links and more at the top of imgui.cpp
 
+#include <string>
 #include "imgui.h"
-#include "imgui_impl_sdl3.h"
 #include "imgui_impl_opengl3.h"
+#ifdef __ANDROID__
+    #include "imgui_impl_android.h"
+    #include <android/log.h>
+    #include <android_native_app_glue.h>
+    #include <android/asset_manager.h>
+    #include <EGL/egl.h>
+    #include <GLES3/gl3.h>
+
+    // Data
+    static EGLDisplay           g_EglDisplay = EGL_NO_DISPLAY;
+    static EGLSurface           g_EglSurface = EGL_NO_SURFACE;
+    static EGLContext           g_EglContext = EGL_NO_CONTEXT;
+    static struct android_app*  g_App = nullptr;
+    static bool                 g_Initialized = false;
+    static char                 g_LogTag[] = "EBIKE GUI";
+    static std::string          g_IniFilename = "";
+
+    // Forward declarations of helper functions
+    static void Init(struct android_app* app);
+    static void Shutdown();
+    static void MainLoopStep();
+    static int ShowSoftKeyboardInput();
+    static int PollUnicodeChars();
+    static int GetAssetData(const char* filename, void** out_data);
+
+    // Main code
+    static void handleAppCmd(struct android_app* app, int32_t appCmd)
+    {
+        switch (appCmd)
+        {
+        case APP_CMD_SAVE_STATE:
+            break;
+        case APP_CMD_INIT_WINDOW:
+            Init(app);
+            break;
+        case APP_CMD_TERM_WINDOW:
+            Shutdown();
+            break;
+        case APP_CMD_GAINED_FOCUS:
+        case APP_CMD_LOST_FOCUS:
+            break;
+        }
+    }
+
+    static int32_t handleInputEvent(struct android_app* app, AInputEvent* inputEvent)
+    {
+        return ImGui_ImplAndroid_HandleInputEvent(inputEvent);
+    }
+#else
+    #include "imgui_impl_sdl3.h"
+    #include <SDL3/SDL.h>
+    #include <SDL3/SDL_opengl.h>
+    SDL_Window* window;
+#endif
 #include "misc/cpp/imgui_stdlib.h"
 #include <format>
 #include <stdio.h>
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_opengl.h>
 
 #include <iostream>
 #include <cstring>
@@ -35,7 +87,7 @@
 #include "timer.hpp"
 #include "imguiGestures.hpp"
 #include "messagingUtils.hpp"
-#ifdef __linux__
+#if defined(__linux__) && !defined(__ANDROID__)
 #include "waylandUtils.hpp"
 #endif
 
@@ -145,6 +197,7 @@ struct {
     bool limitFramerateOnSwitchOff;
     bool useTripStatsForDisplayingRangeAndWhPerKm;
     bool useOnDemandRendering;
+    std::string serverAddress;
 } settings;
 
 struct {
@@ -179,14 +232,15 @@ bool done = false;
 char currentTimeAndDate[100];
 
 // TODO: do not hardcode filepaths :trol:
-#ifdef __linux__
-const char* SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
+#if defined(__linux__) && !defined(__ANDROID__)
+std::string SETTINGS_FILEPATH = "/home/snipex/.config/ebikegui/settings.toml";
 #elif __APPLE__
-const char* SETTINGS_FILEPATH = "/Users/snipex/.config/ebikegui/settings.toml";
+std::string SETTINGS_FILEPATH = "/Users/snipex/.config/ebikegui/settings.toml";
+#elif __ANDROID__
+std::string SETTINGS_FILEPATH = ""; // will be set at runtime
 #endif
 char hostname[1024];
 char *desktopEnvironment;
-std::string serverAddress;
 
 struct {
     Timer draw;
@@ -220,22 +274,36 @@ struct {
 float buttonWidth = 170.0;
 float buttonHeight = 80.0;
 
+// moved to global
+float main_scale = 1.0;
+static std::chrono::duration<double, std::milli> msElapsedWrite;
+static std::chrono::duration<double, std::milli> msElapsedRead;
+toml::table table;
+ImFont* nerdFont;
+std::string titleBarName = "";
+static std::thread commThread;
+static std::thread commThreadRead;
+
 void setBrightnessLow() {
+    #ifndef __ANDROID__
     // std::system("brightnessctl set 0%");
     if (strcmp(desktopEnvironment, "KDE") == 0) {
         std::system("kscreen-doctor --dpms off");
     } else {
         std::system("wlr-randr --output HDMI-A-1 --off");
     }
+    #endif
 }
 
 void setBrightnessHigh() {
+    #ifndef __ANDROID__
     // std::system("brightnessctl set 100%");
     if (strcmp(desktopEnvironment, "KDE") == 0) {
         std::system("kscreen-doctor --dpms on");
     } else {
         std::system("wlr-randr --output HDMI-A-1 --on");
     }
+    #endif
 }
 
 void setMcconfCustomValues(VESC_MCCONF mcconf) {
@@ -429,7 +497,10 @@ void processRead(std::string line) {
 }
 
 void setupTOML(toml::table &tbl, const char* filepath) {
-    tbl = toml::parse_file(filepath);
+    std::ifstream f(filepath);
+    if (f.good()) {
+        tbl = toml::parse_file(filepath);
+    }
 
     // values
     settings.TARGET_FPS                      = tbl["settings"]["framerate"].value_or<float>(60);
@@ -444,6 +515,7 @@ void setupTOML(toml::table &tbl, const char* filepath) {
     settings.launchFullscreen                = tbl["settings"]["launchFullscreen"].value_or<int8_t>(0);
     settings.limitFramerateOnSwitchOff       = tbl["settings"]["limitFramerateOnSwitchOff"].value_or<int8_t>(1);
     settings.useOnDemandRendering            = tbl["settings"]["useOnDemandRendering"].value_or<int8_t>(1);
+    settings.serverAddress                   = tbl["settings"]["serverAddress"].value_or<std::string>("0.0.0.0");
 }
 
 void TOMLSave(toml::table &tbl, const char* filepath) {
@@ -459,6 +531,7 @@ void TOMLSave(toml::table &tbl, const char* filepath) {
     updateTableValue(tbl, "settings", "launchFullscreen", settings.launchFullscreen);
     updateTableValue(tbl, "settings", "limitFramerateOnSwitchOff", settings.limitFramerateOnSwitchOff);
     updateTableValue(tbl, "settings", "useOnDemandRendering", settings.useOnDemandRendering);
+    updateTableValue(tbl, "settings", "serverAddress", settings.serverAddress);
     saveTableToFile(tbl, filepath);
 }
 
@@ -490,7 +563,7 @@ static uint64_t ComputeDrawDataHash(ImDrawData* draw_data, const ImVec2& display
 uint64_t prev_draw_hash = 0;
 
 void widgetPerformanceSelector(int width) {
-    ImVec2 cursorPos = ImGui::GetContentRegionAvail();
+    // ImVec2 cursorPos = ImGui::GetContentRegionAvail();
     // cursorPos.x = (cursorPos.x / 2.0) - (width / 2.0);
     // ImGui::SetCursorPos(ImVec2(cursorPos.x, ImGui::GetIO().DisplaySize.y - 44.0f));
 
@@ -503,285 +576,12 @@ void widgetPerformanceSelector(int width) {
     }
 }
 
-// Main code
-int main(int argc, char** argv)
-{
-    #ifdef __linux__
-    setenv("SDL_VIDEODRIVER", "wayland", 1);
-    setenv("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0", 1);
-    #endif
+void appFrameRender() {
+        ImGuiIO& io = ImGui::GetIO();
+        ImGuiStyle& style = ImGui::GetStyle();
 
-    // ##########################
-    // ##### Hostname stuff #####
-    // ##########################
-    gethostname(hostname, sizeof(hostname));
-    printf("Hostname = %s\n", hostname);
-
-    if (argc == 2) {
-        serverAddress = argv[1];
-    } else {
-        serverAddress = "0.0.0.0";
-    }
-    std::print("Server address: {}\n", serverAddress);
-
-    if (getenv("XDG_CURRENT_DESKTOP") == NULL) {
-        desktopEnvironment = (char*)"unknown";
-    } else {
-        desktopEnvironment = getenv("XDG_CURRENT_DESKTOP");
-    }
-    printf("Desktop Environment = %s\n", desktopEnvironment);
-
-    writeClock();
-
-    // ####################
-    // ##### Settings #####
-    // ####################
-
-    movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
-    movingAverages.whOverKm.smoothingFactor = 0.05f;
-    movingAverages.motorPrimaryCurrent.smoothingFactor = 0.4f;
-    movingAverages.motorSecondaryCurrent.smoothingFactor = 0.4f;
-
-    // ########################
-    // ######### TOML #########
-    // ########################
-
-    // TODO: if settings.toml doesnt exist, create it
-    toml::table table;
-    setupTOML(table, SETTINGS_FILEPATH);
-
-    arcBar.WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
-    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
-    arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
-    arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
-    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
-    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Sec");
-
-    // ################
-    // ##### IPC ######
-    // ################
-
-    static std::chrono::duration<double, std::milli> msElapsedWrite;
-    static std::chrono::duration<double, std::milli> msElapsedRead;
-    std::thread commThread([&]() -> int {
-        std::cout << "[IPC] Initializing" << "\n";
-        if (IPC.createClientSocket(8080, serverAddress.c_str()) != 0) {
-            std::printf("[IPC] Failed to initialize\n");
-        }
-
-        std::thread commThreadRead([&] {
-            while(!done) {
-                cpuUsage.ipcThreadRead.measureStart(1);
-                auto t1 = std::chrono::high_resolution_clock::now();
-                std::string readFromIPC = IPC.read();
-
-                if (strlen(readFromIPC.c_str()) == 0) {
-                    successfulCommunication = false;
-                }
-
-                processRead(readFromIPC);
-                msElapsedRead = std::chrono::high_resolution_clock::now() - t1;
-                cpuUsage.ipcThreadRead.measureEnd(1);
-            }
-            std::print("[IPC Read] Thread stopped\n");
-        });
-
-        std::cout << "[IPC] Entering main while loop\n";
-        while(!done) {
-            cpuUsage.ipcThread.measureStart(1);
-
-            toSend = "";
-            static bool sendOnce = false;
-
-            if (!successfulCommunication) {
-                sendOnce = false;
-
-                msg::start(toSend, COMMAND_ID::ARE_YOU_ALIVE);
-                msg::end(toSend);
-
-                IPC.write(toSend.data(), toSend.size());
-
-                // hol'up
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-            }
-
-            if (successfulCommunication) {
-                auto t1 = std::chrono::high_resolution_clock::now();
-
-                timer.ping.end();
-                if (timer.ping.getTime_ms() >= 750.0) {
-                    timer.ping.start();
-
-                    msg::start(toSend, COMMAND_ID::PING);
-                    msg::end(toSend);
-
-                    if (sendOnce == false) {
-                        sendOnce = true;
-
-                        msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
-                        msg::end(toSend);
-
-                        msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
-                        msg::end(toSend);
-
-                        msg::start(toSend, COMMAND_ID::GET_FW);
-                        msg::end(toSend);
-
-                        msg::start(toSend, COMMAND_ID::GET_NOTES);
-                        msg::end(toSend);
-                    }
-                }
-
-                msg::start(toSend, COMMAND_ID::GET_BATTERY);
-                msg::end(toSend);
-
-                msg::start(toSend, COMMAND_ID::GET_STATS);
-                msg::end(toSend);
-
-                msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
-                msg::end(toSend);
-
-                msg::mtx.lock();
-                    toSend.append(toSendExtra);
-                    toSendExtra = "";
-                msg::mtx.unlock();
-
-                IPC.write(toSend.data(), toSend.size());
-                if (backend.power_on) {
-                    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(settings.ipcWriteWaitMs));
-                } else {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                }
-                msElapsedWrite = std::chrono::high_resolution_clock::now() - t1;
-            }
-
-            cpuUsage.ipcThread.measureEnd(1);
-        }
-
-        commThreadRead.join();
-        std::print("[IPC Write] Thread stopped\n");
-        return 0;
-    });
-
-
-    std::string titleBarName = std::format("E-BIKE GUI (Connected to: {})", serverAddress);
-
-    // ###########################
-    // ##### SDL/ Dear ImGUI #####
-    // ###########################
-
-    // [If using SDL_MAIN_USE_CALLBACKS: all code below until the main loop starts would likely be your SDL_AppInit() function]
-    if (!SDL_Init(SDL_INIT_VIDEO))
-    {
-        printf("Error: SDL_Init(): %s\n", SDL_GetError());
-        return -1;
-    }
-
-    // Decide GL+GLSL versions
-    #if defined(IMGUI_IMPL_OPENGL_ES2)
-        // GL ES 2.0 + GLSL 100 (WebGL 1.0)
-        const char* glsl_version = "#version 100";
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    #elif defined(IMGUI_IMPL_OPENGL_ES3)
-        // GL ES 3.0 + GLSL 300 es (WebGL 2.0)
-        const char* glsl_version = "#version 300 es";
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    #elif defined(__APPLE__)
-        // GL 3.2 Core + GLSL 150
-        const char* glsl_version = "#version 150";
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG); // Always required on Mac
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
-    #else
-        // GL 3.0 + GLSL 130
-        const char* glsl_version = "#version 130";
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
-        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
-    #endif
-
-
-    // Create window with graphics context
-    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
-    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
-    float main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
-    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
-    SDL_Window* window = SDL_CreateWindow(titleBarName.c_str(), (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
-    if (window == nullptr)
-    {
-        printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
-        return -1;
-    }
-    SDL_GLContext gl_context = SDL_GL_CreateContext(window);
-    if (gl_context == nullptr)
-    {
-        printf("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
-        return -1;
-    }
-
-    SDL_SetWindowMinimumSize(window, 800, 480);
-
-    if (settings.launchFullscreen) {
-        SDL_SetWindowFullscreen(window, true);
-    }
-
-    SDL_GL_MakeCurrent(window, gl_context);
-    SDL_GL_SetSwapInterval(1); // Enable vsync
-    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
-    SDL_ShowWindow(window);
-
-    #ifdef __linux__
-    wayland_utils::init(window);
-    #endif
-
-    // Setup Dear ImGui context
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO(); (void)io;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
-    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Viewports
-    io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
-    // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
-
-    // Setup Dear ImGui style
-    // ImGui::StyleColorsDark();
-    // ImGui::StyleColorsLight();
-    StyleColorsDarkBreeze(nullptr);
-
-    io.Fonts->AddFontFromFileTTF("ProggyVector-Regular.ttf", 13.0);
-
-    ImFont* nerdFont = io.Fonts->AddFontFromFileTTF("0xProtoNerdFont-Regular.ttf", 13.0);
-
-    // Setup scaling
-    ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
-
-    // Setup Platform/Renderer backends
-    ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
-    ImGui_ImplOpenGL3_Init(glsl_version);
-
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
-
-    style.FontScaleDpi = 2.0f;
-
-    bool openAccelerationTester = false;
-
-    // Main loop
-    while (!done) {
-        cpuUsage.ImGui.measureStart(1);
-        cpuUsage.Everything.measureStart(0);
-        uint64_t frameStart = SDL_GetTicksNS();
+        // Clock
+        writeClock();
 
         static bool power_on_old = false;
         if (backend.power_on && power_on_old != backend.power_on) {
@@ -796,35 +596,7 @@ int main(int argc, char** argv)
             std::thread(setBrightnessLow).detach();
         }
 
-        // Poll and handle events (inputs, window resize, etc.)
-        // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
-        // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
-        // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
-        // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
-        SDL_Event event;
-        while (SDL_PollEvent(&event))
-        {
-            ImGui_ImplSDL3_ProcessEvent(&event);
-            if (event.type == SDL_EVENT_QUIT)
-                done = true;
-            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
-                done = true;
-        }
-
-        // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
-        if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)
-        {
-            SDL_Delay(10);
-            continue;
-        }
-
-        // Clock
-        writeClock();
-
-        // Start the Dear ImGui frame
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplSDL3_NewFrame();
-        ImGui::NewFrame();
+        static bool openAccelerationTester = false;
 
         // ImGui::SetNextWindowViewport(ImGui::GetMainViewport()->ID);
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->Pos);
@@ -849,7 +621,7 @@ int main(int argc, char** argv)
             ImGui::PopFont();
         }
 
-        #ifdef __linux__
+        #if defined(__linux__) && !defined(__ANDROID__)
         {
             // Drag handle: center title (time/date) — drag to move window via xdg-shell (Wayland)
             const float dragHandleWidth = 450.f;
@@ -960,7 +732,7 @@ int main(int argc, char** argv)
 
 
         // Wh/km
-        int powerWidgetWidth = 112.5;
+        float powerWidgetWidth = 112.5;
         ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * style.FontScaleDpi));
         ImGui::SetCursorPosY(37 * style.FontScaleDpi);
         ImGui::BeginGroup();
@@ -1083,9 +855,9 @@ int main(int argc, char** argv)
                     sprintf(text, "O: %0.0f", backend.odometer_distance);
                     TextCenteredOnLine(text, 0.0f, false);
                     if (settings.showTripA) {
-                        sprintf(text, "%4.1f¹:T", backend.trip_A.distance);
+                        sprintf(text, "T: %4.1f¹", backend.trip_A.distance);
                     } else {
-                        sprintf(text, "%4.1f²:T", backend.trip_B.distance);
+                        sprintf(text, "T: %4.1f²", backend.trip_B.distance);
                     }
                 ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
                     TextCenteredOnLine(text, 1.0f, false);
@@ -1094,7 +866,7 @@ int main(int argc, char** argv)
                     }
                 ImGui::PopFont();
 
-                ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 115.0f, io.DisplaySize.y - 44.0f));
+                ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 115.0f, io.DisplaySize.y - (21.5f * style.FontScaleDpi)));
                 widgetPerformanceSelector(230);
 
                 ImGui::EndGroup();
@@ -1190,6 +962,9 @@ int main(int argc, char** argv)
                     ImGui::SameLine();
                     if(ImGui::Button("QUIT")) {
                         done = 1;
+                        #ifdef __ANDROID__
+                        Shutdown();
+                        #endif
                     }
 
                     ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE);
@@ -1202,6 +977,10 @@ int main(int argc, char** argv)
                         settings.TARGET_FPS = std::stof(items[item_current]);
                     }
 
+                    ImGui::SetNextItemWidth(300.0);
+                    if (ImGui::InputText("Server Address", &settings.serverAddress, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                        TOMLSave(table, SETTINGS_FILEPATH.c_str());
+                    }
                     ImGui::Checkbox("Show acceleration", &settings.showAcceleration);
                     ImGui::Checkbox("Show motor RPM", &settings.showMotorRPM);
                     ImGui::Checkbox("Show trip A", &settings.showTripA);
@@ -1216,7 +995,7 @@ int main(int argc, char** argv)
                     }
 
                     if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                        TOMLSave(table, SETTINGS_FILEPATH);
+                        TOMLSave(table, SETTINGS_FILEPATH.c_str());
                     }
 
                     ImGui::Dummy(ImVec2(0, 20));
@@ -1264,7 +1043,7 @@ int main(int argc, char** argv)
 
                     ImGui::Dummy(ImVec2(0.0f, 20.0f));
                     ImGui::Text("Hostname: %s", hostname);
-                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH);
+                    ImGui::Text("Settings filepath: %s", SETTINGS_FILEPATH.c_str());
 
                     ImGui::EndChild();
                     ImGui::EndTabItem();
@@ -1557,10 +1336,14 @@ int main(int argc, char** argv)
             ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f), ImGuiCond_Always, ImVec2(0.5f,0.5f));
             ImGui::SetNextWindowSize(ImVec2(io.DisplaySize.x * 0.85f, io.DisplaySize.y * 0.5f));
             if (ImGui::BeginPopupModal("IPC Failed", &open, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
-                ImGui::Text("IPC failed to connect to: %s", serverAddress.c_str());
+                ImGui::Text("IPC failed to connect to: %s", settings.serverAddress.c_str());
 
                 if (ImGui::Button("Quit")) {
                     done = true;
+                }
+                ImGui::SetNextItemWidth(300.0);
+                if (ImGui::InputText("Server Address", &settings.serverAddress, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                    TOMLSave(table, SETTINGS_FILEPATH.c_str());
                 }
             ImGui::EndPopup();
             }
@@ -1570,8 +1353,315 @@ int main(int argc, char** argv)
 
         ImGui::End();
         ImGui::PopStyleVar();
-        timer.draw.end();
+}
 
+void appInitSettings() {
+     // ####################
+    // ##### Settings #####
+    // ####################
+
+    movingAverages.wattageMoreSmooth.smoothingFactor = 0.1f;
+    movingAverages.whOverKm.smoothingFactor = 0.05f;
+    movingAverages.motorPrimaryCurrent.smoothingFactor = 0.4f;
+    movingAverages.motorSecondaryCurrent.smoothingFactor = 0.4f;
+
+    // ########################
+    // ######### TOML #########
+    // ########################
+
+    // TODO: if settings.toml doesnt exist, create it
+    setupTOML(table, SETTINGS_FILEPATH.c_str());
+
+    arcBar.WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
+    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
+    arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
+    arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
+    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
+    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Sec");
+
+    // ################
+    // ##### IPC ######
+    // ################
+
+    commThread = std::thread([&]() -> int {
+        std::cout << "[IPC] Initializing" << "\n";
+        if (IPC.createClientSocket(8080, settings.serverAddress.c_str()) != 0) {
+            std::printf("[IPC] Failed to initialize\n");
+        }
+
+        commThreadRead = std::thread([&] {
+            while(!done) {
+                cpuUsage.ipcThreadRead.measureStart(1);
+                auto t1 = std::chrono::high_resolution_clock::now();
+                std::string readFromIPC = IPC.read();
+
+                if (strlen(readFromIPC.c_str()) == 0) {
+                    successfulCommunication = false;
+                }
+
+                processRead(readFromIPC);
+                msElapsedRead = std::chrono::high_resolution_clock::now() - t1;
+                cpuUsage.ipcThreadRead.measureEnd(1);
+            }
+            std::print("[IPC Read] Thread stopped\n");
+        });
+
+        std::cout << "[IPC] Entering main while loop\n";
+        while(!done) {
+            cpuUsage.ipcThread.measureStart(1);
+
+            toSend = "";
+            static bool sendOnce = false;
+
+            if (!successfulCommunication) {
+                sendOnce = false;
+
+                msg::start(toSend, COMMAND_ID::ARE_YOU_ALIVE);
+                msg::end(toSend);
+
+                IPC.write(toSend.data(), toSend.size());
+
+                // hol'up
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+
+            if (successfulCommunication) {
+                auto t1 = std::chrono::high_resolution_clock::now();
+
+                timer.ping.end();
+                if (timer.ping.getTime_ms() >= 750.0) {
+                    timer.ping.start();
+
+                    msg::start(toSend, COMMAND_ID::PING);
+                    msg::end(toSend);
+
+                    if (sendOnce == false) {
+                        sendOnce = true;
+
+                        msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
+                        msg::end(toSend);
+
+                        msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
+                        msg::end(toSend);
+
+                        msg::start(toSend, COMMAND_ID::GET_FW);
+                        msg::end(toSend);
+
+                        msg::start(toSend, COMMAND_ID::GET_NOTES);
+                        msg::end(toSend);
+                    }
+                }
+
+                msg::start(toSend, COMMAND_ID::GET_BATTERY);
+                msg::end(toSend);
+
+                msg::start(toSend, COMMAND_ID::GET_STATS);
+                msg::end(toSend);
+
+                msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
+                msg::end(toSend);
+
+                msg::mtx.lock();
+                    toSend.append(toSendExtra);
+                    toSendExtra = "";
+                msg::mtx.unlock();
+
+                IPC.write(toSend.data(), toSend.size());
+                if (backend.power_on) {
+                    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(settings.ipcWriteWaitMs));
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                }
+                msElapsedWrite = std::chrono::high_resolution_clock::now() - t1;
+            }
+
+            cpuUsage.ipcThread.measureEnd(1);
+        }
+
+        commThreadRead.join();
+        std::print("[IPC Write] Thread stopped\n");
+        return 0;
+    });
+
+
+    titleBarName = std::format("E-BIKE GUI (Connected to: {})", settings.serverAddress);
+}
+
+#ifndef __ANDROID__
+// Main code
+int main(int argc, char** argv)
+{
+    appInitSettings();
+
+    #ifdef __linux__
+    setenv("SDL_VIDEODRIVER", "wayland", 1);
+    setenv("SDL_VIDEO_WAYLAND_ALLOW_LIBDECOR", "0", 1);
+    #endif
+
+    // ##########################
+    // ##### Hostname stuff #####
+    // ##########################
+    gethostname(hostname, sizeof(hostname));
+    printf("Hostname = %s\n", hostname);
+
+    // if (argc == 2) {
+    //     serverAddress = argv[1];
+    // } else {
+    //     serverAddress = "0.0.0.0";
+    //     // serverAddress = "192.168.0.205";
+    // }
+    std::print("Server address: {}\n", settings.serverAddress);
+
+    if (getenv("XDG_CURRENT_DESKTOP") == NULL) {
+        desktopEnvironment = (char*)"unknown";
+    } else {
+        desktopEnvironment = getenv("XDG_CURRENT_DESKTOP");
+    }
+    printf("Desktop Environment = %s\n", desktopEnvironment);
+
+    // ###########################
+    // ##### SDL/ Dear ImGUI #####
+    // ###########################
+
+    // [If using SDL_MAIN_USE_CALLBACKS: all code below until the main loop starts would likely be your SDL_AppInit() function]
+    if (!SDL_Init(SDL_INIT_VIDEO))
+    {
+        printf("Error: SDL_Init(): %s\n", SDL_GetError());
+        return -1;
+    }
+
+    // Decide GL+GLSL versions
+    #if defined(IMGUI_IMPL_OPENGL_ES2)
+        // GL ES 2.0 + GLSL 100 (WebGL 1.0)
+        const char* glsl_version = "#version 100";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #elif defined(IMGUI_IMPL_OPENGL_ES3)
+        // GL ES 3.0 + GLSL 300 es (WebGL 2.0)
+        const char* glsl_version = "#version 300 es";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #elif defined(__APPLE__)
+        // GL 3.2 Core + GLSL 150
+        const char* glsl_version = "#version 150";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG); // Always required on Mac
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 2);
+    #else
+        // GL 3.0 + GLSL 130
+        const char* glsl_version = "#version 130";
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
+        SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+    #endif
+
+
+    // Create window with graphics context
+    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+    SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+    main_scale = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
+    SDL_WindowFlags window_flags = SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+    window = SDL_CreateWindow(titleBarName.c_str(), (int)(800 * main_scale), (int)(480 * main_scale), window_flags);
+    if (window == nullptr)
+    {
+        printf("Error: SDL_CreateWindow(): %s\n", SDL_GetError());
+        return -1;
+    }
+    SDL_GLContext gl_context = SDL_GL_CreateContext(window);
+    if (gl_context == nullptr)
+    {
+        printf("Error: SDL_GL_CreateContext(): %s\n", SDL_GetError());
+        return -1;
+    }
+
+    SDL_SetWindowMinimumSize(window, 800, 480);
+
+    if (settings.launchFullscreen) {
+        SDL_SetWindowFullscreen(window, true);
+    }
+
+    SDL_GL_MakeCurrent(window, gl_context);
+    SDL_GL_SetSwapInterval(1); // Enable vsync
+    SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_ShowWindow(window);
+
+    #ifdef __linux__
+    wayland_utils::init(window);
+    #endif
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO(); (void)io;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;     // Enable Keyboard Controls
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;      // Enable Gamepad Controls
+    // io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;       // Enable Viewports
+    io.ConfigFlags |= ImGuiConfigFlags_IsTouchScreen;
+    // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;         // Enable Docking
+
+    // Setup Dear ImGui style
+    // ImGui::StyleColorsDark();
+    // ImGui::StyleColorsLight();
+    StyleColorsDarkBreeze(nullptr);
+
+    io.Fonts->AddFontFromFileTTF("ProggyVector-Regular.ttf", 13.0);
+    nerdFont = io.Fonts->AddFontFromFileTTF("0xProtoNerdFont-Regular.ttf", 13.0);
+
+    // Setup scaling
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+    style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
+    ImGui_ImplOpenGL3_Init(glsl_version);
+
+    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+    style.FontScaleDpi = 2.0f;
+    // Main loop
+    while (!done) {
+        cpuUsage.ImGui.measureStart(1);
+        cpuUsage.Everything.measureStart(0);
+        uint64_t frameStart = SDL_GetTicksNS();
+
+        // Poll and handle events (inputs, window resize, etc.)
+        // You can read the io.WantCaptureMouse, io.WantCaptureKeyboard flags to tell if dear imgui wants to use your inputs.
+        // - When io.WantCaptureMouse is true, do not dispatch mouse input data to your main application, or clear/overwrite your copy of the mouse data.
+        // - When io.WantCaptureKeyboard is true, do not dispatch keyboard input data to your main application, or clear/overwrite your copy of the keyboard data.
+        // Generally you may always pass all inputs to dear imgui, and hide them from your application based on those two flags.
+        SDL_Event event;
+        while (SDL_PollEvent(&event))
+        {
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_QUIT)
+                done = true;
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window))
+                done = true;
+        }
+
+        // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppIterate() function]
+        if (SDL_GetWindowFlags(window) & SDL_WINDOW_MINIMIZED)
+        {
+            SDL_Delay(10);
+            continue;
+        }
+
+        // Start the Dear ImGui frame
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
+        ImGui::NewFrame();
+
+        appFrameRender();
+
+        timer.draw.end();
         // Rendering
         timer.render.start();
         ImGui::Render();
@@ -1610,28 +1700,6 @@ int main(int argc, char** argv)
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
         }
 
-        // // Rendering
-        // timer.render.start();
-        // ImGui::Render();
-        // glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
-        // glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
-        // glClear(GL_COLOR_BUFFER_BIT);
-        // ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-
-        // // Update and Render additional Platform Windows
-        // // (Platform functions may change the current OpenGL context, so we save/restore it to make it easier to paste this code elsewhere.
-        // //  For this specific demo app we could also call SDL_GL_MakeCurrent(window, gl_context) directly)
-        // if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-        // {
-        //     SDL_Window* backup_current_window = SDL_GL_GetCurrentWindow();
-        //     SDL_GLContext backup_current_context = SDL_GL_GetCurrentContext();
-        //     ImGui::UpdatePlatformWindows();
-        //     ImGui::RenderPlatformWindowsDefault();
-        //     SDL_GL_MakeCurrent(backup_current_window, backup_current_context);
-        // }
-
-        // SDL_GL_SwapWindow(window);
-
         timer.render.end();
 
         if (settings.LIMIT_FRAMERATE || settings.limitFramerateOnSwitchOff) {
@@ -1661,7 +1729,7 @@ int main(int argc, char** argv)
     done = true;
     IPC.stop();
     commThread.join();
-    TOMLSave(table, SETTINGS_FILEPATH);
+    TOMLSave(table, SETTINGS_FILEPATH.c_str());
 
     // [If using SDL_MAIN_USE_CALLBACKS: all code below would likely be your SDL_AppQuit() function]
     ImGui_ImplOpenGL3_Shutdown();
@@ -1674,3 +1742,274 @@ int main(int argc, char** argv)
 
     return 0;
 }
+
+#endif
+
+#ifdef __ANDROID__
+
+void android_main(struct android_app* app)
+{
+    app->onAppCmd = handleAppCmd;
+    app->onInputEvent = handleInputEvent;
+
+    while (true)
+    {
+        int out_events;
+        struct android_poll_source* out_data;
+
+        // Poll all events. If the app is not visible, this loop blocks until g_Initialized == true.
+        while (ALooper_pollOnce(g_Initialized ? 0 : -1, nullptr, &out_events, (void**)&out_data) >= 0)
+        {
+            // Process one event
+            if (out_data != nullptr)
+                out_data->process(app, out_data);
+
+            // Exit the app by returning from within the infinite loop
+            if (app->destroyRequested != 0)
+            {
+                // shutdown() should have been called already while processing the
+                // app command APP_CMD_TERM_WINDOW. But we play save here
+                if (!g_Initialized)
+                    Shutdown();
+
+                return;
+            }
+        }
+
+        // Initiate a new frame
+        MainLoopStep();
+    }
+}
+
+void Init(struct android_app* app)
+{
+    if (g_Initialized)
+        return;
+
+    SETTINGS_FILEPATH = std::string(app->activity->internalDataPath) + "/settings.toml";
+    appInitSettings();
+    
+    g_App = app;
+    ANativeWindow_acquire(g_App->window);
+
+    // Initialize EGL
+    // This is mostly boilerplate code for EGL...
+    {
+        g_EglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
+        if (g_EglDisplay == EGL_NO_DISPLAY)
+            __android_log_print(ANDROID_LOG_ERROR, g_LogTag, "%s", "eglGetDisplay(EGL_DEFAULT_DISPLAY) returned EGL_NO_DISPLAY");
+
+        if (eglInitialize(g_EglDisplay, 0, 0) != EGL_TRUE)
+            __android_log_print(ANDROID_LOG_ERROR, g_LogTag, "%s", "eglInitialize() returned with an error");
+
+        const EGLint egl_attributes[] = { EGL_BLUE_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_RED_SIZE, 8, EGL_DEPTH_SIZE, 24, EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_NONE };
+        EGLint num_configs = 0;
+        if (eglChooseConfig(g_EglDisplay, egl_attributes, nullptr, 0, &num_configs) != EGL_TRUE)
+            __android_log_print(ANDROID_LOG_ERROR, g_LogTag, "%s", "eglChooseConfig() returned with an error");
+        if (num_configs == 0)
+            __android_log_print(ANDROID_LOG_ERROR, g_LogTag, "%s", "eglChooseConfig() returned 0 matching config");
+
+        // Get the first matching config
+        EGLConfig egl_config;
+        eglChooseConfig(g_EglDisplay, egl_attributes, &egl_config, 1, &num_configs);
+        EGLint egl_format;
+        eglGetConfigAttrib(g_EglDisplay, egl_config, EGL_NATIVE_VISUAL_ID, &egl_format);
+        ANativeWindow_setBuffersGeometry(g_App->window, 0, 0, egl_format);
+
+        const EGLint egl_context_attributes[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+        g_EglContext = eglCreateContext(g_EglDisplay, egl_config, EGL_NO_CONTEXT, egl_context_attributes);
+
+        if (g_EglContext == EGL_NO_CONTEXT)
+            __android_log_print(ANDROID_LOG_ERROR, g_LogTag, "%s", "eglCreateContext() returned EGL_NO_CONTEXT");
+
+        g_EglSurface = eglCreateWindowSurface(g_EglDisplay, egl_config, g_App->window, nullptr);
+        eglMakeCurrent(g_EglDisplay, g_EglSurface, g_EglSurface, g_EglContext);
+    }
+
+    // Setup Dear ImGui context
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+
+    // Redirect loading/saving of .ini file to our location.
+    // Make sure 'g_IniFilename' persists while we use Dear ImGui.
+    g_IniFilename = std::string(app->activity->internalDataPath) + "/imgui.ini";
+    io.IniFilename = g_IniFilename.c_str();;
+
+    // Setup Dear ImGui style
+    // ImGui::StyleColorsDark();
+    //ImGui::StyleColorsLight();
+    StyleColorsDarkBreeze(nullptr);
+
+    // Setup Platform/Renderer backends
+    ImGui_ImplAndroid_Init(g_App->window);
+    ImGui_ImplOpenGL3_Init("#version 300 es");
+
+    // Setup scaling
+    float main_scale = 2.5f;
+    ImGuiStyle& style = ImGui::GetStyle();
+    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+    style.FontScaleDpi = main_scale;        // Set initial font scale.
+
+    g_Initialized = true;
+}
+
+void MainLoopStep()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    if (g_EglDisplay == EGL_NO_DISPLAY)
+        return;
+
+    // Our state
+    // (we use static, which essentially makes the variable globals, as a convenience to keep the example code easy to follow)
+    static bool show_another_window = false;
+    static ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
+    // Poll Unicode characters via JNI
+    // FIXME: do not call this every frame because of JNI overhead
+    PollUnicodeChars();
+
+    // Open on-screen (soft) input if requested by Dear ImGui
+    static bool WantTextInputLast = false;
+    if (io.WantTextInput && !WantTextInputLast)
+        ShowSoftKeyboardInput();
+    WantTextInputLast = io.WantTextInput;
+
+    // Start the Dear ImGui frame
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplAndroid_NewFrame();
+    ImGui::NewFrame();
+
+    appFrameRender();
+
+    // Rendering
+    ImGui::Render();
+    glViewport(0, 0, (int)io.DisplaySize.x, (int)io.DisplaySize.y);
+    glClearColor(clear_color.x * clear_color.w, clear_color.y * clear_color.w, clear_color.z * clear_color.w, clear_color.w);
+    glClear(GL_COLOR_BUFFER_BIT);
+    ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    eglSwapBuffers(g_EglDisplay, g_EglSurface);
+}
+
+void Shutdown()
+{
+    if (!g_Initialized)
+        return;
+
+    // Cleanup
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplAndroid_Shutdown();
+    ImGui::DestroyContext();
+
+    if (g_EglDisplay != EGL_NO_DISPLAY)
+    {
+        eglMakeCurrent(g_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+
+        if (g_EglContext != EGL_NO_CONTEXT)
+            eglDestroyContext(g_EglDisplay, g_EglContext);
+
+        if (g_EglSurface != EGL_NO_SURFACE)
+            eglDestroySurface(g_EglDisplay, g_EglSurface);
+
+        eglTerminate(g_EglDisplay);
+    }
+
+    g_EglDisplay = EGL_NO_DISPLAY;
+    g_EglContext = EGL_NO_CONTEXT;
+    g_EglSurface = EGL_NO_SURFACE;
+    ANativeWindow_release(g_App->window);
+
+    g_Initialized = false;
+}
+
+#endif
+
+
+#ifdef __ANDROID__
+// Helper functions
+
+// Unfortunately, there is no way to show the on-screen input from native code.
+// Therefore, we call ShowSoftKeyboardInput() of the main activity implemented in MainActivity.kt via JNI.
+static int ShowSoftKeyboardInput()
+{
+    JavaVM* java_vm = g_App->activity->vm;
+    JNIEnv* java_env = nullptr;
+
+    jint jni_return = java_vm->GetEnv((void**)&java_env, JNI_VERSION_1_6);
+    if (jni_return == JNI_ERR)
+        return -1;
+
+    jni_return = java_vm->AttachCurrentThread(&java_env, nullptr);
+    if (jni_return != JNI_OK)
+        return -2;
+
+    jclass native_activity_clazz = java_env->GetObjectClass(g_App->activity->clazz);
+    if (native_activity_clazz == nullptr)
+        return -3;
+
+    jmethodID method_id = java_env->GetMethodID(native_activity_clazz, "showSoftInput", "()V");
+    if (method_id == nullptr)
+        return -4;
+
+    java_env->CallVoidMethod(g_App->activity->clazz, method_id);
+
+    jni_return = java_vm->DetachCurrentThread();
+    if (jni_return != JNI_OK)
+        return -5;
+
+    return 0;
+}
+
+// Unfortunately, the native KeyEvent implementation has no getUnicodeChar() function.
+// Therefore, we implement the processing of KeyEvents in MainActivity.kt and poll
+// the resulting Unicode characters here via JNI and send them to Dear ImGui.
+static int PollUnicodeChars()
+{
+    JavaVM* java_vm = g_App->activity->vm;
+    JNIEnv* java_env = nullptr;
+
+    jint jni_return = java_vm->GetEnv((void**)&java_env, JNI_VERSION_1_6);
+    if (jni_return == JNI_ERR)
+        return -1;
+
+    jni_return = java_vm->AttachCurrentThread(&java_env, nullptr);
+    if (jni_return != JNI_OK)
+        return -2;
+
+    jclass native_activity_clazz = java_env->GetObjectClass(g_App->activity->clazz);
+    if (native_activity_clazz == nullptr)
+        return -3;
+
+    jmethodID method_id = java_env->GetMethodID(native_activity_clazz, "pollUnicodeChar", "()I");
+    if (method_id == nullptr)
+        return -4;
+
+    // Send the actual characters to Dear ImGui
+    ImGuiIO& io = ImGui::GetIO();
+    jint unicode_character;
+    while ((unicode_character = java_env->CallIntMethod(g_App->activity->clazz, method_id)) != 0)
+        io.AddInputCharacter(unicode_character);
+
+    jni_return = java_vm->DetachCurrentThread();
+    if (jni_return != JNI_OK)
+        return -5;
+
+    return 0;
+}
+
+// Helper to retrieve data placed into the assets/ directory (android/app/src/main/assets)
+static int GetAssetData(const char* filename, void** outData)
+{
+    int num_bytes = 0;
+    AAsset* asset_descriptor = AAssetManager_open(g_App->activity->assetManager, filename, AASSET_MODE_BUFFER);
+    if (asset_descriptor)
+    {
+        num_bytes = AAsset_getLength(asset_descriptor);
+        *outData = IM_ALLOC(num_bytes);
+        int64_t num_bytes_read = AAsset_read(asset_descriptor, *outData, num_bytes);
+        AAsset_close(asset_descriptor);
+        IM_ASSERT(num_bytes_read == num_bytes);
+    }
+    return num_bytes;
+}
+#endif
