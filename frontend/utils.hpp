@@ -18,7 +18,7 @@ void TextCenteredOnLine(const char* label, float alignment, bool contentRegionFr
 
 void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float angle_deg, ImU32 color, float thickness);
 
-void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input);
+void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input, float scale);
 
 void StyleColorsDarkBreeze(ImGuiStyle* dst);
 

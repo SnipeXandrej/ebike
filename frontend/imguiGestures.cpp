@@ -71,14 +71,15 @@ bool isThisWindowFocused = false;
 bool ImGuiGesture::start() {
     appSizeY = ImGui::GetWindowSize().y;
     appSizeX = ImGui::GetWindowSize().x;
+    float fontScale = ImGui::GetStyle().FontScaleDpi;
 
     windowSize.x = appSizeX - 20.0;
     windowSize.y = appSizeY - 4.0;
     gestureMaxY = windowSize.y;
     gestureClosingThresholdY = gestureMaxY - 150.0;
 
-    bool isGestureWithinStartRegion = ((io.MousePos.y < appSizeY) && (io.MousePos.y > appSizeY - 90.0)) ? true : false;
-    bool isHeaderWithinConstraints = (io.MousePos.y > (appSizeY - gestureMaxY - 60.0)) && (io.MousePos.y < (appSizeY - gestureMaxY + 50.0))
+    bool isGestureWithinStartRegion = ((io.MousePos.y < appSizeY) && (io.MousePos.y > appSizeY - (35.0 * fontScale))) ? true : false;
+    bool isHeaderWithinConstraints = (io.MousePos.y > (appSizeY - gestureMaxY - 60.0)) && (io.MousePos.y < (appSizeY - gestureMaxY + (40.0 * fontScale)))
                                   && (io.MousePos.x > (appSizeX/2.0 - (windowSize.x/2.0)) && io.MousePos.x < (appSizeX/2.0 + (windowSize.x/2.0))) ? true : false;
 
     bool isMouseDragging = ImGui::IsMouseDragging(ImGuiMouseButton_Left);

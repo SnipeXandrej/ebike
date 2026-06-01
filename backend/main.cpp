@@ -642,24 +642,8 @@ void vescValueProcessingFunction() {
                         primaryCurrent = throttle_info.requested_current / 2.0;
                         secondaryCurrent = throttle_info.requested_current / 2.0;
                     } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_1) {
-                        float singleMotorCurrent = 200;
-
-                        if (throttle_info.requested_current < singleMotorCurrent) {
-                            primaryCurrent = throttle_info.requested_current;
-                            secondaryCurrent = 0.0;
-                        } else {
-                            // float ratio = 1.0 - ((0.5 / (throttle_info.maximum_current - singleMotorCurrent)) * (throttle_info.requested_current - singleMotorCurrent));
-
-                            // float extraCurrent = 0.0;
-                            // float _primaryVesc = throttle_info.requested_current * ratio;
-                            // if (_primaryVesc > (throttle_info.maximum_current * 0.5)) {
-                            //     extraCurrent = _primaryVesc - (throttle_info.maximum_current * 0.5);
-                            // }
-                            // primaryCurrent = _primaryVesc - extraCurrent;
-                            // secondaryCurrent = throttle_info.requested_current * (1.0 - ratio) + extraCurrent;
-                            primaryCurrent = throttle_info.requested_current;
-                            secondaryCurrent = primaryVESCSaturatedLeftoverCurrent;
-                        }
+                        primaryCurrent = throttle_info.requested_current;
+                        secondaryCurrent = primaryVESCSaturatedLeftoverCurrent;
                     } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_2) {
                         float singleMotorCurrent = 200;
                         const float defaultRatio = 1.0;
@@ -678,13 +662,13 @@ void vescValueProcessingFunction() {
                         primaryCurrent = throttle_info.requested_current * ratio;
                         secondaryCurrent = (throttle_info.requested_current * (1.0 - ratio)) + primaryVESCSaturatedLeftoverCurrent;
 
-                        if (throttle_info.maximum_current >= (500.0 / 2.0)) {
-                            if (primaryCurrent > throttle_info.maximum_current / 2.0)
-                                primaryCurrent = throttle_info.maximum_current / 2.0;
+                        // if (throttle_info.maximum_current >= (500.0 / 2.0)) {
+                        //     if (primaryCurrent > throttle_info.maximum_current / 2.0)
+                        //         primaryCurrent = throttle_info.maximum_current / 2.0;
 
-                            if (secondaryCurrent > throttle_info.maximum_current / 2.0)
-                                secondaryCurrent = throttle_info.maximum_current / 2.0;
-                        }
+                        //     if (secondaryCurrent > throttle_info.maximum_current / 2.0)
+                        //         secondaryCurrent = throttle_info.maximum_current / 2.0;
+                        // }
                     }
 
                     VESC.setCurrent(primaryCurrent, _primaryAcceleratorVESCID);
@@ -1443,7 +1427,7 @@ int main() {
         // ##########################
         // # map all these readings #
         // ##########################
-        static double mvPerAmp = 1.435;
+        static double mvPerAmp = 0.6478;
         double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */; // 256 because the PGA gain is set to 16 -> 4096mV / 16 = 256mV
         battery.current = batteryCurrentMv / mvPerAmp;
 

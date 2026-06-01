@@ -24,10 +24,10 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
 
     constexpr float ONE_DIV_360f = 1.0f / 360.0f;   // Performance tweak
 
-    float a_min_factor = -1.5f + ((360 - max_angle_factor) * ONE_DIV_360f);    // Angle PI*-1.5f resides in the bottom point of circle
+    float a_min_factor = -1.505f + ((360 - max_angle_factor) * ONE_DIV_360f);    // Angle PI*-1.5f resides in the bottom point of circle
     float a_max_factor_100percentage = (a_min_factor + 1.0f) * -1.0f;       // Arc max factor on 100% percentage state
 
-    float a_factor_delta = (a_max_factor_100percentage - a_min_factor) * ((inputMapped-3) * 0.01f);
+    float a_factor_delta = (a_max_factor_100percentage - a_min_factor) * ((inputMapped) * 0.01f);
     float a_max_factor = a_min_factor + a_factor_delta;
 
     float a_factor_delta_green = (a_max_factor_100percentage - a_min_factor) * ((inputMapped) * 0.01f);

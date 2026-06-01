@@ -34,6 +34,9 @@
     static int ShowSoftKeyboardInput();
     static int PollUnicodeChars();
     static int GetAssetData(const char* filename, void** out_data);
+    static void appShutdownCore();
+
+    static bool g_AppCoreInitialized = false;
 
     // Main code
     static void handleAppCmd(struct android_app* app, int32_t appCmd)
@@ -270,9 +273,6 @@ struct {
     ArcProgressBar motorPrimaryCurrent;
     ArcProgressBar motorSecondaryCurrent;
 } arcBar;
-
-float buttonWidth = 170.0;
-float buttonHeight = 80.0;
 
 // moved to global
 float main_scale = 1.0;
@@ -579,6 +579,8 @@ void widgetPerformanceSelector(int width) {
 void appFrameRender() {
         ImGuiIO& io = ImGui::GetIO();
         ImGuiStyle& style = ImGui::GetStyle();
+        float buttonWidth = 170.0 * style.FontScaleDpi;
+        float buttonHeight = 80.0 * style.FontScaleDpi;
 
         // Clock
         writeClock();
@@ -643,7 +645,7 @@ void appFrameRender() {
         #endif
 
         ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
-        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), 7.0));
+        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), (3.5 * style.FontScaleDpi)));
         ImGui::Text("%s", currentTimeAndDate);
 
         {
@@ -651,7 +653,7 @@ void appFrameRender() {
             char text[100];
             sprintf(text, "SOC: %0.1f", battery.percentage);
             ImVec2 textSize = ImGui::CalcTextSize(text);
-            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - 20.0, 7.0));
+            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - (10.0 * style.FontScaleDpi), (3.5 * style.FontScaleDpi)));
             ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
             ImGui::TextColored(color, "%s", text);
 
@@ -665,11 +667,129 @@ void appFrameRender() {
         }
 
         ImGui::Separator();
+        ImGui::EndGroup();
+        ImVec2 topSeparatorPos = ImGui::GetCursorPos();
 
+        // Wh/km
+        float powerWidgetWidth = 98.5;
+        float powerWidgetScale = 1.15;
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * style.FontScaleDpi * powerWidgetScale));
+        ImGui::BeginGroup();
+            int numOfBars = 84;
+            float maxWatts = 12000;
+            float indicateEveryWatts = 1000;
+            powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts, powerWidgetScale);
+
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (powerWidgetWidth / 2.0 * style.FontScaleDpi), ImGui::GetCursorPosY()));
+            ImGui::BeginGroup();
+                ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 1.8);
+                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                        if (settings.showTripA) {
+                            double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
+                            if (whkm != whkm) {
+                                whkm = 0.0;
+                            }
+
+                            ImGui::Text("Wh/km: %0.1f¹", whkm);
+                        } else {
+                            double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
+                            if (whkm != whkm) {
+                                whkm = 0.0;
+                            }
+
+                            ImGui::Text("Wh/km: %0.1f²", whkm);
+                        }
+                    } else {
+                        ImGui::Text("Wh/km: %0.1f", backend.rollingWhPerKmEstimation);
+                    }
+
+                    // TODO: this is terrible...
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
+                            settings.showTripA = false;
+                        else if (!settings.showTripA) {
+                            settings.showTripA = true;
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
+                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
+                        }
+                    }
+
+                {
+                    char text[128];
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.2);
+                    if (backend.speed_kmh >= 50.0) {
+                        sprintf(text, "%0.1f >:(", backend.speed_kmh);
+                    } else {
+                        sprintf(text, "%0.1f", backend.speed_kmh);
+                    }
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0);
+                    ImGui::Text("%s", text);
+                    ImGui::SameLine();
+                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 0.5);
+                    ImGui::Text("km/h");
+                    ImGui::PopFont();
+                    // TextCenteredOnLine(text, -0.5f, false);
+                    ImGui::PopFont();
+                }
+
+                // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
+                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                        if (settings.showTripA) {
+                            ImGui::Text("Range: %0.1lf¹", backend.trip_A.range);
+                        } else {
+                            ImGui::Text("Range: %0.1lf²", backend.trip_B.range);
+                        }
+                    } else {
+                        ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
+                    }
+
+                    // TODO: this is terrible...
+                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
+                            settings.showTripA = false;
+                        else if (!settings.showTripA) {
+                            settings.showTripA = true;
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
+                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
+                        }
+                    }
+                // ImGui::PopFont();
+
+                if (ImGui::IsItemHovered() && !settings.useTripStatsForDisplayingRangeAndWhPerKm) {
+                    ImGui::SetTooltip(  "This is a rolling range\n"
+                                        "estimation calculated from the\n"
+                                        "last few kilometers travelled");
+                }
+
+                // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
+                    if (settings.showMotorRPM)
+                        ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
+
+                    if (settings.showAcceleration) {
+                        ImGui::Text("Accel: %0.1f", backend.acceleration);
+
+                        if (ImGui::IsItemHovered()) {
+                            // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
+                            ImGui::SetTooltip("Measured in km/h per second");
+                            // ImGui::PopFont();
+                        }
+                    }
+                // ImGui::PopFont();
+
+                ImGui::PopFont();
+
+            ImGui::EndGroup();
+        ImGui::EndGroup();
+
+
+        ImGui::SetCursorPosY(topSeparatorPos.y);
         ImGui::BeginGroup(); // Starts here
             if (settings.showVolCurWatts) {
                 ImGui::BeginGroup();
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 1.35);
 
                     movingAverages.wattageMoreSmooth.moveAverage(battery.watts);
                     ImGui::TextColored(ImVec4(0.0, 1.0, 0.0, 1.0), "%6.2f V", battery.voltage);
@@ -708,10 +828,10 @@ void appFrameRender() {
             movingAverages.whOverKm.moveAverage((float)whkmnow);
 
             // Bottom Left
-            ImGui::SetCursorPos(ImVec2(30.0f, io.DisplaySize.y - 0.0f - 150.0 - 105.0));
+            ImGui::SetCursorPos(ImVec2(15.0f * style.FontScaleDpi, io.DisplaySize.y - ((80.0 + 60.0) * style.FontScaleDpi)));
             arcBar.WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
 
-            ImGui::SetCursorPos(ImVec2(30.0f, io.DisplaySize.y - 0.0f - 150.0));
+            ImGui::SetCursorPos(ImVec2(15.0f * style.FontScaleDpi, io.DisplaySize.y - (80.0 * style.FontScaleDpi)));
             if (settings.showMotorDutyInsteadOfMotorTemp) {
                 arcBar.motorDutyCycle.ProgressBarArc(backend.VESCCombined.duty_cycle);
             } else {
@@ -722,152 +842,41 @@ void appFrameRender() {
             }
 
             // Bottom right
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0 - 105.0));
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * style.FontScaleDpi), io.DisplaySize.y - ((80.0 + 60.0) * style.FontScaleDpi)));
             arcBar.motorPrimaryCurrent.ProgressBarArc(movingAverages.motorPrimaryCurrent.moveAverage(backend.VESCPrimary.phase_current));
 
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - 150.0f, io.DisplaySize.y - 0.0f - 150.0));
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * style.FontScaleDpi), io.DisplaySize.y - (80.0 * style.FontScaleDpi)));
             arcBar.motorSecondaryCurrent.ProgressBarArc(movingAverages.motorSecondaryCurrent.moveAverage(backend.VESCSecondary.phase_current));
 
         ImGui::EndGroup();
 
 
-        // Wh/km
-        float powerWidgetWidth = 112.5;
-        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * style.FontScaleDpi));
-        ImGui::SetCursorPosY(37 * style.FontScaleDpi);
-        ImGui::BeginGroup();
-            int numOfBars = 96;
-            float maxWatts = 12000;
-            float indicateEveryWatts = 1000;
-            powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts);
-
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (65.0 * style.FontScaleDpi), ImGui::GetCursorPosY() - 50.0));
-            ImGui::BeginGroup();
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                        if (settings.showTripA) {
-                            double whkm = backend.trip_A.wattHoursUsed / backend.trip_A.distance;
-                            if (whkm != whkm) {
-                                whkm = 0.0;
-                            }
-
-                            ImGui::Text("Wh/km: %0.1f¹", whkm);
-                        } else {
-                            double whkm = backend.trip_B.wattHoursUsed / backend.trip_B.distance;
-                            if (whkm != whkm) {
-                                whkm = 0.0;
-                            }
-
-                            ImGui::Text("Wh/km: %0.1f²", whkm);
-                        }
-                    } else {
-                        ImGui::Text("Wh/km: %0.1f", backend.rollingWhPerKmEstimation);
-                    }
-
-                    // TODO: this is terrible...
-                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
-                            settings.showTripA = false;
-                        else if (!settings.showTripA) {
-                            settings.showTripA = true;
-                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
-                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
-                        }
-                    }
-                ImGui::PopFont();
-
-                {
-                    char text[128];
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 2.0);
-                    if (backend.speed_kmh >= 50.0) {
-                        sprintf(text, "%0.1f >:(", backend.speed_kmh);
-                    } else {
-                        sprintf(text, "%0.1f", backend.speed_kmh);
-                    }
-                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 15.0);
-                    ImGui::Text("%s", text);
-                    ImGui::SameLine();
-                    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 33.0);
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.2);
-                    ImGui::Text("km/h");
-                    ImGui::PopFont();
-                    // TextCenteredOnLine(text, -0.5f, false);
-                    ImGui::PopFont();
-                }
-
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                    if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                        if (settings.showTripA) {
-                            ImGui::Text("Range: %0.1lf¹", backend.trip_A.range);
-                        } else {
-                            ImGui::Text("Range: %0.1lf²", backend.trip_B.range);
-                        }
-                    } else {
-                        ImGui::Text("Range: %0.1lf", backend.rollingRangeEstimation);
-                    }
-
-                    // TODO: this is terrible...
-                    if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-                        if (settings.showTripA && settings.useTripStatsForDisplayingRangeAndWhPerKm)
-                            settings.showTripA = false;
-                        else if (!settings.showTripA) {
-                            settings.showTripA = true;
-                            settings.useTripStatsForDisplayingRangeAndWhPerKm = false;
-                        } else if (!settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                            settings.useTripStatsForDisplayingRangeAndWhPerKm = true;
-                        }
-                    }
-                ImGui::PopFont();
-
-                if (ImGui::IsItemHovered() && !settings.useTripStatsForDisplayingRangeAndWhPerKm) {
-                    ImGui::SetTooltip(  "This is a rolling range\n"
-                                        "estimation calculated from the\n"
-                                        "last few kilometers travelled");
-                }
-
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.8);
-                    if (settings.showMotorRPM)
-                        ImGui::Text("Motor RPM: %4.0f", backend.motor_rpm);
-
-                    if (settings.showAcceleration) {
-                        ImGui::Text("Accel: %0.1f", backend.acceleration);
-
-                        if (ImGui::IsItemHovered()) {
-                            ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.3);
-                            ImGui::SetTooltip("Measured in km/h per second");
-                            ImGui::PopFont();
-                        }
-                    }
-                ImGui::PopFont();
-
-            ImGui::EndGroup();
-        ImGui::EndGroup();
-
-
         // ODOMETER / TRIP
         {
-            char text[128];
+            char textO[128];
+            char textT[128];
             ImGui::BeginGroup();
-                ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
-                ImGui::SetCursorPosY(io.DisplaySize.y - 55.0f);
-                    ImGui::Separator();
-                    sprintf(text, "O: %0.0f", backend.odometer_distance);
-                    TextCenteredOnLine(text, 0.0f, false);
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetStyle().FontSizeBase * 2.0);
+                    sprintf(textO, "O: %0.0f", backend.odometer_distance);
                     if (settings.showTripA) {
-                        sprintf(text, "T: %4.1f¹", backend.trip_A.distance);
+                        sprintf(textT, "%4.1f¹:T", backend.trip_A.distance);
                     } else {
-                        sprintf(text, "T: %4.1f²", backend.trip_B.distance);
+                        sprintf(textT, "%4.1f²:T", backend.trip_B.distance);
                     }
-                ImGui::SetCursorPosY(io.DisplaySize.y - 52.0f);
-                    TextCenteredOnLine(text, 1.0f, false);
+                    ImGui::SetCursorPosY(io.DisplaySize.y - (27.0f * style.FontScaleDpi));
+                    ImGui::Separator();
+                    TextCenteredOnLine(textO, 0.0f, false);
+                    ImGui::SameLine();
+                    TextCenteredOnLine(textT, 1.0f, false);
                     if (ImGui::IsItemHovered() && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                         settings.showTripA = !settings.showTripA;
                     }
                 ImGui::PopFont();
 
-                ImGui::SetCursorPos(ImVec2(io.DisplaySize.x / 2.0 - 115.0f, io.DisplaySize.y - (21.5f * style.FontScaleDpi)));
-                widgetPerformanceSelector(230);
+                ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (115.0f / 2.0 * style.FontScaleDpi), io.DisplaySize.y - (24.0f * style.FontScaleDpi)));
+                ImGui::PushFont(ImGui::GetFont(),ImGui::GetStyle().FontSizeBase * 1.3);
+                widgetPerformanceSelector(115.0 * style.FontScaleDpi);
+                ImGui::PopFont();
 
                 ImGui::EndGroup();
             }
@@ -932,8 +941,8 @@ void appFrameRender() {
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
             if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
 
-            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - 72.0);
-            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - 3.0);
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - (40.0 * style.FontScaleDpi));
+            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - (1.5 * style.FontScaleDpi));
             if (ImGui::Button("Close")) {
                 gesture.closeGesture();
             }
@@ -944,7 +953,7 @@ void appFrameRender() {
                 if (ImGui::BeginTabItem("App Menu"))
                 {
                     ImGui::BeginChild("Tab1Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("ImGui");
                     ImGui::PopStyleColor();
@@ -970,14 +979,14 @@ void appFrameRender() {
                     ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE);
 
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100);
+                    ImGui::SetNextItemWidth(50 * style.FontScaleDpi);
                     const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
                     static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
                     if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
                         settings.TARGET_FPS = std::stof(items[item_current]);
                     }
 
-                    ImGui::SetNextItemWidth(300.0);
+                    ImGui::SetNextItemWidth(150.0 * style.FontScaleDpi);
                     if (ImGui::InputText("Server Address", &settings.serverAddress, ImGuiInputTextFlags_EnterReturnsTrue)) {
                         TOMLSave(table, SETTINGS_FILEPATH.c_str());
                     }
@@ -999,7 +1008,7 @@ void appFrameRender() {
                     }
 
                     ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("IPC");
                     ImGui::PopStyleColor();
@@ -1016,11 +1025,11 @@ void appFrameRender() {
 
                     ImGui::Text("Write wait time ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(150.0f);
+                    ImGui::SetNextItemWidth(100.0f * style.FontScaleDpi);
                     ImGui::InputFloat("ms", &settings.ipcWriteWaitMs, 0.2, 100, "%.1f");
 
                     ImGui::Dummy(ImVec2(0, 20));
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                         ImGui::SeparatorText("System/App Statistics");
                         ImGui::PopStyleColor();
@@ -1053,7 +1062,7 @@ void appFrameRender() {
                 {
                     ImGui::BeginChild("Tab2Content", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar);
 
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("BACKEND / EBIKE");
                     ImGui::PopStyleColor();
@@ -1085,7 +1094,7 @@ void appFrameRender() {
                     sprintf(text, "   Compile Time: %s", backend.fw_compile_date_time.c_str());
                     ImGui::Text("%s", text);
 
-                    ImGui::Text("   Uptime: %2ldd %2ldh %2ldm %2lds\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
+                    ImGui::Text("   Uptime: %2llud %2lluh %2llum %2llus\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
 
                     ImGui::Dummy(ImVec2(0.0f, 20.0f));
                     ImGui::Text("Main Loop Rate:                  %0.1f ms / %0.1f Hz", backend.loopTimeMain_ms, 1000.0 / backend.loopTimeMain_ms);
@@ -1098,7 +1107,7 @@ void appFrameRender() {
                         msg::end(toSendExtra);
                     }
 
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("Trip/Range/Odometer");
                     ImGui::PopStyleColor();
@@ -1180,7 +1189,7 @@ void appFrameRender() {
                     static char newOdometerValue[30];
                     ImGui::Text("New value: ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
                     ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
                     ImGui::SameLine();
                     if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1189,7 +1198,7 @@ void appFrameRender() {
                         msg::end(toSendExtra);
                     }
 
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("Battery");
                     ImGui::PopStyleColor();
@@ -1213,7 +1222,7 @@ void appFrameRender() {
                     static char newAmphoursUsedLifetimeValue[30];
                     ImGui::Text("Set Amphours Used (Lifetime) = ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
                     ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
                     if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1227,7 +1236,7 @@ void appFrameRender() {
                     static char newAmphoursChargedValue[30];
                     ImGui::Text("Set Amphours Rated (Now) = ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100.0);
+                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
                     ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
                     if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1238,7 +1247,7 @@ void appFrameRender() {
                         }
                     }
 
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 1.0);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
                     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
                     ImGui::SeparatorText("VESC");
                     ImGui::PopStyleColor();
@@ -1248,7 +1257,7 @@ void appFrameRender() {
                     ImGui::Text(" ");
 
                     ImGui::BeginGroup();
-                        float ItemWidth = 180.0;
+                        float ItemWidth = 90.0 * style.FontScaleDpi;
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf_vesc.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf_vesc.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale, 0.01);
@@ -1281,7 +1290,7 @@ void appFrameRender() {
 
                 if (ImGui::BeginTabItem("E-BIKE Log"))
                 {
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase / 1.25);
                     std::string log_tmp = backend.log;
 
                     ImGui::InputTextMultiline("##", log_tmp.data(), log_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
@@ -1292,7 +1301,7 @@ void appFrameRender() {
                 if (ImGui::BeginTabItem("E-BIKE Debug"))
                 {
                     std::string debuglog_tmp = backend.debuginfo;
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase / 1.25);
                     ImGui::InputTextMultiline("##", debuglog_tmp.data(), debuglog_tmp.size() + 1, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_ReadOnly);
                     ImGui::PopFont();
                     ImGui::EndTabItem();
@@ -1311,7 +1320,7 @@ void appFrameRender() {
                         msg::end(toSendExtra);
                     }
 
-                    ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.4);
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase / 1.25);
                     ImGui::InputTextMultiline("##", &backend.notes, ImGui::GetContentRegionAvail(), ImGuiInputTextFlags_WordWrap);
                     ImGui::PopFont();
                     ImGui::EndTabItem();
@@ -1349,8 +1358,6 @@ void appFrameRender() {
             }
         }
 
-        ImGui::EndGroup();
-
         ImGui::End();
         ImGui::PopStyleVar();
 }
@@ -1372,12 +1379,13 @@ void appInitSettings() {
     // TODO: if settings.toml doesnt exist, create it
     setupTOML(table, SETTINGS_FILEPATH.c_str());
 
-    arcBar.WhKmNow.init(120.0, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
-    arcBar.phaseCurrent.init(120.0, 180.0, 20.0, 0.0, 450.0, true, "Phase");
-    arcBar.motorTemp.init(120.0, 180.0, 20.0, 25.0, 120.0, false, "Temp");
-    arcBar.motorDutyCycle.init(120.0, 180.0, 20.0, 0.0, 100.0, true, "Duty");
-    arcBar.motorPrimaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
-    arcBar.motorSecondaryCurrent.init(120.0, 180.0, 20.0, 0.0, 250.0, true, "Ph Sec");
+    float arcBarSize = 145.0;
+    arcBar.WhKmNow.init(arcBarSize, 180.0, 20.0, 0.0, 60.0, true, "Wh/km");
+    arcBar.phaseCurrent.init(arcBarSize, 180.0, 20.0, 0.0, 450.0, true, "Phase");
+    arcBar.motorTemp.init(arcBarSize, 180.0, 20.0, 25.0, 120.0, false, "Temp");
+    arcBar.motorDutyCycle.init(arcBarSize, 180.0, 20.0, 0.0, 100.0, true, "Duty");
+    arcBar.motorPrimaryCurrent.init(arcBarSize, 180.0, 20.0, 0.0, 250.0, true, "Ph Pri"); // TODO: automatically set max value to the correct value
+    arcBar.motorSecondaryCurrent.init(arcBarSize, 180.0, 20.0, 0.0, 250.0, true, "Ph Sec");
 
     // ################
     // ##### IPC ######
@@ -1504,12 +1512,6 @@ int main(int argc, char** argv)
     gethostname(hostname, sizeof(hostname));
     printf("Hostname = %s\n", hostname);
 
-    // if (argc == 2) {
-    //     serverAddress = argv[1];
-    // } else {
-    //     serverAddress = "0.0.0.0";
-    //     // serverAddress = "192.168.0.205";
-    // }
     std::print("Server address: {}\n", settings.serverAddress);
 
     if (getenv("XDG_CURRENT_DESKTOP") == NULL) {
@@ -1767,11 +1769,9 @@ void android_main(struct android_app* app)
             // Exit the app by returning from within the infinite loop
             if (app->destroyRequested != 0)
             {
-                // shutdown() should have been called already while processing the
-                // app command APP_CMD_TERM_WINDOW. But we play save here
-                if (!g_Initialized)
+                if (g_Initialized)
                     Shutdown();
-
+                appShutdownCore();
                 return;
             }
         }
@@ -1783,13 +1783,17 @@ void android_main(struct android_app* app)
 
 void Init(struct android_app* app)
 {
+    g_App = app;
+
+    if (!g_AppCoreInitialized) {
+        SETTINGS_FILEPATH = std::string(app->activity->internalDataPath) + "/settings.toml";
+        appInitSettings();
+        g_AppCoreInitialized = true;
+    }
+
     if (g_Initialized)
         return;
 
-    SETTINGS_FILEPATH = std::string(app->activity->internalDataPath) + "/settings.toml";
-    appInitSettings();
-    
-    g_App = app;
     ANativeWindow_acquire(g_App->window);
 
     // Initialize EGL
@@ -1836,6 +1840,8 @@ void Init(struct android_app* app)
     g_IniFilename = std::string(app->activity->internalDataPath) + "/imgui.ini";
     io.IniFilename = g_IniFilename.c_str();;
 
+    io.Fonts->AddFontDefaultVector();  // Load embedded scalable font.
+
     // Setup Dear ImGui style
     // ImGui::StyleColorsDark();
     //ImGui::StyleColorsLight();
@@ -1846,7 +1852,7 @@ void Init(struct android_app* app)
     ImGui_ImplOpenGL3_Init("#version 300 es");
 
     // Setup scaling
-    float main_scale = 2.5f;
+    float main_scale = 4.0f;
     ImGuiStyle& style = ImGui::GetStyle();
     style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
     style.FontScaleDpi = main_scale;        // Set initial font scale.
@@ -1856,6 +1862,8 @@ void Init(struct android_app* app)
 
 void MainLoopStep()
 {
+    cpuUsage.ImGui.measureStart(1);
+    cpuUsage.Everything.measureStart(0);
     ImGuiIO& io = ImGui::GetIO();
     if (g_EglDisplay == EGL_NO_DISPLAY)
         return;
@@ -1889,6 +1897,8 @@ void MainLoopStep()
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     eglSwapBuffers(g_EglDisplay, g_EglSurface);
+    cpuUsage.ImGui.measureEnd(1);
+    cpuUsage.Everything.measureEnd(0);
 }
 
 void Shutdown()
@@ -1920,6 +1930,19 @@ void Shutdown()
     ANativeWindow_release(g_App->window);
 
     g_Initialized = false;
+}
+
+void appShutdownCore()
+{
+    if (!g_AppCoreInitialized)
+        return;
+
+    done = true;
+    IPC.stop();
+    if (commThread.joinable())
+        commThread.join();
+    TOMLSave(table, SETTINGS_FILEPATH.c_str());
+    g_AppCoreInitialized = false;
 }
 
 #endif

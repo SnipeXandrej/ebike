@@ -145,7 +145,10 @@ void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float an
     draw_list->AddConvexPolyFilled(corners, 4, color);
 }
 
-void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input) {
+void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input, float scale) {
+    ImGui::BeginGroup();
+    float fontScale = ImGui::GetStyle().FontScaleDpi * scale;
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (10.0 * fontScale));
     ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
     ImVec2 pos2 = ImGui::GetCursorScreenPos();  // Reference point
     // ImVec2 pos = ImVec2(ImGui::GetWindowSize().x/2.0, ImGui::GetWindowSize().y/2.0);
@@ -163,8 +166,6 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
     modulusNumber = modulusNumber < 1 ? 1: modulusNumber;
 
     float modulusCounter = 0;
-
-    float fontScale = ImGui::GetStyle().FontScaleDpi;
 
     ImVec2 size = ImVec2(22.0 * fontScale, 2.0 * fontScale); // Width x Height
     for (int i = 0; i < numOfBars+1; i++) {
@@ -194,6 +195,7 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
             drawRotatedRect(draw_list, pos2, size, 65.0f, colorPoints, 2.0f);
 
             ImGui::BeginGroup();
+            ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.3);
                 ImVec2 textSize = ImGui::CalcTextSize(std::to_string(10).c_str());
                 int textComp = 0;
                 if (kw_point > 9) {
@@ -202,14 +204,17 @@ void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float
                     textComp = 0;
                 }
 
-                ImGui::SetCursorPos(ImVec2(pos2.x + (2.0 * fontScale) - textComp, pos2.y + (10 * fontScale)));
-                ImGui::Text("%0.0f", kw_point);
+                std::string text = std::format("{:0.0f}", kw_point);
+                draw_list->AddText(ImVec2(pos2.x + (2.0 * fontScale) - textComp, pos2.y + (10 * fontScale)), IM_COL32(255, 255, 255, 255), text.c_str());
                 kw_point += indicatorEveryWatts / 1000.0;
+            ImGui::PopFont();
             ImGui::EndGroup();
         }
 
         pos2.x += 2.5f * fontScale;
     }
+    ImGui::EndGroup();
+    ImGui::SetCursorPosY(pos2.y + (25 * fontScale));
 }
 
 void StyleColorsDarkBreeze(ImGuiStyle* dst) {
