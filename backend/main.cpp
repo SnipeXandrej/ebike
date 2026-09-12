@@ -229,6 +229,8 @@ struct Battery {
 
     double wattHoursRemaining; // calculated at runtime
 
+    double _batteryAmpHoursUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
+
     bool charging = false;
 };
 Battery battery;
@@ -250,7 +252,7 @@ struct {
     double distance; // in km
 } odometer;
 
-struct {
+struct Settings {
     bool batteryPercentageVoltageBased = 0;
     bool automaticRegenerativeBraking = 0;
     bool minimizeDrivetrainBacklash = 0;
@@ -261,7 +263,8 @@ struct {
     int secondaryVESCID = 0;
     int setSecondaryVescAsFirstAccelerationMotor = 0;
     int setSecondaryVescAsFirstBrakingMotor = 0;
-} settings;
+};
+Settings settings;
 
 struct {
     double analog0; // Throttle
@@ -320,6 +323,93 @@ float clampValue(float input, float clampTo) {
     }
 
     return output;
+}
+
+void battery_process_loop(double batVoltage, double batCurrent, Battery &bat, const Settings& set) {
+    static auto t1 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::micro> usElapsed = std::chrono::high_resolution_clock::now() - t1;
+
+    bat.voltage = batVoltage;
+    bat.current = batCurrent;
+
+    bat.watts = bat.voltage * bat.current;
+    bat.wattHoursRemaining = bat.wattHoursFullyDischarged - bat.wattHoursUsed;
+
+    bat._batteryAmpHoursUsedInElapsedTime = bat.current / (1000000.0 / usElapsed.count()) / 3600.0;
+    bat._batteryWattHoursUsedUsedInElapsedTime = (bat.current * bat.voltage) / (1000000.0 / usElapsed.count()) / 3600.0;
+
+    // TODO: fix this
+    if ((bat._batteryWattHoursUsedUsedInElapsedTime >= 20.0) || (bat._batteryWattHoursUsedUsedInElapsedTime <= -20.0)) {
+        // std::string tempText = std::format("_batteryWattHoursUsedUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryWattHoursUsedUsedInElapsedTime);
+        // std::print("{}", tempText);
+
+        // msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
+        // msg::addString(toSendExtra, "%s", tempText.c_str());
+        // msg::end(toSendExtra);
+
+        bat._batteryWattHoursUsedUsedInElapsedTime = 0.0;
+    }
+    bat.wattHoursUsed += bat._batteryWattHoursUsedUsedInElapsedTime;
+
+    // TODO: fix this
+    if ((bat._batteryAmpHoursUsedInElapsedTime >= 20.0) || (bat._batteryAmpHoursUsedInElapsedTime <= -20.0)) {
+        // std::string tempText = std::format("_batteryAmpHoursUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryAmpHoursUsedInElapsedTime);
+        // std::print("{}", tempText);
+
+        // msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
+        // msg::addString(toSendExtra, "%s", tempText.c_str());
+        // msg::end(toSendExtra);
+
+        bat._batteryAmpHoursUsedInElapsedTime = 0.0;
+    }
+    bat.ampHoursUsed += bat._batteryAmpHoursUsedInElapsedTime;
+
+    // lifetime amphours counting
+    if (bat._batteryAmpHoursUsedInElapsedTime >= 0.0) {
+        bat.ampHoursUsedLifetime    += bat._batteryAmpHoursUsedInElapsedTime;
+    } else {
+        bat.ampHoursUsedLifetime    -= bat._batteryAmpHoursUsedInElapsedTime;
+    }
+
+    // Battery charge tracking stuff
+    if (set.batteryPercentageVoltageBased) {
+        bat.percentage = map_f(bat.voltage, bat.voltage_min, bat.voltage_max, 0, 100);
+    } else {
+        bat.percentage = map_f_nochecks(bat.ampHoursUsed, 0.0, bat.ampHoursFullyCharged, 100.0, 0.0);
+    }
+
+    static auto timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
+    static std::chrono::duration<double, std::milli> timeAmphoursMinVoltageMsElapsed;
+
+    if (!bat.charging && (bat.voltage <= bat.amphours_min_voltage) && (bat.current <= 3.0 && bat.current >= 0.0)) {
+        timeAmphoursMinVoltageMsElapsed = std::chrono::high_resolution_clock::now() - timeAmphoursMinVoltage;
+        if (timeAmphoursMinVoltageMsElapsed.count() >= 5000) {
+            bat.ampHoursFullyCharged_tmp = bat.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
+                                                            // this temporary value will later get applied to the actual
+                                                            // ampHourRated variable when the battery is done charging so
+                                                            // the estimated range and other stuff doesn't suddenly get screwed
+            bat.wattHoursFullyDischarged_tmp = bat.wattHoursUsed;
+        }
+    } else {
+        timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
+    }
+
+    if (bat.voltage >= bat.amphours_max_voltage) {
+        if (bat.charging && (bat.current <= 0.0 && bat.current >= -0.5)) {
+            bat.ampHoursUsed = 0;
+            bat.wattHoursUsed = 0;
+
+            if (bat.ampHoursFullyCharged_tmp != 0.0) {
+                bat.ampHoursFullyCharged = bat.ampHoursFullyCharged_tmp;
+            }
+
+            if (bat.wattHoursFullyDischarged_tmp != 0.0) {
+                bat.wattHoursFullyDischarged = bat.wattHoursFullyDischarged_tmp;
+            }
+        }
+    }
+
+    t1 = std::chrono::high_resolution_clock::now();
 }
 
 void setMcconfFromCurrentProfile() {
@@ -1431,7 +1521,7 @@ int main() {
         // ##########################
         static double mvPerAmp = 1.43;
         double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */; // 256 because the PGA gain is set to 16 -> 4096mV / 16 = 256mV
-        battery.current = batteryCurrentMv / mvPerAmp;
+        double _batCurrent = batteryCurrentMv / mvPerAmp;
 
         // throttleLevel
         static float throttleMinVoltage = 0.95;
@@ -1447,108 +1537,30 @@ int main() {
 
         throttleLevel       = map_f(analogReadings.analog0, throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
         brakeLevel          = map_f(analogReadings.analog1, brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
-        battery.voltage     = analogReadings.analog7 / (batteryVoltageR2 / (batteryVoltageR1 + batteryVoltageR2));
+        double _batVoltage  = analogReadings.analog7 / (batteryVoltageR2 / (batteryVoltageR1 + batteryVoltageR2));
 
-        // Power on/off
-        static bool powerOn_tmp = false;
-        if (powerOn != powerOn_tmp) {
-            powerOn_tmp = powerOn;
-            if (powerOn) {
-                // run code when turned on
-                std::printf("[Main] Power on\n");
-
-            }
-
-            if (!powerOn) {
-                // run code when turned off
-                std::printf("[Main] Power off\n");
-
-            }
-        }
+        // Battery
+        battery_process_loop(_batVoltage, _batCurrent, battery, settings);
 
         // calculate other stuff
-        battery.watts = battery.voltage * battery.current;
-        battery.wattHoursRemaining = battery.wattHoursFullyDischarged - battery.wattHoursUsed;
         rollingRangeEstimation.loop(battery.wattHoursRemaining);
 
-        // BATTERY
-        static double _batteryAmpHoursUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
-
-        _batteryAmpHoursUsedInElapsedTime = battery.current / (1000000.0 / whileLoopUsElapsed.count()) / 3600.0;
-        _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1000000.0 / whileLoopUsElapsed.count()) / 3600.0;
-
-        battery.ampHoursUsed += _batteryAmpHoursUsedInElapsedTime;
-        if (_batteryAmpHoursUsedInElapsedTime >= 0.0) {
-            battery.ampHoursUsedLifetime    += _batteryAmpHoursUsedInElapsedTime;
-        }
-
-        // TODO: fix this
-        if ((_batteryWattHoursUsedUsedInElapsedTime >= 20.0) || (_batteryWattHoursUsedUsedInElapsedTime <= -20.0)) {
-            std::string tempText = std::format("_batteryWattHoursUsedUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryWattHoursUsedUsedInElapsedTime);
-            std::print("{}", tempText);
-
-            msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
-            msg::addString(toSendExtra, "%s", tempText.c_str());
-            msg::end(toSendExtra);
-
-            _batteryWattHoursUsedUsedInElapsedTime = 0.0;
-        }
-        battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
-
         if (!battery.charging && speed_kmh != 0.0) {
-            rollingRangeEstimation.addDeltaWhUsed(_batteryWattHoursUsedUsedInElapsedTime);
+            rollingRangeEstimation.addDeltaWhUsed(battery._batteryWattHoursUsedUsedInElapsedTime);
 
-            if (_batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
-                trip_A.wattHoursConsumed += _batteryWattHoursUsedUsedInElapsedTime;
-                trip_B.wattHoursConsumed += _batteryWattHoursUsedUsedInElapsedTime;
+            if (battery._batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
+                trip_A.wattHoursConsumed += battery._batteryWattHoursUsedUsedInElapsedTime;
+                trip_B.wattHoursConsumed += battery._batteryWattHoursUsedUsedInElapsedTime;
             }
 
-            if (_batteryWattHoursUsedUsedInElapsedTime < 0.0) {
-                trip_A.wattHoursRegenerated += _batteryWattHoursUsedUsedInElapsedTime;
-                trip_B.wattHoursRegenerated += _batteryWattHoursUsedUsedInElapsedTime;
+            if (battery._batteryWattHoursUsedUsedInElapsedTime < 0.0) {
+                trip_A.wattHoursRegenerated += battery._batteryWattHoursUsedUsedInElapsedTime;
+                trip_B.wattHoursRegenerated += battery._batteryWattHoursUsedUsedInElapsedTime;
             }
         }
 
         trip_A.wattHoursUsed = trip_A.wattHoursConsumed + trip_A.wattHoursRegenerated;
         trip_B.wattHoursUsed = trip_B.wattHoursConsumed + trip_B.wattHoursRegenerated;
-
-        static auto timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
-        static std::chrono::duration<double, std::milli> timeAmphoursMinVoltageMsElapsed;
-
-        // Battery charge tracking stuff
-        if (settings.batteryPercentageVoltageBased) {
-            battery.percentage = map_f(battery.voltage, battery.voltage_min, battery.voltage_max, 0, 100);
-        } else {
-            battery.percentage = map_f_nochecks(battery.ampHoursUsed, 0.0, battery.ampHoursFullyCharged, 100.0, 0.0);
-        }
-
-        if (!battery.charging && (battery.voltage <= battery.amphours_min_voltage) && (battery.current <= 3.0 && battery.current >= 0.0)) {
-            timeAmphoursMinVoltageMsElapsed = std::chrono::high_resolution_clock::now() - timeAmphoursMinVoltage;
-            if (timeAmphoursMinVoltageMsElapsed.count() >= 5000) {
-                battery.ampHoursFullyCharged_tmp = battery.ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
-                                                                // this temporary value will later get applied to the actual
-                                                                // ampHourRated variable when the battery is done charging so
-                                                                // the estimated range and other stuff doesn't suddenly get screwed
-                battery.wattHoursFullyDischarged_tmp = battery.wattHoursUsed;
-            }
-        } else {
-            timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
-        }
-
-        if (battery.voltage >= battery.amphours_max_voltage) {
-            if (battery.charging && (battery.current <= 0.0 && battery.current >= -0.5)) {
-                battery.ampHoursUsed = 0;
-                battery.wattHoursUsed = 0;
-
-                if (battery.ampHoursFullyCharged_tmp != 0.0) {
-                    battery.ampHoursFullyCharged = battery.ampHoursFullyCharged_tmp;
-                }
-
-                if (battery.wattHoursFullyDischarged_tmp != 0.0) {
-                    battery.wattHoursFullyDischarged = battery.wattHoursFullyDischarged_tmp;
-                }
-            }
-        }
 
         estimatedRangeCalculateStats(&trip_A, battery.wattHoursRemaining);
         estimatedRangeCalculateStats(&trip_B, battery.wattHoursRemaining);
@@ -1584,6 +1596,23 @@ int main() {
         } else if ((battery.voltage > battery.voltage_min) && criticalLowVoltageShutdownAutoSave_saved) {
             criticalLowVoltageShutdownAutoSave_saved = false;
         }
+
+        // // Power on/off
+        // static bool powerOn_tmp = false;
+        // if (powerOn != powerOn_tmp) {
+        //     powerOn_tmp = powerOn;
+        //     if (powerOn) {
+        //         // run code when turned on
+        //         std::printf("[Main] Power on\n");
+
+        //     }
+
+        //     if (!powerOn) {
+        //         // run code when turned off
+        //         std::printf("[Main] Power off\n");
+
+        //     }
+        // }
 
         static bool threadsInitialized = false;
         if (!threadsInitialized) {
