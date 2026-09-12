@@ -93,7 +93,7 @@ namespace msg {
         return result;
     }
 
-    float getValueFromSplit(std::vector<std::string> token, int &index) {
+    float getValueFromSplit(const std::vector<std::string>& token, int &index) {
         if (index < (int)token.size()) {
             std::stringstream ss(token[index]);
             float number;
@@ -109,7 +109,7 @@ namespace msg {
         return -1;
     }
 
-    double getValueFromSplit_double(std::vector<std::string> token, int &index) {
+    double getValueFromSplit_double(const std::vector<std::string>& token, int &index) {
         if (index < (int)token.size()) {
             std::stringstream ss(token[index]);
             double result;
@@ -123,7 +123,7 @@ namespace msg {
         return -1;
     }
 
-    std::string getValueFromSplit_string(std::vector<std::string> token, int &index) {
+    std::string getValueFromSplit_string(const std::vector<std::string>& token, int &index) {
         if (index < (int)token.size()) {
             std::string ret = token[index];
             index++;
@@ -135,11 +135,13 @@ namespace msg {
         return "Error";
     }
 
-    uint64_t getValueFromSplit_uint64(std::vector<std::string> token, int &index) {
+    uint64_t getValueFromSplit_uint64(const std::vector<std::string>& token, int &index) {
         if (index < (int)token.size()) {
             std::stringstream stream(token[index]);
             uint64_t result;
             stream >> result;
+
+            index++;
             return result;
         }
 

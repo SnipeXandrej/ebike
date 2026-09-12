@@ -28,11 +28,11 @@ namespace msg {
 
     std::vector<std::string> split(const std::string& input, const std::string& delimiter);
 
-    float getValueFromSplit(std::vector<std::string> token, int &index);
+    float getValueFromSplit(const std::vector<std::string>& token, int &index);
 
-    double getValueFromSplit_double(std::vector<std::string> token, int &index);
+    double getValueFromSplit_double(const std::vector<std::string>& token, int &index);
 
-    std::string getValueFromSplit_string(std::vector<std::string> token, int &index);
+    std::string getValueFromSplit_string(const std::vector<std::string>& token, int &index);
 
-    uint64_t getValueFromSplit_uint64(std::vector<std::string> token, int &index);
+    uint64_t getValueFromSplit_uint64(const std::vector<std::string>& token, int &index);
 }
