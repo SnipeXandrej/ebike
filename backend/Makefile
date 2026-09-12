@@ -17,8 +17,10 @@ CXXFLAGS += -I../submodules/magic_enum/include/magic_enum
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S), Linux) #LINUX
-	LIBS += -lwiringPi
-    SOURCES += ads1115.cpp
+	ifndef notrpi
+		LIBS += -lwiringPi
+		SOURCES += ads1115.cpp
+	endif
 endif
 
 NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))

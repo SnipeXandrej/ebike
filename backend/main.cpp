@@ -19,7 +19,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(NOT_RPI)
 #include <wiringPi.h>
 #include <wiringPiI2C.h>
 #include <mcp23017.h>
@@ -28,7 +28,7 @@
 #include "toml.hpp"
 #include "magic_enum.hpp"
 
-#ifdef __linux__
+#if defined(__linux__) && !defined(NOT_RPI)
 #include "ads1115.hpp"
 #endif
 #include "myUart.hpp"
@@ -46,7 +46,7 @@
 #include "loopRateLimiter.hpp"
 #include "rampLimiter.hpp"
 
-#ifndef __linux__
+#if !defined(__linux__) || defined(NOT_RPI)
 #define PWM_OUTPUT 0
 #define INPUT 0
 #define ADS1115_DR_128 0
@@ -97,7 +97,7 @@ int mcp3004Setup(int, int) {return 0;};
 #define A7_ADC MCP3008_BASEPIN+7
 
 // ADS1115
-#define ADS1115_ADDRESS 0x4a
+#define ADS1115_ADDRESS 0x48
 #define ADS1115_BASEPIN 300
 
 // Pins
@@ -213,6 +213,7 @@ struct Battery {
     float voltage_nominal = 72.0;
     float voltage_min = 64.0;
     float voltage_max = 84.0;
+    float voltage_absolute_min = 55.0;
     float amphours_min_voltage = 66.0;
     float amphours_max_voltage = 82.0;
 
@@ -439,8 +440,8 @@ void throttleFunction() {
                                             throttleClampCurrent
                                     ),
                                     100,
-                                    20,
-                                    40
+                                    15,
+                                    15
                                 );
 
         static RampLimiter brakeRamp;
@@ -971,21 +972,21 @@ void IPCReadFunction() {
                                     _mcconf.l_max_erpm = (_mcconf.l_max_erpm + VESC.data_mcconf.l_max_erpm) / 2.0;
                                     _mcconf.l_min_duty = (_mcconf.l_min_duty + VESC.data_mcconf.l_min_duty) / 2.0;
                                     _mcconf.l_max_duty = (_mcconf.l_max_duty + VESC.data_mcconf.l_max_duty) / 2.0;
-                                    if (VESC.data_mcconf.c_force_single_motor_acceleration) {
-                                        _mcconf.l_watt_min = (_mcconf.l_watt_min + VESC.data_mcconf.l_watt_min) / 2.0;
-                                        _mcconf.l_watt_max = (_mcconf.l_watt_max + VESC.data_mcconf.l_watt_max) / 2.0;
-                                        _mcconf.l_in_current_min = (_mcconf.l_in_current_min + VESC.data_mcconf.l_in_current_min) / 2.0;
-                                        _mcconf.l_in_current_max = (_mcconf.l_in_current_max + VESC.data_mcconf.l_in_current_max) / 2.0;
-                                        //
-                                        _mcconf.c_phase_current_max = (_mcconf.c_phase_current_max + VESC.data_mcconf.c_phase_current_max) / 2.0;
-                                    } else {
-                                        _mcconf.l_watt_min += VESC.data_mcconf.l_watt_min;
-                                        _mcconf.l_watt_max += VESC.data_mcconf.l_watt_max;
-                                        _mcconf.l_in_current_min += VESC.data_mcconf.l_in_current_min;
-                                        _mcconf.l_in_current_max += VESC.data_mcconf.l_in_current_max;
-                                        //
-                                        _mcconf.c_phase_current_max += VESC.data_mcconf.c_phase_current_max;
-                                    }
+                                    // if (VESC.data_mcconf.c_force_single_motor_acceleration) {
+                                    //     _mcconf.l_watt_min = (_mcconf.l_watt_min + VESC.data_mcconf.l_watt_min) / 2.0;
+                                    //     _mcconf.l_watt_max = (_mcconf.l_watt_max + VESC.data_mcconf.l_watt_max) / 2.0;
+                                    //     _mcconf.l_in_current_min = (_mcconf.l_in_current_min + VESC.data_mcconf.l_in_current_min) / 2.0;
+                                    //     _mcconf.l_in_current_max = (_mcconf.l_in_current_max + VESC.data_mcconf.l_in_current_max) / 2.0;
+                                    //     //
+                                    //     _mcconf.c_phase_current_max = (_mcconf.c_phase_current_max + VESC.data_mcconf.c_phase_current_max) / 2.0;
+                                    // } else {
+                                    _mcconf.l_watt_min += VESC.data_mcconf.l_watt_min;
+                                    _mcconf.l_watt_max += VESC.data_mcconf.l_watt_max;
+                                    _mcconf.l_in_current_min += VESC.data_mcconf.l_in_current_min;
+                                    _mcconf.l_in_current_max += VESC.data_mcconf.l_in_current_max;
+                                    //
+                                    _mcconf.c_phase_current_max += VESC.data_mcconf.c_phase_current_max;
+                                    // }
 
                                     VESC2Success = true;
                                 }
@@ -1391,6 +1392,7 @@ int main() {
         // Analog
         std::future<int> _batteryCurrentRawFuture = std::async(std::launch::async, []() { return analogRead(ADS1115_BASEPIN+5); });
 
+        float analogRefV = 2.49;
         float analogLoopNumOfTimes = 40;
         float _analog0 = 0, _analog1 = 0, _analog2 = 0, _analog3 = 0, _analog4 = 0, _analog5 = 0, _analog6 = 0, _analog7 = 0;
         for (int i = 0; i < analogLoopNumOfTimes; i++) {
@@ -1403,14 +1405,14 @@ int main() {
             _analog6 += (float)analogRead(A6_ADC);
             _analog7 += (float)analogRead(A7_ADC);
         }
-        analogReadings.analog0 = (_analog0 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog1 = (_analog1 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog2 = (_analog2 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog3 = (_analog3 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog4 = (_analog4 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog5 = (_analog5 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog6 = (_analog6 / analogLoopNumOfTimes / 1023.0) * 3.3;
-        analogReadings.analog7 = (_analog7 / analogLoopNumOfTimes / 1023.0) * 3.3;
+        analogReadings.analog0 = (_analog0 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog1 = (_analog1 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog2 = (_analog2 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog3 = (_analog3 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog4 = (_analog4 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog5 = (_analog5 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog6 = (_analog6 / analogLoopNumOfTimes / 1023.0) * analogRefV;
+        analogReadings.analog7 = (_analog7 / analogLoopNumOfTimes / 1023.0) * analogRefV;
         batteryCurrentRaw = -((float)_batteryCurrentRawFuture.get());
         #endif
 
@@ -1427,7 +1429,7 @@ int main() {
         // ##########################
         // # map all these readings #
         // ##########################
-        static double mvPerAmp = 0.6478;
+        static double mvPerAmp = 1.43;
         double batteryCurrentMv = (batteryCurrentRaw / 32767.0) * 256.0 /* mV */; // 256 because the PGA gain is set to 16 -> 4096mV / 16 = 256mV
         battery.current = batteryCurrentMv / mvPerAmp;
 
@@ -1440,8 +1442,8 @@ int main() {
         static float brakeMaxVoltage = 2.48;
 
         // battery.voltage
-        static float batteryVoltageR1 = 220000 + 3300 /* +3300 is the correction value */;
-        static float batteryVoltageR2 = 4700+1000+1000+1000;
+        static float batteryVoltageR1 = 220000 + 2000 /* +2000 is the correction value */;
+        static float batteryVoltageR2 = 4700+1000+1000;
 
         throttleLevel       = map_f(analogReadings.analog0, throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
         brakeLevel          = map_f(analogReadings.analog1, brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
@@ -1470,20 +1472,27 @@ int main() {
         rollingRangeEstimation.loop(battery.wattHoursRemaining);
 
         // BATTERY
-        static double _batteryAmpsUsedInElapsedTime,     _batteryWattsUsedUsedInElapsedTime;
         static double _batteryAmpHoursUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
 
-        _batteryAmpsUsedInElapsedTime = battery.current / (1000000.0 / whileLoopUsElapsed.count());
-        _batteryAmpHoursUsedInElapsedTime = _batteryAmpsUsedInElapsedTime / 3600.0;
-
-        _batteryWattsUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1000000.0 / whileLoopUsElapsed.count());
-        _batteryWattHoursUsedUsedInElapsedTime = _batteryWattsUsedUsedInElapsedTime / 3600.0;
+        _batteryAmpHoursUsedInElapsedTime = battery.current / (1000000.0 / whileLoopUsElapsed.count()) / 3600.0;
+        _batteryWattHoursUsedUsedInElapsedTime = (battery.current * battery.voltage) / (1000000.0 / whileLoopUsElapsed.count()) / 3600.0;
 
         battery.ampHoursUsed += _batteryAmpHoursUsedInElapsedTime;
         if (_batteryAmpHoursUsedInElapsedTime >= 0.0) {
             battery.ampHoursUsedLifetime    += _batteryAmpHoursUsedInElapsedTime;
         }
 
+        // TODO: fix this
+        if ((_batteryWattHoursUsedUsedInElapsedTime >= 20.0) || (_batteryWattHoursUsedUsedInElapsedTime <= -20.0)) {
+            std::string tempText = std::format("_batteryWattHoursUsedUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryWattHoursUsedUsedInElapsedTime);
+            std::print("{}", tempText);
+
+            msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
+            msg::addString(toSendExtra, "%s", tempText.c_str());
+            msg::end(toSendExtra);
+
+            _batteryWattHoursUsedUsedInElapsedTime = 0.0;
+        }
         battery.wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
 
         if (!battery.charging && speed_kmh != 0.0) {
@@ -1563,6 +1572,17 @@ int main() {
             uptimeInSeconds_tmp = uptimeInSeconds;
 
             TOMLSave(table, SETTINGS_FILEPATH);
+        }
+
+        // Autosave when BMS cuts power
+        static bool criticalLowVoltageShutdownAutoSave_saved = false;
+        if ((battery.voltage < battery.voltage_absolute_min) && !criticalLowVoltageShutdownAutoSave_saved) {
+            criticalLowVoltageShutdownAutoSave_saved = true;
+            TOMLSave(table, SETTINGS_FILEPATH);
+            // sync the filesystem cache to drive
+            std::system("sync");
+        } else if ((battery.voltage > battery.voltage_min) && criticalLowVoltageShutdownAutoSave_saved) {
+            criticalLowVoltageShutdownAutoSave_saved = false;
         }
 
         static bool threadsInitialized = false;
