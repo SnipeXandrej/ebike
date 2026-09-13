@@ -8,6 +8,7 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
 
 bool previousConnection = false;
 
@@ -34,7 +35,15 @@ int ClientSocket::createClientSocket(int PORT, const char* ADDRESS) {
     sockaddr_in serverAddress;
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_port = htons(PORT);
-    inet_pton(AF_INET, lastServerAddress, &serverAddress.sin_addr);
+
+    hostent* host = gethostbyname(lastServerAddress);
+    if (host == nullptr) {
+        close(clientSocket);
+        isConnected = false;
+        return -1;
+    }
+
+    serverAddress.sin_addr = *(struct in_addr*)(host->h_addr_list[0]);
 
     int ret = connect(clientSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress));
     if (ret == -1) {
