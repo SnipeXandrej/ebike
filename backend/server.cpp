@@ -1,120 +1,219 @@
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <netdb.h>
+#include <string>
+#include <sys/socket.h>
+#include <thread>
+#include <unistd.h>
+#include <vector>
+
 #include "server.hpp"
 #include "messagingUtils.hpp"
-#include <cstdlib>
-#include <cstring>
-#include <iostream>
-#include <netinet/in.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <thread>
-#include <chrono>
 
-int ServerSocket::createServerSocket(int PORT) {
-    serverSocket = socket(AF_INET, SOCK_STREAM, 0);
-
-    struct timeval tv;
-    tv.tv_sec = connectionTimeoutS;
-    tv.tv_usec = 0;
-    setsockopt(serverSocket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    setsockopt(serverSocket, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-
-    int opt = 1;
-    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    setsockopt(serverSocket, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
-
-    sockaddr_in serverAddress;
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(PORT);
-    serverAddress.sin_addr.s_addr = INADDR_ANY;
-
-    if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) == -1) {
-        std::cout << "[IPC] Another server is running, or the port is being used by another process\n";
-        return -1;
-    }
-
-    if (listen(serverSocket, SOMAXCONN) == -1) {
-        perror("listen");
-        return -1;
-    }
-
-    return 0;
+bool TcpServer::ready() const {
+    return listener_.load() >= 0;
 }
 
-int ServerSocket::createClientSocket() {
-    clientSocket = accept(serverSocket, nullptr, nullptr);
-    if (clientSocket < 0) {
-        return -1;
+bool TcpServer::serve(const MessageHandler &on_message) {
+    while (running_) {
+        sockaddr_storage address{};
+        socklen_t address_size = sizeof(address);
+        int fd = accept(listener_.load(),
+                        reinterpret_cast<sockaddr *>(&address),
+                        &address_size);
+        if (fd < 0) {
+            if (errno == EINTR)
+                continue;
+            return !running_;
+        }
+
+        auto client = std::make_shared<Client>();
+        client->fd = fd;
+        client->id = next_id_++;
+        client->name = endpoint_name(fd,
+                                        reinterpret_cast<sockaddr *>(&address),
+                                        address_size);
+        {
+            std::lock_guard lock(clients_mutex_);
+            clients_.push_back(client);
+        }
+        std::fprintf(stderr, "Client %lu connected: %s\n", client->id,
+                        client->name.c_str());
+
+        try {
+            std::lock_guard lock(receivers_mutex_);
+            receivers_.emplace_back(&TcpServer::receive_loop, this, client,
+                                    on_message);
+        } catch (...) {
+            remove(client);
+            close(fd);
+        }
     }
-
-    receivedBuffer.clear();
-    receivedLength = 0;
-
-    std::cout << "[IPC] Client connected!\n";
-    return 0;
+    return true;
 }
 
-std::string ServerSocket::read() {
-    std::string output;
+bool TcpServer::send_to(unsigned long id, const char *data, size_t size) {
+    std::shared_ptr<Client> destination; {
+        std::lock_guard lock(clients_mutex_);
+        for (const auto &client : clients_)
+            if (client->id == id) {
+                destination = client;
+                break;
+            }
+    }
 
-    while (true) {
-        // Check if there is at least one complete line in the buffer
-        // Complete lines end with msg::messageEnd ("@@!!\n")
+    if (!destination)
+        return false;
+
+    std::lock_guard lock(destination->send_mutex);
+
+    if (!send_all(destination->fd, data, size))
+        shutdown(destination->fd, SHUT_RDWR);
+
+    return true;
+}
+
+std::vector<TcpServer::ClientInfo> TcpServer::clients() const {
+    std::vector<ClientInfo> result;
+    std::lock_guard lock(clients_mutex_);
+    for (const auto &client : clients_)
+        result.push_back({client->id, client->name});
+    return result;
+}
+
+void TcpServer::shutdown_writes() {
+    std::lock_guard lock(clients_mutex_);
+    for (const auto &client : clients_)
+        shutdown(client->fd, SHUT_WR);
+}
+
+void TcpServer::stop() {
+    if (!running_.exchange(false))
+        return;
+
+    int listener = listener_.exchange(-1);
+    if (listener >= 0) {
+        shutdown(listener, SHUT_RDWR);
+        close(listener);
+    }
+
+    std::lock_guard lock(clients_mutex_);
+    for (const auto &client : clients_)
+        shutdown(client->fd, SHUT_RDWR);
+}
+
+bool TcpServer::send_all(int fd, const char *data, size_t size) {
+    while (size > 0) {
+        ssize_t sent = send(fd, data, size, 0);
+        if (sent < 0) {
+            if (errno == EINTR)
+                continue;
+            return false;
+        }
+        data += sent;
+        size -= static_cast<size_t>(sent);
+    }
+    return true;
+}
+
+int TcpServer::create_listener(const char *port) {
+    addrinfo hints{};
+    addrinfo *addresses = nullptr;
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    if (getaddrinfo(nullptr, port, &hints, &addresses) != 0)
+        return -1;
+
+    int listener = -1;
+    int reuse = 1;
+    for (addrinfo *address = addresses; address != nullptr;
+            address = address->ai_next) {
+        listener = socket(address->ai_family, address->ai_socktype,
+                            address->ai_protocol);
+
+        if (listener < 0)
+            continue;
+
+        setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+        if (bind(listener, address->ai_addr, address->ai_addrlen) == 0 &&
+            listen(listener, BACKLOG) == 0)
+            break;
+
+        close(listener);
+        listener = -1;
+    }
+    freeaddrinfo(addresses);
+    return listener;
+}
+
+std::string TcpServer::endpoint_name(int fd, const sockaddr *address, socklen_t size) {
+    char host[64];
+    char service[16];
+    if (getnameinfo(address, size, host, sizeof(host), service,
+                    sizeof(service), NI_NUMERICHOST | NI_NUMERICSERV) == 0)
+        return std::string(host) + ":" + service;
+    return "fd-" + std::to_string(fd);
+}
+
+void TcpServer::receive_loop(std::shared_ptr<Client> client, const MessageHandler &on_message) {
+    char buffer[BUFFER_SIZE];
+    std::string received_buffer;
+
+    for (;;) {
+        ssize_t received = recv(client->fd, buffer, sizeof(buffer), 0);
+        if (received == 0)
+            break;
+        if (received < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+
+        received_buffer.append(buffer, static_cast<size_t>(received));
+
         size_t consumed = 0;
         while (true) {
-            size_t endPos = receivedBuffer.find(msg::messageEnd, consumed);
-            if (endPos == std::string::npos)
+            const size_t end_pos = received_buffer.find(msg::messageEnd, consumed);
+            if (end_pos == std::string::npos)
                 break;
-
-            size_t frameEnd = endPos + msg::messageEnd.size();
-            output.append(receivedBuffer, consumed, frameEnd - consumed);
-            consumed = frameEnd;
+            consumed = end_pos + msg::messageEnd.size();
         }
 
         if (consumed > 0) {
-            receivedBuffer.erase(0, consumed);
-            receivedLength = output.size();
-
-            return output;
-        }
-
-        // if theres no complete line then try receiving more data
-        char buffer[10240];
-        int len = recv(clientSocket, buffer, sizeof(buffer), 0);
-
-        if (len > 0) {
-            receivedBuffer.append(buffer, len);
-        } else if (len <= 0) {
-            std::cout << "[IPC] client disconnected\n";
-            shutdown(clientSocket, SHUT_RDWR);
-            close(clientSocket);
-
-            if (isShutdown) {
-                return "";
-            }
-
-            // Accept a new client
-            while (createClientSocket() < 0 && !isShutdown) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                std::printf("retrying connection\n");
-            }
-
+            on_message(client->id, client->name, received_buffer.data(), consumed);
+            received_buffer.erase(0, consumed);
         }
     }
+    remove(client);
+    close(client->fd);
+    std::fprintf(stderr, "Client disconnected: %s\n", client->name.c_str());
 }
 
-int ServerSocket::write(const char* data, size_t size) {
-    if (clientSocket < 0) return -1;
-
-    int ret = send(clientSocket, data, size, MSG_NOSIGNAL);
-    if (ret < 0) perror("[IPC] send");
-
-    return ret;
+void TcpServer::remove(const std::shared_ptr<Client> &target) {
+    std::lock_guard lock(clients_mutex_);
+    for (auto current = clients_.begin(); current != clients_.end();
+            ++current)
+        if (*current == target) {
+            clients_.erase(current);
+            return;
+        }
 }
 
-void ServerSocket::stop() {
-    shutdown(clientSocket, SHUT_RDWR);
-    close(clientSocket);
-    shutdown(serverSocket, SHUT_RDWR);
-    close(serverSocket);
-    isShutdown = true;
+void TcpServer::wait_for_receivers() {
+    std::vector<std::thread> receivers;
+    {
+        std::lock_guard lock(receivers_mutex_);
+        receivers.swap(receivers_);
+    }
+
+    for (auto &receiver : receivers)
+        if (receiver.joinable())
+            receiver.join();
 }

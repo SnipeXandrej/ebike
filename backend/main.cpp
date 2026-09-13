@@ -15,6 +15,7 @@
 #include <format>
 #include <print>
 #include <future>
+#include <poll.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -105,7 +106,11 @@ int mcp3004Setup(int, int) {return 0;};
 #define pinChargerConnected  A1_EXP
 #define pinPWM_fan      12
 
-ServerSocket IPC;
+// IPC
+const char* IPC_PORT = "8080";
+constexpr size_t IPC_BUFFER_SIZE = 10240;
+std::mutex ipc_output_mutex;
+
 toml::table table;
 VescUart    VESC;
 MyUart      uartVESC;
@@ -162,7 +167,7 @@ struct {
     std::thread uptimeCounter;
     std::thread throttle;
     std::thread vescValueProcessing;
-    std::thread IPCRead;
+    std::thread IPCServer;
 } threads;
 
 struct {
@@ -399,7 +404,6 @@ void tripReset(Trip *trip) {
 void my_handler(int s) {
     (void)(s); // suppress unused parameter compiler warning
 
-    IPC.stop();
     done = true;
 }
 
@@ -893,17 +897,16 @@ void vescValueProcessingFunction() {
     }
 }
 
-void IPCReadFunction() {
-    std::print("[IPCreadThread] Started thread\n");
 
-    while(!done) {
+void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &client_name, const std::string &message) {
+    std::lock_guard lock(ipc_output_mutex);
+    // std::print("[client {}, {}] {}", client_id, client_name, message);
+
         std::string toSend;
-        std::string whatWasRead;
         std::string listOfProfiles;
-        whatWasRead = IPC.read();
 
-        if (sizeof(whatWasRead.data()) > 1) {
-            auto readStringPacket = msg::split(whatWasRead, msg::messageEnd);
+        if (sizeof(message.data()) > 1) {
+            auto readStringPacket = msg::split(message, msg::messageEnd);
 
         if (!readStringPacket.empty())
             for (int i = 0; i < (int)readStringPacket.size(); i++) {
@@ -1278,8 +1281,8 @@ void IPCReadFunction() {
             toSend.append(toSendExtra);
             toSendExtra = "";
         msg::mtx.unlock();
-        IPC.write(toSend.c_str(), toSend.size());
-    }
+
+        server.send_to(client_id, toSend.data(), toSend.size());
 }
 
 // ####### Setup Functions #######
@@ -1435,12 +1438,70 @@ void setupVESC() {
     VESC.setSerialPort(&uartVESC);
 }
 
+void TCP_Send(TcpServer &server) {
+    std::print("Listening on port {}. Use /list to list clients.\n", IPC_PORT);
+
+    char buffer[IPC_BUFFER_SIZE];
+    while (!done) {
+        pollfd input{STDIN_FILENO, POLLIN, 0};
+        const int poll_result = poll(&input, 1, 100);
+        if (poll_result < 0) {
+            if (errno == EINTR)
+                continue;
+            break;
+        }
+        if (poll_result == 0)
+            continue;
+        if ((input.revents & POLLIN) == 0) {
+            // systemd normally connects stdin to /dev/null, which reports
+            // POLLHUP immediately. Keep the sender alive so stdin lifetime
+            // does not control the TCP server lifetime.
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+        if (std::fgets(buffer, sizeof(buffer), stdin) == nullptr) {
+            clearerr(stdin);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            continue;
+        }
+
+        if (std::strcmp(buffer, "/list\n") == 0 || std::strcmp(buffer, "/list") == 0) {
+            auto clients = server.clients();
+            std::fprintf(stderr, "Connected clients:\n");
+            for (const auto &client : clients)
+                std::fprintf(stderr, "  %lu: %s\n", client.id,
+                             client.name.c_str());
+            if (clients.empty())
+                std::fprintf(stderr, "  (none)\n");
+            continue;
+        }
+    }
+    server.shutdown_writes();
+}
+
 void setupIPC() {
-    if (IPC.createServerSocket(8080) != 0) {
-        std::print("[IPC] failed to initialize server socket\n");
-        done = true;
+    std::print("[IPCServer] Started thread\n");
+    signal(SIGPIPE, SIG_IGN);
+    TcpServer server(IPC_PORT);
+    if (!server.ready()) {
+        std::fprintf(stderr, "Could not listen on port %s\n", IPC_PORT);
         return;
     }
+
+    std::thread sender(TCP_Send, std::ref(server));
+    std::thread receiver([&server] {
+            server.serve([&server](unsigned long client_id,
+                                        const std::string &client_name,
+                                        const char *data, size_t size) {
+            std::string message(data, size);
+            TCP_Receive(server, client_id, client_name, message);
+        });
+    });
+
+    sender.join();
+    server.stop();
+    receiver.join();
+    return;
 }
 
 int main() {
@@ -1455,7 +1516,6 @@ int main() {
     wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
     motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
 
-    setupIPC();  // IPC
     setupTOML(table, SETTINGS_FILEPATH); // settings
     #ifndef NOT_RPI
     setupGPIO(); // RPi GPIO
@@ -1624,9 +1684,9 @@ int main() {
             threads.uptimeCounter = std::thread(uptimeCounterFunction);
             threads.throttle = std::thread(throttleFunction);
             threads.vescValueProcessing = std::thread(vescValueProcessingFunction);
-            threads.IPCRead = std::thread(IPCReadFunction);
+            threads.IPCServer = std::thread(setupIPC);
 
-            while (!threads.IPCRead.joinable()) {
+            while (!threads.IPCServer.joinable()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
 
@@ -1639,7 +1699,7 @@ int main() {
     threads.uptimeCounter.join();
     threads.throttle.join();
     threads.vescValueProcessing.join();
-    threads.IPCRead.join();
+    threads.IPCServer.join();
 
     return 0;
 }
