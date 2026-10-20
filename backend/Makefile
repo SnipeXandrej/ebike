@@ -6,10 +6,10 @@ BUILD := build
 
 EXEC = ebike-backend
 SOURCES = main.cpp
-SOURCES += server.cpp myUart.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
+SOURCES += server.cpp battery.cpp myUart.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
 SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
 
-CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT)
+CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT) -DMSG_DISABLE_MTX
 CXXFLAGS += -I../submodules/magic_enum/include/magic_enum
 
 # CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g

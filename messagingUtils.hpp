@@ -9,7 +9,9 @@ namespace msg {
     extern std::string stringEnd;
     extern std::string messageEnd;
 
+    #ifndef MSG_DISABLE_MTX
     extern std::mutex mtx;
+    #endif
 
     void start(std::string& message, int command);
 

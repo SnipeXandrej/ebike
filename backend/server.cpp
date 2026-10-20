@@ -1,11 +1,14 @@
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <fcntl.h>
 #include <memory>
 #include <mutex>
 #include <netdb.h>
+#include <poll.h>
 #include <string>
 #include <sys/socket.h>
 #include <thread>
@@ -32,6 +35,12 @@ bool TcpServer::serve(const MessageHandler &on_message) {
             return !running_;
         }
 
+        const int flags = fcntl(fd, F_GETFL, 0);
+        if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {
+            close(fd);
+            continue;
+        }
+
         auto client = std::make_shared<Client>();
         client->fd = fd;
         client->id = next_id_++;
@@ -51,7 +60,6 @@ bool TcpServer::serve(const MessageHandler &on_message) {
                                     on_message);
         } catch (...) {
             remove(client);
-            close(fd);
         }
     }
     return true;
@@ -72,8 +80,10 @@ bool TcpServer::send_to(unsigned long id, const char *data, size_t size) {
 
     std::lock_guard lock(destination->send_mutex);
 
-    if (!send_all(destination->fd, data, size))
+    if (!send_all(destination->fd, data, size)) {
         shutdown(destination->fd, SHUT_RDWR);
+        return false;
+    }
 
     return true;
 }
@@ -108,13 +118,35 @@ void TcpServer::stop() {
 }
 
 bool TcpServer::send_all(int fd, const char *data, size_t size) {
+    // A single deadline bounds the whole response, including partial writes.
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(SEND_TIMEOUT_MS);
     while (size > 0) {
+        const auto remaining = deadline - std::chrono::steady_clock::now();
+        if (remaining <= std::chrono::steady_clock::duration::zero()) {
+            errno = ETIMEDOUT;
+            return false;
+        }
+
         ssize_t sent = send(fd, data, size, 0);
         if (sent < 0) {
             if (errno == EINTR)
                 continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                pollfd output{fd, POLLOUT, 0};
+                const int timeout = static_cast<int>(
+                    std::chrono::ceil<std::chrono::milliseconds>(remaining).count());
+                const int result = poll(&output, 1, timeout);
+                if (result < 0 && errno != EINTR)
+                    return false;
+                if (result > 0 && (output.revents & (POLLERR | POLLHUP | POLLNVAL)))
+                    return false;
+                continue;
+            }
             return false;
         }
+        if (sent == 0)
+            return false;
         data += sent;
         size -= static_cast<size_t>(sent);
     }
@@ -173,6 +205,15 @@ void TcpServer::receive_loop(std::shared_ptr<Client> client, const MessageHandle
         if (received < 0) {
             if (errno == EINTR)
                 continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                pollfd input{client->fd, POLLIN, 0};
+                const int result = poll(&input, 1, -1);
+                if (result < 0 && errno != EINTR)
+                    break;
+                if (result > 0 && (input.revents & POLLNVAL))
+                    break;
+                continue;
+            }
             break;
         }
 
@@ -191,8 +232,8 @@ void TcpServer::receive_loop(std::shared_ptr<Client> client, const MessageHandle
             received_buffer.erase(0, consumed);
         }
     }
+    shutdown(client->fd, SHUT_RDWR);
     remove(client);
-    close(client->fd);
     std::fprintf(stderr, "Client disconnected: %s\n", client->name.c_str());
 }
 

@@ -46,6 +46,7 @@
 #include "messagingUtils.hpp"
 #include "loopRateLimiter.hpp"
 #include "rampLimiter.hpp"
+#include "battery.hpp"
 
 #if !defined(__linux__) || defined(NOT_RPI)
 #define PWM_OUTPUT 0
@@ -63,7 +64,7 @@ int mcp3004Setup(int, int) {return 0;};
 #endif
 
 #define EBIKE_NAME "EBIKE"
-#define EBIKE_VERSION "0.6.0"
+#define EBIKE_VERSION "0.7.0"
 
 // MCP23017
 #define MCP23017_ADDRESS 0x20
@@ -111,6 +112,7 @@ const char* IPC_PORT = "8080";
 constexpr size_t IPC_BUFFER_SIZE = 10240;
 std::mutex ipc_output_mutex;
 
+Battery battery;
 toml::table table;
 VescUart    VESC;
 MyUart      uartVESC;
@@ -166,7 +168,7 @@ std::vector<Point> brakeCurve = {
 struct {
     std::thread uptimeCounter;
     std::thread throttle;
-    std::thread vescValueProcessing;
+    std::thread vescProcessing;
     std::thread IPCServer;
 } threads;
 
@@ -183,7 +185,7 @@ struct {
 
 struct {
     LoopRateLimiter threadThrottle;
-    LoopRateLimiter threadVescValueProcessing;
+    LoopRateLimiter threadVescProcessing;
 } loopRateLimiter;
 
 // TODO: do not hardcode filepaths
@@ -209,128 +211,6 @@ std::string debuginfo;
 
 // forward declaration
 void TOMLSave(toml::table &tbl, const char* filepath);
-
-class Battery {
-public:
-    void processLoop(double batVoltage, double batCurrent, bool batteryPercentageVoltageBased) {
-        static auto t1 = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::micro> usElapsed = std::chrono::high_resolution_clock::now() - t1;
-
-        voltage = batVoltage;
-        current = batCurrent;
-
-        watts = voltage * current;
-        wattHoursRemaining = wattHoursFullyDischarged - wattHoursUsed;
-
-        _batteryAmpHoursUsedInElapsedTime = current / (1000000.0 / usElapsed.count()) / 3600.0;
-        _batteryWattHoursUsedUsedInElapsedTime = (current * voltage) / (1000000.0 / usElapsed.count()) / 3600.0;
-
-        // TODO: fix this
-        if ((_batteryWattHoursUsedUsedInElapsedTime >= 20.0) || (_batteryWattHoursUsedUsedInElapsedTime <= -20.0)) {
-            // std::string tempText = std::format("_batteryWattHoursUsedUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryWattHoursUsedUsedInElapsedTime);
-            // std::print("{}", tempText);
-
-            // msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
-            // msg::addString(toSendExtra, "%s", tempText.c_str());
-            // msg::end(toSendExtra);
-
-            _batteryWattHoursUsedUsedInElapsedTime = 0.0;
-        }
-        wattHoursUsed += _batteryWattHoursUsedUsedInElapsedTime;
-
-        // TODO: fix this
-        if ((_batteryAmpHoursUsedInElapsedTime >= 20.0) || (_batteryAmpHoursUsedInElapsedTime <= -20.0)) {
-            // std::string tempText = std::format("_batteryAmpHoursUsedInElapsedTime >= 20 or <= -20!!! -> {}\n", _batteryAmpHoursUsedInElapsedTime);
-            // std::print("{}", tempText);
-
-            // msg::start(toSendExtra, COMMAND_ID::BACKEND_LOG);
-            // msg::addString(toSendExtra, "%s", tempText.c_str());
-            // msg::end(toSendExtra);
-
-            _batteryAmpHoursUsedInElapsedTime = 0.0;
-        }
-        ampHoursUsed += _batteryAmpHoursUsedInElapsedTime;
-
-        // lifetime amphours counting
-        if (_batteryAmpHoursUsedInElapsedTime >= 0.0) {
-            ampHoursUsedLifetime    += _batteryAmpHoursUsedInElapsedTime;
-        } else {
-            ampHoursUsedLifetime    -= _batteryAmpHoursUsedInElapsedTime;
-        }
-
-        // Battery charge tracking stuff
-        if (batteryPercentageVoltageBased) {
-            percentage = map_f(voltage, voltage_min, voltage_max, 0, 100);
-        } else {
-            percentage = map_f_nochecks(ampHoursUsed, 0.0, ampHoursFullyCharged, 100.0, 0.0);
-        }
-
-        static auto timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
-        static std::chrono::duration<double, std::milli> timeAmphoursMinVoltageMsElapsed;
-
-        if (!charging && (voltage <= amphours_min_voltage) && (current <= 3.0 && current >= 0.0)) {
-            timeAmphoursMinVoltageMsElapsed = std::chrono::high_resolution_clock::now() - timeAmphoursMinVoltage;
-            if (timeAmphoursMinVoltageMsElapsed.count() >= 5000) {
-                ampHoursFullyCharged_tmp = ampHoursUsed; // save ampHourUsed to ampHourRated_tmp...
-                                                                // this temporary value will later get applied to the actual
-                                                                // ampHourRated variable when the battery is done charging so
-                                                                // the estimated range and other stuff doesn't suddenly get screwed
-                wattHoursFullyDischarged_tmp = wattHoursUsed;
-            }
-        } else {
-            timeAmphoursMinVoltage = std::chrono::high_resolution_clock::now();
-        }
-
-        if (voltage >= amphours_max_voltage) {
-            if (charging && (current <= 0.0 && current >= -0.5)) {
-                ampHoursUsed = 0;
-                wattHoursUsed = 0;
-
-                if (ampHoursFullyCharged_tmp != 0.0) {
-                    ampHoursFullyCharged = ampHoursFullyCharged_tmp;
-                }
-
-                if (wattHoursFullyDischarged_tmp != 0.0) {
-                    wattHoursFullyDischarged = wattHoursFullyDischarged_tmp;
-                }
-            }
-        }
-
-        t1 = std::chrono::high_resolution_clock::now();
-    }
-
-
-
-    float percentage;
-    double watts;
-    double current;
-    float voltage;
-    float voltage_nominal = 72.0;
-    float voltage_min = 64.0;
-    float voltage_max = 84.0;
-    float voltage_absolute_min = 55.0;
-    float amphours_min_voltage = 66.0;
-    float amphours_max_voltage = 82.0;
-
-    double ampHoursUsed;
-    double ampHoursUsedLifetime;
-    double ampHoursFullyCharged;
-    double ampHoursFullyCharged_tmp;
-    double ampHoursFullyChargedWhenNew;
-
-    double wattHoursUsed;
-    double wattHoursFullyDischarged;
-    double wattHoursFullyDischarged_tmp;
-
-    double wattHoursRemaining; // calculated at runtime
-
-    double _batteryAmpHoursUsedInElapsedTime, _batteryWattHoursUsedUsedInElapsedTime;
-
-    bool charging = false;
-
-};
-Battery battery;
-
 
 struct Trip {
     double distance; // in km
@@ -705,8 +585,8 @@ float primaryCurrent = 0.0;
 float secondaryCurrent = 0.0;
 float primaryVESCSaturatedLeftoverCurrent = 0;
 
-void vescValueProcessingFunction() {
-    std::printf("[vescValueProcessingThread] Started thread\n");
+void vescProcessingFunction() {
+    std::printf("[vescProcessingFunction] Started thread\n");
     Timer timerAcceleration;
     timerAcceleration.start();
     float speed_kmh_previous = 0;
@@ -796,22 +676,22 @@ void vescValueProcessingFunction() {
                 }
                 _wasBraking = true;
 
-                if (settings.enableDualVESC && !VESC.data_mcconf.c_force_single_motor_acceleration) {
-                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.9, _primaryBrakerVESCID);
-                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.1, _secondaryBrakerVESCID);
-                } else {
-                    if (VESC.data_mcconf.c_force_single_motor_acceleration) {
-                        VESC.setBrakeCurrent(throttle_info.requested_current, _primaryBrakerVESCID);
+                if (settings.enableDualVESC) {
+                    if (!VESC.data_mcconf.c_force_single_motor_acceleration) {
+                        VESC.setBrakeCurrent(throttle_info.requested_current * 0.9, _primaryBrakerVESCID);
+                        VESC.setBrakeCurrent(throttle_info.requested_current * 0.1, _secondaryBrakerVESCID);
                     } else {
-                        VESC.setBrakeCurrent(throttle_info.requested_current);
+                        VESC.setBrakeCurrent(throttle_info.requested_current, _primaryBrakerVESCID);
                     }
+                } else {
+                    VESC.setBrakeCurrent(throttle_info.requested_current);
                 }
                 break;
         }
         throttle_info_mtx.unlock();
 
         if (VESC.getVescValues()) {
-            loopRateLimiter.threadVescValueProcessing.start();
+            loopRateLimiter.threadVescProcessing.start();
             VESCPrimary = VESC.data;
             VescUart::dataPackage tempData = VESCPrimary;
 
@@ -890,16 +770,79 @@ void vescValueProcessingFunction() {
                 speed_kmh_previous = speed_kmh;
             }
 
-            loopRateLimiter.threadVescValueProcessing.end();
+            loopRateLimiter.threadVescProcessing.end();
         } else {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }
 }
 
+void run_command_GET_POWER_PROFILE_ALL(std::string& toSend) {
+    VescUart::mcconf_t _mcconf_vesc1;
+    VescUart::mcconf_t _mcconf_vesc2;
+    // int VESC1Success = false;
+    // int VESC2Success = false;
+
+    if (VESC.getMcconfTempValues()) {
+        _mcconf_vesc1 = VESC.data_mcconf;
+
+        // VESC1Success = true;
+    }
+
+    if (settings.enableDualVESC) {
+        if (VESC.getMcconfTempValues(settings.secondaryVESCID)) {
+            _mcconf_vesc2 = VESC.data_mcconf;
+
+            // VESC2Success = true;
+        }
+    }
+
+    int profile = PP.getProfile();
+
+    msg::start(toSend, COMMAND_ID::GET_POWER_PROFILE_ALL);
+    // Profile values
+    msg::addString(toSend, "{}", PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_CURRENT_MIN_SCALE), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_CURRENT_MAX_SCALE), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MIN_ERPM), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MAX_ERPM), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MIN_DUTY), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MAX_DUTY), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_WATT_MIN), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_WATT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_IN_CURRENT_MIN), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_IN_CURRENT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION), 7);
+    // VESC ONE
+    msg::addValue(toSend, _mcconf_vesc1.l_current_min_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_current_max_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_min_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_max_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_min_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_max_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_watt_min, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_watt_max, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_in_current_min, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_in_current_max, 7);
+    msg::addValue(toSend, _mcconf_vesc1.c_phase_current_max, 7);
+    // VESC TWO
+    msg::addValue(toSend, _mcconf_vesc2.l_current_min_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_current_max_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_min_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_max_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_min_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_max_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_watt_min, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_watt_max, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_in_current_min, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_in_current_max, 7);
+    msg::addValue(toSend, _mcconf_vesc2.c_phase_current_max, 7);
+    msg::end(toSend);
+}
 
 void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &client_name, const std::string &message) {
-    std::lock_guard lock(ipc_output_mutex);
+    std::unique_lock lock(ipc_output_mutex);
     // std::print("[client {}, {}] {}", client_id, client_name, message);
 
         std::string toSend;
@@ -933,10 +876,10 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                             msg::addValue(toSend, battery.watts, 1);
                             msg::addValue(toSend, battery.wattHoursUsed, 15);
                             msg::addValue(toSend, battery.wattHoursFullyDischarged, 15);
-                            msg::addValue(toSend, battery.ampHoursUsed, 6);
-                            msg::addValue(toSend, battery.ampHoursUsedLifetime, 2);
-                            msg::addValue(toSend, battery.ampHoursFullyCharged, 2);
-                            msg::addValue(toSend, battery.ampHoursFullyChargedWhenNew, 2);
+                            msg::addValue(toSend, battery.getAmpHoursUsed(), 6);
+                            msg::addValue(toSend, battery.getAmpHoursUsedLifetime(), 2);
+                            msg::addValue(toSend, battery.getAmpHoursFullyCharged(), 2);
+                            msg::addValue(toSend, battery.getAmpHoursFullyChargedWhenNew(), 2);
                             msg::addValue(toSend, battery.percentage, 1);
                             msg::addValue(toSend, battery.voltage_min, 1);
                             msg::addValue(toSend, battery.voltage_max, 1);
@@ -944,6 +887,7 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                             msg::addValue(toSend, battery.amphours_min_voltage, 1);
                             msg::addValue(toSend, battery.amphours_max_voltage, 1);
                             msg::addValue(toSend, battery.charging, 0);
+                            msg::addValue(toSend, battery.getCycleCount(), 2);
                             msg::end(toSend);
                             break;
 
@@ -993,7 +937,7 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                             msg::addValue(toSend, uptimeInSeconds, 0);
                             msg::addValue(toSend, whileLoopUsElapsed.count() / 1000.0, 1);
                             msg::addValue(toSend, 1000.0 / loopRateLimiter.threadThrottle.getLoopRate(), 1);
-                            msg::addValue(toSend, 1000.0 / loopRateLimiter.threadVescValueProcessing.getLoopRate(), 1);
+                            msg::addValue(toSend, 1000.0 / loopRateLimiter.threadVescProcessing.getLoopRate(), 1);
                             msg::addValue(toSend, acceleration, 1);
                             msg::addValue(toSend, powerOn, 0);
                             msg::addValue(toSend, settings.automaticRegenerativeBraking, 0);
@@ -1045,98 +989,9 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                         //     break;
 
                         case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
-                            battery.ampHoursUsedLifetime = msg::getValueFromSplit_double(packet, index);
+                            battery.setAmpHoursUsedLifetime(msg::getValueFromSplit_double(packet, index));
                             msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-                            msg::addString(toSend, "Amphours used (Lifetime) was set to: {} Ah", battery.ampHoursUsedLifetime);
-                            msg::end(toSend);
-                            break;
-
-                        case COMMAND_ID::GET_VESC_MCCONF: {
-                            VescUart::mcconf_t _mcconf;
-                            int VESC1Success = false;
-                            int VESC2Success = false;
-
-                            if (VESC.getMcconfTempValues()) {
-                                _mcconf = VESC.data_mcconf;
-
-                                VESC1Success = true;
-                            }
-
-                            if (settings.enableDualVESC) {
-                                if (VESC.getMcconfTempValues(settings.secondaryVESCID)) {
-                                    _mcconf.l_current_min_scale = (_mcconf.l_current_min_scale + VESC.data_mcconf.l_current_min_scale) / 2.0; // TODO: ??
-                                    _mcconf.l_current_max_scale = (_mcconf.l_current_max_scale + VESC.data_mcconf.l_current_max_scale) / 2.0; // TODO: ??
-                                    _mcconf.l_min_erpm = (_mcconf.l_min_erpm + VESC.data_mcconf.l_min_erpm) / 2.0;
-                                    _mcconf.l_max_erpm = (_mcconf.l_max_erpm + VESC.data_mcconf.l_max_erpm) / 2.0;
-                                    _mcconf.l_min_duty = (_mcconf.l_min_duty + VESC.data_mcconf.l_min_duty) / 2.0;
-                                    _mcconf.l_max_duty = (_mcconf.l_max_duty + VESC.data_mcconf.l_max_duty) / 2.0;
-                                    // if (VESC.data_mcconf.c_force_single_motor_acceleration) {
-                                    //     _mcconf.l_watt_min = (_mcconf.l_watt_min + VESC.data_mcconf.l_watt_min) / 2.0;
-                                    //     _mcconf.l_watt_max = (_mcconf.l_watt_max + VESC.data_mcconf.l_watt_max) / 2.0;
-                                    //     _mcconf.l_in_current_min = (_mcconf.l_in_current_min + VESC.data_mcconf.l_in_current_min) / 2.0;
-                                    //     _mcconf.l_in_current_max = (_mcconf.l_in_current_max + VESC.data_mcconf.l_in_current_max) / 2.0;
-                                    //     //
-                                    //     _mcconf.c_phase_current_max = (_mcconf.c_phase_current_max + VESC.data_mcconf.c_phase_current_max) / 2.0;
-                                    // } else {
-                                    _mcconf.l_watt_min += VESC.data_mcconf.l_watt_min;
-                                    _mcconf.l_watt_max += VESC.data_mcconf.l_watt_max;
-                                    _mcconf.l_in_current_min += VESC.data_mcconf.l_in_current_min;
-                                    _mcconf.l_in_current_max += VESC.data_mcconf.l_in_current_max;
-                                    //
-                                    _mcconf.c_phase_current_max += VESC.data_mcconf.c_phase_current_max;
-                                    // }
-
-                                    VESC2Success = true;
-                                }
-                            }
-
-                            if ((VESC1Success && !settings.enableDualVESC) || (VESC1Success && VESC2Success && settings.enableDualVESC)) {
-                                msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
-                                msg::addValue(toSend, _mcconf.l_current_min_scale, 7);
-                                msg::addValue(toSend, _mcconf.l_current_max_scale, 7);
-                                msg::addValue(toSend, _mcconf.l_min_erpm, 7);
-                                msg::addValue(toSend, _mcconf.l_max_erpm, 7);
-                                msg::addValue(toSend, _mcconf.l_min_duty, 7);
-                                msg::addValue(toSend, _mcconf.l_max_duty, 7);
-                                msg::addValue(toSend, _mcconf.l_watt_min, 7);
-                                msg::addValue(toSend, _mcconf.l_watt_max, 7);
-                                msg::addValue(toSend, _mcconf.l_in_current_min, 7);
-                                msg::addValue(toSend, _mcconf.l_in_current_max, 7);
-                                msg::addString(toSend, "{}", _mcconf.name);
-                                msg::addValue(toSend, _mcconf.c_phase_current_max, 7);
-                                msg::addValue(toSend, _mcconf.c_force_single_motor_acceleration, 7);
-                                msg::end(toSend);
-
-                                msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-                                msg::addString(toSend, "Latest McConf values retrieved");
-                                msg::end(toSend);
-                            } else {
-                                msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-                                msg::addString(toSend, "Latest McConf values did NOT get retrieved!");
-                                msg::end(toSend);
-                            }
-                            break;
-                        }
-                        case COMMAND_ID::SET_POWER_PROFILE_CUSTOM:
-                            PP.setProfile(PROFILE::CUSTOM);
-
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_CURRENT_MIN_SCALE, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_CURRENT_MAX_SCALE, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_MIN_ERPM, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_MAX_ERPM, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_MIN_DUTY, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_MAX_DUTY, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_WATT_MIN, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
-                            PP.set(PROFILE::CUSTOM, PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, msg::getValueFromSplit(packet, index));
-
-                            setMcconfFromCurrentProfile();
-
-                            msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-                            msg::addString(toSend, "Custom McConf was set!");
+                            msg::addString(toSend, "Amphours used (Lifetime) was set to: {} Ah", battery.getAmpHoursUsedLifetime());
                             msg::end(toSend);
                             break;
 
@@ -1144,8 +999,7 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                             {
                                 float newValue = msg::getValueFromSplit(packet, index);
 
-                                battery.ampHoursFullyCharged = newValue;
-                                battery.ampHoursFullyCharged_tmp = newValue;
+                                battery.setAmpHoursFullyCharged(newValue);
 
                                 msg::start(toSend, COMMAND_ID::BACKEND_LOG);
                                 msg::addString(toSend, "Amphours charged was set to: {} Ah", newValue);
@@ -1228,7 +1082,12 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                                 }
                                 throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
 
-                                debuginfo = std::format("Speed: {} km/h\n"
+                                debuginfo = std::format("Battery:\n"
+                                                        "{}\n"
+                                                        , battery.statusString.get()
+                                                        );
+
+                                debuginfo += std::format("Speed: {} km/h\n"
                                                         "{}\n"
                                                         "VESC Primary Current\n"
                                                         "       Requested: {} A\n"
@@ -1272,16 +1131,52 @@ void TCP_Receive(TcpServer &server, unsigned long client_id, const std::string &
                             msg::end(toSend);
 
                             break;
+
+                        case COMMAND_ID::GET_POWER_PROFILE_ALL: {
+                            run_command_GET_POWER_PROFILE_ALL(toSend);
+
+                            break;
+                        }
+
+                        case COMMAND_ID::SET_POWER_PROFILE_VALUES:
+                            PP.setProfile(STRING_TO_PROFILE.at(msg::getValueFromSplit_string(packet, index)));
+                            PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_MIN_ERPM, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_MAX_ERPM, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_MIN_DUTY, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_MAX_DUTY, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_WATT_MIN, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+                            PP.set(PP.getProfile(), PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, msg::getValueFromSplit(packet, index));
+
+                            setMcconfFromCurrentProfile();
+                            run_command_GET_POWER_PROFILE_ALL(toSend);
+
+                            msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+                            msg::addString(toSend, "New profile values set!");
+                            msg::end(toSend);
+
+                            break;
                     }
                 }
             }// !if packet.empty()
         }
 
+        #ifndef MSG_DISABLE_MTX
         msg::mtx.lock();
+        #endif
             toSend.append(toSendExtra);
             toSendExtra = "";
+        #ifndef MSG_DISABLE_MTX
         msg::mtx.unlock();
+        #endif
 
+        // Protect response construction, but never hold the shared lock during I/O.
+        lock.unlock();
         server.send_to(client_id, toSend.data(), toSend.size());
 }
 
@@ -1303,12 +1198,14 @@ void setupTOML(toml::table &tbl, const char* filepath) {
     trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"].value_or<double>(0);
     trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"].value_or<double>(0);
     trip_B.rideTime                         = tbl["trip_B"]["rideTime"].value_or<double>(0);
-    battery.ampHoursUsed                    = tbl["battery"]["ampHoursUsed"].value_or<double>(0);
-    battery.ampHoursFullyCharged            = tbl["battery"]["ampHoursFullyCharged"].value_or<double>(0);
-    battery.ampHoursFullyChargedWhenNew     = tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(0);
-    battery.ampHoursUsedLifetime            = tbl["battery"]["ampHoursUsedLifetime"].value_or<double>(0);
+    battery.setAmpHoursUsed(                  tbl["battery"]["ampHoursUsed"].value_or<double>(0));
+    battery.setAmpHoursFullyCharged(          tbl["battery"]["ampHoursFullyCharged"].value_or<double>(0));
+    battery.setAmpHoursFullyChargedWhenNew(   tbl["battery"]["ampHoursFullyChargedWhenNew"].value_or<double>(0));
+    battery.setAmpHoursUsedLifetime(          tbl["battery"]["ampHoursUsedLifetime"].value_or<double>(0));
+    battery.setCycleCount(                    tbl["battery"]["cycleCount"].value_or<double>(0));
     battery.wattHoursUsed                   = tbl["battery"]["wattHoursUsed"].value_or<double>(0);
     battery.wattHoursFullyDischarged        = tbl["battery"]["wattHoursFullyDischarged"].value_or<double>(0);
+    // battery.__estimatedAmpHoursFullyCharged = tbl["battery"]["__estimatedAmpHoursFullyCharged"].value_or<double>(0);
     settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"].value_or(0);
     settings.automaticRegenerativeBraking   = tbl["settings"]["automaticRegenerativeBraking"].value_or(0);
     settings.minimizeDrivetrainBacklash     = tbl["settings"]["minimizeDrivetrainBacklash"].value_or(0);
@@ -1350,12 +1247,14 @@ void TOMLSave(toml::table &tbl, const char* filepath) {
     updateTableValue(tbl, "trip_B", "wattHoursConsumed", trip_B.wattHoursConsumed);
     updateTableValue(tbl, "trip_B", "wattHoursRegenerated", trip_B.wattHoursRegenerated);
     updateTableValue(tbl, "trip_B", "rideTime", trip_B.rideTime);
-    updateTableValue(tbl, "battery", "ampHoursUsed", battery.ampHoursUsed);
-    updateTableValue(tbl, "battery", "ampHoursFullyCharged", battery.ampHoursFullyCharged);
-    updateTableValue(tbl, "battery", "ampHoursFullyChargedWhenNew", battery.ampHoursFullyChargedWhenNew);
-    updateTableValue(tbl, "battery", "ampHoursUsedLifetime", battery.ampHoursUsedLifetime);
+    updateTableValue(tbl, "battery", "ampHoursUsed", battery.getAmpHoursUsed());
+    updateTableValue(tbl, "battery", "ampHoursFullyCharged", battery.getAmpHoursFullyCharged());
+    updateTableValue(tbl, "battery", "ampHoursFullyChargedWhenNew", battery.getAmpHoursFullyChargedWhenNew());
+    updateTableValue(tbl, "battery", "ampHoursUsedLifetime", battery.getAmpHoursUsedLifetime());
+    updateTableValue(tbl, "battery", "cycleCount", battery.getCycleCount());
     updateTableValue(tbl, "battery", "wattHoursUsed", battery.wattHoursUsed);
     updateTableValue(tbl, "battery", "wattHoursFullyDischarged", battery.wattHoursFullyDischarged);
+    // updateTableValue(tbl, "battery", "__estimatedAmpHoursFullyCharged", battery.__estimatedAmpHoursFullyCharged);
     updateTableValue(tbl, "settings", "batteryPercentageVoltageBased", settings.batteryPercentageVoltageBased);
     updateTableValue(tbl, "settings", "automaticRegenerativeBraking", settings.automaticRegenerativeBraking);
     updateTableValue(tbl, "settings", "minimizeDrivetrainBacklash", settings.minimizeDrivetrainBacklash);
@@ -1545,6 +1444,7 @@ int main() {
         pwmWrite(pinPWM_fan, 256); // 0 - 1023
 
         // Analog
+        // this one takes a long time, depending on the set data rate
         std::future<int> _batteryCurrentRawFuture = std::async(std::launch::async, []() { return analogRead(ADS1115_BASEPIN+5); });
 
         float analogRefV = 2.49;
@@ -1610,17 +1510,18 @@ int main() {
         // calculate other stuff
         rollingRangeEstimation.loop(battery.wattHoursRemaining);
 
+        // should be accurate, only measures while moving
         if (!battery.charging && speed_kmh != 0.0) {
-            rollingRangeEstimation.addDeltaWhUsed(battery._batteryWattHoursUsedUsedInElapsedTime);
+            rollingRangeEstimation.addDeltaWhUsed(battery.getWattHoursUsedInPreviousLoopCycle());
 
-            if (battery._batteryWattHoursUsedUsedInElapsedTime >= 0.0) {
-                trip_A.wattHoursConsumed += battery._batteryWattHoursUsedUsedInElapsedTime;
-                trip_B.wattHoursConsumed += battery._batteryWattHoursUsedUsedInElapsedTime;
+            if (battery.getWattHoursUsedInPreviousLoopCycle() >= 0.0) {
+                trip_A.wattHoursConsumed += battery.getWattHoursUsedInPreviousLoopCycle();
+                trip_B.wattHoursConsumed += battery.getWattHoursUsedInPreviousLoopCycle();
             }
 
-            if (battery._batteryWattHoursUsedUsedInElapsedTime < 0.0) {
-                trip_A.wattHoursRegenerated += battery._batteryWattHoursUsedUsedInElapsedTime;
-                trip_B.wattHoursRegenerated += battery._batteryWattHoursUsedUsedInElapsedTime;
+            if (battery.getWattHoursUsedInPreviousLoopCycle() < 0.0) {
+                trip_A.wattHoursRegenerated += battery.getWattHoursUsedInPreviousLoopCycle();
+                trip_B.wattHoursRegenerated += battery.getWattHoursUsedInPreviousLoopCycle();
             }
         }
 
@@ -1683,9 +1584,10 @@ int main() {
         if (!threadsInitialized) {
             threads.uptimeCounter = std::thread(uptimeCounterFunction);
             threads.throttle = std::thread(throttleFunction);
-            threads.vescValueProcessing = std::thread(vescValueProcessingFunction);
+            threads.vescProcessing = std::thread(vescProcessingFunction);
             threads.IPCServer = std::thread(setupIPC);
 
+            // TODO: do it the proper way
             while (!threads.IPCServer.joinable()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
@@ -1698,7 +1600,7 @@ int main() {
 
     threads.uptimeCounter.join();
     threads.throttle.join();
-    threads.vescValueProcessing.join();
+    threads.vescProcessing.join();
     threads.IPCServer.join();
 
     return 0;

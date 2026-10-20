@@ -1,6 +1,15 @@
 #include "commonUtils.hpp"
-#include "toml.hpp"
 #include <print>
+
+void AtomicString::set(std::string value) {
+    std::lock_guard lock(mutex_);
+    value_ = std::move(value);
+}
+
+std::string AtomicString::get() {
+    std::lock_guard lock(mutex_);
+    return value_;
+}
 
 float MovingAverage::smoothValue(float newValue, float previousValue, float smoothingFactor) {
     return previousValue + smoothingFactor * (newValue - previousValue);

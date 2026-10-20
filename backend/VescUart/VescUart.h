@@ -241,6 +241,7 @@ class VescUart
 
 	private: 
     std::mutex mtx;
+    std::mutex mtx_packSendPayload;
 
 		/** Variabel to hold the reference to the Serial object to use for UART */
 		MyUart* serialPort = NULL;

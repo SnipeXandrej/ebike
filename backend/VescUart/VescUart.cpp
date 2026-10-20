@@ -20,6 +20,7 @@ void VescUart::setDebugPort(MyUart* port)
 }
 
 int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
+	const std::lock_guard<std::mutex> lock(mtx);
 
 	// Messages <= 255 starts with "2", 2nd byte is length
 	// Messages > 255 starts with "3" 2nd and 3rd byte is length combined with 1st >>8 and then &0xFF
@@ -27,8 +28,6 @@ int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
 	// Makes no sense to run this function if no serialPort is defined.
 	if (serialPort == NULL)
 		return -1;
-
-	mtx.lock();
 
 	uint16_t counter = 0;
 	uint16_t endMessage = 256;
@@ -105,7 +104,6 @@ int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
 		ret = 0;
 	}
 
-	mtx.unlock();
 	return ret;
 }
 
@@ -149,6 +147,8 @@ bool VescUart::unpackPayload(uint8_t * message, int lenMes, uint8_t * payload) {
 }
 
 int VescUart::packSendPayload(uint8_t * payload, int lenPay) {
+	const std::lock_guard<std::mutex> lock(mtx_packSendPayload);
+
 	uint16_t crcPayload = crc16(payload, lenPay);
 	int count = 0;
 	uint8_t messageSend[256];
@@ -552,7 +552,7 @@ unsigned int VescUart::millis (void) {
   now  = (uint64_t)ts.tv_sec * (uint64_t)1000 + (uint64_t)(ts.tv_nsec / 1000000L) ;
 #endif
 
-std::this_thread::sleep_for(std::chrono::milliseconds(1));
+std::this_thread::sleep_for(std::chrono::microseconds(200));
 
   return (uint32_t)(now - epochMilli) ;
 }

@@ -8,10 +8,14 @@ namespace msg {
     std::string stringEnd = "!@!@";
     std::string messageEnd = "@@!!\n";
 
+    #ifndef MSG_DISABLE_MTX
     std::mutex mtx;
+    #endif
 
     void start(std::string& message, int command) {
+        #ifndef MSG_DISABLE_MTX
         mtx.lock();
+        #endif
         std::string string = std::format("{};", command);
         message.append(string);
     }
@@ -45,7 +49,9 @@ namespace msg {
 
     void end(std::string& message) {
         message.append(messageEnd);
+        #ifndef MSG_DISABLE_MTX
         mtx.unlock();
+        #endif
     }
 
     std::vector<std::string> split(const std::string& input, const std::string& delimiter) {

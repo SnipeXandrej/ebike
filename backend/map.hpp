@@ -1,6 +1,9 @@
+#pragma once
+
 #include <iostream>
 #include <vector>
 #include <algorithm>
+#include <stdexcept>
 
 // throttle curve
 struct Point {
@@ -17,6 +20,10 @@ public:
     }
 
     double map(double input) const {
+        if (curve.empty()) {
+            throw std::logic_error("ThrottleMap::map called before a curve was configured");
+        }
+
         if (input <= curve.front().in) return curve.front().out;
         if (input >= curve.back().in) return curve.back().out;
 

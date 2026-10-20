@@ -44,10 +44,13 @@ class TcpServer {
         unsigned long id;
         std::string name;
         std::mutex send_mutex;
+        // Keep the descriptor alive while an in-flight send owns this client.
+        ~Client() { close(fd); }
     };
 
     static constexpr int BACKLOG = 16;
     static constexpr size_t BUFFER_SIZE = 4096;
+    static constexpr int SEND_TIMEOUT_MS = 15000;
 
     static bool send_all(int fd, const char *data, size_t size);
     static int create_listener(const char *port);

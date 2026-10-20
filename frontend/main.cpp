@@ -94,7 +94,7 @@
 #include "waylandUtils.hpp"
 #endif
 
-#define GUI_VERSION "0.6.0"
+#define GUI_VERSION "0.7.0"
 
 struct VESC_MCCONF {
     float l_current_min_scale;
@@ -107,7 +107,7 @@ struct VESC_MCCONF {
     float l_watt_max;
     float l_in_current_min;
     float l_in_current_max;
-    float c_current_phase_max;
+    float c_phase_current_max;
     bool c_force_single_motor_acceleration;
     std::string name;
     int id;
@@ -115,6 +115,12 @@ struct VESC_MCCONF {
     // float gear_ratio;
     // float wheel_diameter;
 };
+
+profile_t profile;
+VESC_MCCONF mcconf_vesc_one;
+VESC_MCCONF mcconf_vesc_two;
+
+// TODO: remove
 VESC_MCCONF mcconf_vesc;
 
 struct trip {
@@ -143,7 +149,7 @@ struct VESCMotorStats {
     float temperature_vesc;
 };
 
-struct {
+struct Backend {
     float totalSecondsSinceBoot = 0;
     uint64_t clockSecondsSinceBoot = 0;
     uint64_t clockMinutesSinceBoot = 0;
@@ -183,7 +189,8 @@ struct {
 
     std::string notes;
     std::string debuginfo;
-} backend;
+};
+Backend backend;
 
 // Limit FPS
 struct {
@@ -210,6 +217,7 @@ struct {
     float current;
     float ampHoursUsed;
     float ampHoursUsedLifetime;
+    float cycleCount;
     float watts;
     float wattHoursUsed;
     float watthoursFullyDischarged;
@@ -306,20 +314,21 @@ void setBrightnessHigh() {
     #endif
 }
 
-void setMcconfCustomValues(VESC_MCCONF mcconf) {
-    msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE_CUSTOM);
-    msg::addValue(toSendExtra, mcconf.l_current_min_scale, 7);
-    msg::addValue(toSendExtra, mcconf.l_current_max_scale, 7);
-    msg::addValue(toSendExtra, mcconf.l_min_erpm, 7);
-    msg::addValue(toSendExtra, mcconf.l_max_erpm, 7);
-    msg::addValue(toSendExtra, mcconf.l_min_duty, 7);
-    msg::addValue(toSendExtra, mcconf.l_max_duty, 7);
-    msg::addValue(toSendExtra, mcconf.l_watt_min, 7);
-    msg::addValue(toSendExtra, mcconf.l_watt_max, 7);
-    msg::addValue(toSendExtra, mcconf.l_in_current_min, 7);
-    msg::addValue(toSendExtra, mcconf.l_in_current_max, 7);
-    msg::addValue(toSendExtra, mcconf.c_current_phase_max, 7);
-    msg::addValue(toSendExtra, mcconf.c_force_single_motor_acceleration, 0);
+void setProfileValues(profile_t profile) {
+    msg::start(toSendExtra, COMMAND_ID::SET_POWER_PROFILE_VALUES);
+    msg::addString(toSendExtra, "{}", profile.name);
+    msg::addValue(toSendExtra, profile.l_current_min_scale, 7);
+    msg::addValue(toSendExtra, profile.l_current_max_scale, 7);
+    msg::addValue(toSendExtra, profile.l_min_erpm, 7);
+    msg::addValue(toSendExtra, profile.l_max_erpm, 7);
+    msg::addValue(toSendExtra, profile.l_min_duty, 7);
+    msg::addValue(toSendExtra, profile.l_max_duty, 7);
+    msg::addValue(toSendExtra, profile.l_watt_min, 7);
+    msg::addValue(toSendExtra, profile.l_watt_max, 7);
+    msg::addValue(toSendExtra, profile.l_in_current_min, 7);
+    msg::addValue(toSendExtra, profile.l_in_current_max, 7);
+    msg::addValue(toSendExtra, profile.c_phase_current_max, 7);
+    msg::addValue(toSendExtra, profile.c_force_single_motor_acceleration, 0);
     msg::end(toSendExtra);
 }
 
@@ -385,6 +394,7 @@ void processRead(std::string line) {
                             battery.amphours_min_voltage = msg::getValueFromSplit(packet, index);
                             battery.amphours_max_voltage = msg::getValueFromSplit(packet, index);
                             battery.charging = msg::getValueFromSplit(packet, index);
+                            battery.cycleCount = msg::getValueFromSplit(packet, index);
                             break;
 
                         case COMMAND_ID::GET_STATS:
@@ -449,22 +459,6 @@ void processRead(std::string line) {
                             backend.fw_compile_date_time = msg::getValueFromSplit_string(packet, index);
                             break;
 
-                        case COMMAND_ID::GET_VESC_MCCONF:
-                            mcconf_vesc.l_current_min_scale = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_current_max_scale = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_min_erpm = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_max_erpm = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_min_duty = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_max_duty = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_watt_min = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_watt_max = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_in_current_min = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.l_in_current_max = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.name = msg::getValueFromSplit_string(packet, index);
-                            mcconf_vesc.c_current_phase_max = msg::getValueFromSplit(packet, index);
-                            mcconf_vesc.c_force_single_motor_acceleration = msg::getValueFromSplit(packet, index);
-                            break;
-
                         case COMMAND_ID::BACKEND_LOG:
                             backend.log.append(std::format("[{}] {}\n", std::string(currentTimeAndDate), msg::getValueFromSplit_string(packet, index)));
                             break;
@@ -481,6 +475,48 @@ void processRead(std::string line) {
 
                         case COMMAND_ID::GET_DEBUGINFO:
                             backend.debuginfo = msg::getValueFromSplit_string(packet, index);
+
+                            break;
+
+                        case COMMAND_ID::GET_POWER_PROFILE_ALL:
+                            // profile
+                            profile.name = msg::getValueFromSplit_string(packet, index);
+                            profile.l_current_min_scale = msg::getValueFromSplit(packet, index);
+                            profile.l_current_max_scale = msg::getValueFromSplit(packet, index);
+                            profile.l_min_erpm = msg::getValueFromSplit(packet, index);
+                            profile.l_max_erpm = msg::getValueFromSplit(packet, index);
+                            profile.l_min_duty = msg::getValueFromSplit(packet, index);
+                            profile.l_max_duty = msg::getValueFromSplit(packet, index);
+                            profile.l_watt_min = msg::getValueFromSplit(packet, index);
+                            profile.l_watt_max = msg::getValueFromSplit(packet, index);
+                            profile.l_in_current_min = msg::getValueFromSplit(packet, index);
+                            profile.l_in_current_max = msg::getValueFromSplit(packet, index);
+                            profile.c_phase_current_max = msg::getValueFromSplit(packet, index);
+                            profile.c_force_single_motor_acceleration = (bool)msg::getValueFromSplit(packet, index);
+                            // VESC ONE
+                            mcconf_vesc_one.l_current_min_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_current_max_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_min_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_max_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_min_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_max_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_watt_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_watt_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_in_current_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.l_in_current_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_one.c_phase_current_max = msg::getValueFromSplit(packet, index);
+                            // VESC TWO
+                            mcconf_vesc_two.l_current_min_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_current_max_scale = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_min_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_max_erpm = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_min_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_max_duty = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_watt_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_watt_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_in_current_min = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.l_in_current_max = msg::getValueFromSplit(packet, index);
+                            mcconf_vesc_two.c_phase_current_max = msg::getValueFromSplit(packet, index);
 
                             break;
 
@@ -571,7 +607,7 @@ void widgetPerformanceSelector(int width) {
     if (ImGui::Combo("##v", &backend.currentPowerProfile, backend.availablePowerProfiles.data())) {
         setPowerProfile(backend.currentPowerProfile);
 
-        msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
+        msg::start(toSendExtra, COMMAND_ID::GET_POWER_PROFILE_ALL);
         msg::end(toSendExtra);
     }
 }
@@ -579,8 +615,8 @@ void widgetPerformanceSelector(int width) {
 void appFrameRender() {
         ImGuiIO& io = ImGui::GetIO();
         ImGuiStyle& style = ImGui::GetStyle();
-        float buttonWidth = 170.0 * style.FontScaleDpi;
-        float buttonHeight = 80.0 * style.FontScaleDpi;
+        float buttonWidth = 110.0 * style.FontScaleDpi;
+        float buttonHeight = 50.0 * style.FontScaleDpi;
 
         // Clock
         writeClock();
@@ -1097,9 +1133,9 @@ void appFrameRender() {
                     ImGui::Text("   Uptime: %2llud %2lluh %2llum %2llus\n", backend.clockDaysSinceBoot, backend.clockHoursSinceBoot, backend.clockMinutesSinceBoot, backend.clockSecondsSinceBoot);
 
                     ImGui::Dummy(ImVec2(0.0f, 20.0f));
-                    ImGui::Text("Main Loop Rate:                  %0.1f ms / %0.1f Hz", backend.loopTimeMain_ms, 1000.0 / backend.loopTimeMain_ms);
-                    ImGui::Text("Throttle Loop Rate:              %0.1f ms / %0.1f Hz", backend.loopTimeThrottle_ms, 1000.0 / backend.loopTimeThrottle_ms);
-                    ImGui::Text("Vesc Value Processing Loop Rate: %0.1f ms / %0.1f Hz", backend.loopTimeVescValueProcessing_ms, 1000.0 / backend.loopTimeVescValueProcessing_ms);
+                    ImGui::Text("Main Loop Rate:            %0.1f ms / %0.1f Hz", backend.loopTimeMain_ms, 1000.0 / backend.loopTimeMain_ms);
+                    ImGui::Text("Throttle Loop Rate:        %0.1f ms / %0.1f Hz", backend.loopTimeThrottle_ms, 1000.0 / backend.loopTimeThrottle_ms);
+                    ImGui::Text("Vesc Processing Loop Rate: %0.1f ms / %0.1f Hz", backend.loopTimeVescValueProcessing_ms, 1000.0 / backend.loopTimeVescValueProcessing_ms);
 
                     ImGui::Dummy(ImVec2(0, 20));
                     if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
@@ -1214,8 +1250,10 @@ void appFrameRender() {
                     ImGui::Text("Amphours Rated (New):     %0.2f Ah", battery.ampHoursFullyChargedWhenNew);
                     ImGui::Text("Amphours Rated (Now):     %0.2f Ah", battery.ampHoursFullyCharged);
                     ImGui::Text("Amphours Used:            %0.2f Ah", battery.ampHoursUsed);
-                    // Amphours used lifetime since 22.09.2025
+                    // Amphours used lifetime since 22.09.2025 // its kind of (for sure) wrong 22.09.2026
+                    // new measurements since 21.09.2026
                     ImGui::Text("Amphours Used (Lifetime): %0.2f Ah", battery.ampHoursUsedLifetime);
+                    ImGui::Text("Number of cycles used:    %0.2f", battery.cycleCount);
 
                     ImGui::Dummy(ImVec2(0,40));
 
@@ -1247,41 +1285,77 @@ void appFrameRender() {
                         }
                     }
 
-                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
-                    ImGui::SeparatorText("VESC");
-                    ImGui::PopStyleColor();
-                    ImGui::PopFont();
-
-                    ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.VESCCombined.temperature_vesc);
-                    ImGui::Text(" ");
-
-                    ImGui::BeginGroup();
+                    auto displayVescSettings = [buttonWidth, buttonHeight, &style](VESC_MCCONF mcconf, Backend back) {
                         float ItemWidth = 90.0 * style.FontScaleDpi;
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf_vesc.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf_vesc.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf_vesc.l_current_min_scale, 0.01);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf_vesc.l_current_max_scale, 0.01);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3 && negative value)", &mcconf_vesc.l_min_erpm, 100);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf_vesc.l_max_erpm, 100);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf_vesc.l_min_duty, 0.001);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf_vesc.l_max_duty, 0.001);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power (negative value)", &mcconf_vesc.l_watt_min, 50.0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf_vesc.l_watt_max, 50.0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current (negative value)", &mcconf_vesc.l_in_current_min, 1.0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf_vesc.l_in_current_max, 1.0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf_vesc.c_current_phase_max, 1.0);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Checkbox("Single Motor Acceleration", &mcconf_vesc.c_force_single_motor_acceleration);
-                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", mcconf_vesc.name.c_str());
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf.l_current_min_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &mcconf.l_current_max_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3)", &mcconf.l_min_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &mcconf.l_max_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &mcconf.l_min_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &mcconf.l_max_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power", &mcconf.l_watt_min, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &mcconf.l_watt_max, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current", &mcconf.l_in_current_min, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &mcconf.l_in_current_max, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &mcconf.c_phase_current_max, 1.0);
+                        ImGui::EndTabItem();
+                    };
+
+                    auto displayProfileSettings = [buttonWidth, buttonHeight, &style](profile_t &profile, Backend back) {
+                        float ItemWidth = 90.0 * style.FontScaleDpi;
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", profile.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", profile.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &profile.l_current_min_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Accelerating)", &profile.l_current_max_scale, 0.01);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse RPM (times 3)", &profile.l_min_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward RPM (times 3)", &profile.l_max_erpm, 100);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Min Duty Cycle", &profile.l_min_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Max Duty Cycle", &profile.l_max_duty, 0.001);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Reverse Power", &profile.l_watt_min, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Forward Power", &profile.l_watt_max, 50.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Braking Current", &profile.l_in_current_min, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Battery Current", &profile.l_in_current_max, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Phase Current", &profile.c_phase_current_max, 1.0);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Checkbox("Single Motor Acceleration", &profile.c_force_single_motor_acceleration);
+                        ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", profile.name.c_str());
 
                         if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                            msg::start(toSendExtra, COMMAND_ID::GET_VESC_MCCONF);
+                            msg::start(toSendExtra, COMMAND_ID::GET_POWER_PROFILE_ALL);
                             msg::end(toSendExtra);
                         }
                         ImGui::SameLine();
                         if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
-                            setMcconfCustomValues(mcconf_vesc);
+                            setProfileValues(profile);
                         }
+                        ImGui::EndTabItem();
+                    };
+
+                    ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 2.0);
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0, 1.0, 0.78, 1.0));
+                    ImGui::SeparatorText("Power Profiles");
+                    ImGui::PopStyleColor();
+                    ImGui::PopFont();
+                    ImGui::BeginGroup();
+                        ImGui::Text("VESC MOSFET Temperature: %0.1f°C", backend.VESCCombined.temperature_vesc);
+                        ImGui::Text(" ");
+                        if (ImGui::BeginTabBar("Profile TabBar")) {
+
+                        if (ImGui::BeginTabItem("Profile")) {
+                            displayProfileSettings(profile, backend);
+                        }
+
+                        if (ImGui::BeginTabItem("VESC ONE")) {
+                            displayVescSettings(mcconf_vesc_one, backend);
+                        }
+
+                        if (ImGui::BeginTabItem("VESC TWO")) {
+                            displayVescSettings(mcconf_vesc_two, backend);
+                        }
+
+                        ImGui::EndTabBar();
+                    }
                     ImGui::EndGroup();
 
                     ImGui::EndChild();
@@ -1449,7 +1523,7 @@ void appInitSettings() {
                         msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
                         msg::end(toSend);
 
-                        msg::start(toSend, COMMAND_ID::GET_VESC_MCCONF);
+                        msg::start(toSend, COMMAND_ID::GET_POWER_PROFILE_ALL);
                         msg::end(toSend);
 
                         msg::start(toSend, COMMAND_ID::GET_FW);

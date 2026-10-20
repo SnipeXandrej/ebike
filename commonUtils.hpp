@@ -3,6 +3,33 @@
 
 #include <iostream>
 #include "toml.hpp"
+#include <mutex>
+#include <thread>
+
+class AtomicString {
+    mutable std::mutex mutex_;
+    std::string value_;
+
+public:
+    void set(std::string value);
+    std::string get();
+};
+
+struct profile_t {
+    std::string name;
+    float l_current_min_scale;
+    float l_current_max_scale;
+    float l_min_erpm;
+    float l_max_erpm;
+    float l_min_duty;
+    float l_max_duty;
+    float l_watt_min;
+    float l_watt_max;
+    float l_in_current_min;
+    float l_in_current_max;
+    float  c_phase_current_max;
+    bool   c_force_single_motor_acceleration;
+};
 
 class MovingAverage {
 private:
