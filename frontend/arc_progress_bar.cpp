@@ -5,7 +5,6 @@
 void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, float thickness, ImVec2 pos, float min_input, float max_input)
 {
     ImDrawList *draw_list = ImGui::GetWindowDrawList();
-    float fontScale = ImGui::GetStyle().FontScaleDpi;
 
     bool isInputNegative = false;
     float inputMapped;
@@ -31,19 +30,19 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     float a_max_factor = a_min_factor + a_factor_delta;
 
     float a_factor_delta_green = (a_max_factor_100percentage - a_min_factor) * ((inputMapped) * 0.01f);
-    float a_max_factor_green = a_min_factor + a_factor_delta_green;
+    float a_max_factor_green = a_min_factor + a_factor_delta_green + 0.02f;
 
-    ImGui::SetCursorPos(ImVec2(x - 3.5 * fontScale, y + size * 0.25f * fontScale));
+    ImGui::SetCursorScreenPos(ImVec2(x - 3.5 * scale_ui, y + size * 0.25f * scale_ui));
     ImGui::Text("%0.0f", min_input);
 
-    ImGui::SetCursorPos(ImVec2(x + (size - 15.0) * 0.5 * fontScale, y + size * 0.25f * fontScale));
+    ImGui::SetCursorScreenPos(ImVec2(x + (size - 15.0) * 0.5 * scale_ui, y + size * 0.25f * scale_ui));
     ImGui::Text("%0.0f", max_input);
 
     {
-        ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.9);
+        ImGui::PushFont(ImGui::GetFont(), ImGui::GetStyle().FontSizeBase * 1.9 * textScale);
         std::string text = std::format("{:.0f}", input);
         ImVec2 textSize = ImGui::CalcTextSize(text.data());
-        ImGui::SetCursorPos(ImVec2(x + (size * 0.25 * fontScale) - (textSize.x / 2.0), y + (size * 0.25f * fontScale) - (22.5 * fontScale)));
+        ImGui::SetCursorScreenPos(ImVec2(x + (size * 0.25 * scale_ui) - (textSize.x / 2.0), y + (size * 0.25f * scale_ui) - textSize.y));
         ImGui::Text("%s", text.data());
         ImGui::PopFont();
     }
@@ -51,45 +50,52 @@ void ArcProgressBar::_DrawArc(float size, float max_angle_factor, float input, f
     {
         // std::string text = std::format("{:.0f}", input);
         ImVec2 textSize = ImGui::CalcTextSize(name.data());
-        ImGui::SetCursorPos(ImVec2(x + (size * 0.25 * fontScale) - (textSize.x / 2.0), y + (size * 0.25f * fontScale)));
+        ImGui::SetCursorScreenPos(ImVec2(x + (size * 0.25 * scale_ui) - (textSize.x / 2.0), y + (size * 0.25f * scale_ui)));
         ImGui::Text("%s", name.data());
     }
 
     ImColor green = ImVec4(0.0f, 0.85f, 0.0f, 1.0f);
-
-    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
-    draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness * 0.5 * fontScale);
-
-    // Path for progress filling (highlighted arc)
-    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor_green);
-    draw_list->PathStroke(green, ImDrawFlags_None, thickness);
-
-    draw_list->PathArcTo(ImVec2(x + size * 0.25f * fontScale, y + size * 0.25f * fontScale), size * 0.25f * fontScale, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
+    ImColor red = ImVec4(1.0f, 0.0f, 0.0f, 1.0f);
+    ImColor highlightArcColor;
+    ImColor arcInsideColor;
 
     if (!isInputNegative) {
-        draw_list->PathStroke(ColorInside, ImDrawFlags_None, thickness);
+        highlightArcColor = green;
+        arcInsideColor = ColorInside;
     } else {
-        draw_list->PathStroke(ColorInsideNegative, ImDrawFlags_None, thickness);
+        highlightArcColor = red;
+        arcInsideColor = ColorInsideNegative;
     }
+
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * scale_ui, y + size * 0.25f * scale_ui), size * 0.25f * scale_ui, 3.141592f * a_min_factor, 3.141592f * a_max_factor_100percentage);
+    draw_list->PathStroke(_GetStyleColor(ImGuiCol_Button), ImDrawFlags_None, thickness * 0.5 * scale_ui);
+
+    // Path for progress filling (highlighted arc)
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * scale_ui, y + size * 0.25f * scale_ui), size * 0.25f * scale_ui, 3.141592f * a_min_factor, 3.141592f * a_max_factor_green);
+    draw_list->PathStroke(highlightArcColor, ImDrawFlags_None, thickness * 0.5f * scale_ui);
+
+    // inside arc
+    draw_list->PathArcTo(ImVec2(x + size * 0.25f * scale_ui, y + size * 0.25f * scale_ui), size * 0.25f * scale_ui, 3.141592f * a_min_factor, 3.141592f * a_max_factor);
+    draw_list->PathStroke(arcInsideColor, ImDrawFlags_None, thickness * 0.5f * scale_ui);
 }
 
 void ArcProgressBar::ProgressBarArc(float input, ImVec2 pos)
 {
-    // By default, ImDrawList draws in absolute position relaitve to the canvas, NOT the window.
-    // So we need to consider the window position if we want to draw something inside the window.
-
-    ImVec2 window_pos = ImGui::GetWindowPos();    // Do not forget to get window's position.
-
-    // And do not forget to add the window position to our own position.
-    _DrawArc(size, max_angle_factor, input, thickness, ImVec2(pos.x + window_pos.x, pos.y + window_pos.y), min_input, max_input);
+    ImGui::SetCursorPos(pos);
+    ProgressBarArc(input);
 }
 
 void ArcProgressBar::ProgressBarArc(float input)
 {
-    ImVec2 pos = ImGui::GetCursorScreenPos(); // Get current insert point
-    ImGui::Dummy(ImVec2(size, size));   // Placeholder
+    scale_ui = ImGui::GetFontSize() / ImGui::GetStyle().FontSizeBase;
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
 
-    ProgressBarArc(input, pos);
+    _DrawArc(size, max_angle_factor, input, thickness, ImVec2(origin.x, origin.y), min_input, max_input);
+
+    ImGui::SetCursorPos(origin);
+    ImGui::Dummy(ImVec2(
+            (size * 0.5f + thickness) * scale_ui,
+            (size * 0.25f + thickness) * scale_ui + ImGui::GetTextLineHeight()));
 }
 
 void ArcProgressBar::setTextScaling(float input) {

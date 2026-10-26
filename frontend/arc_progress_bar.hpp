@@ -49,6 +49,7 @@ public:
 
 private:
     float textScale = 1.0;
+    float scale_ui;
     void _DrawArc(float size, float max_angle_factor, float input, float thickness, ImVec2 pos, float min_input, float max_input);
 
     const ImColor DEFAULT_FOREGROUND_COLOR = ImColor(ImVec4(1.0f, 1.0f, 0.4f, 1.0f));
