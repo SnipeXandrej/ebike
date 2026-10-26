@@ -194,6 +194,7 @@ Backend backend;
 
 // Limit FPS
 struct {
+    float scaleUi;
     float TARGET_FPS;
     bool LIMIT_FRAMERATE;
     float ipcWriteWaitMs;
@@ -283,7 +284,27 @@ struct {
 } arcBar;
 
 // moved to global
-float main_scale = 1.0;
+float main_scale;
+static ImGuiStyle baseStyle; // its set in init
+static float appliedScale = -1.0f;
+const float scaleUi_min_limit = 50.0f;
+const float scaleUi_max_limit = 300.0f;
+void UpdateUiScale() {
+    float scale = main_scale * (std::clamp(settings.scaleUi, scaleUi_min_limit, scaleUi_max_limit) / 100.0f);
+
+    if (scale == appliedScale) {
+        return;
+    }
+
+    ImGuiStyle& style = ImGui::GetStyle();
+    style = baseStyle;
+    style.ScaleAllSizes(scale);
+    style.FontScaleDpi = scale;
+    appliedScale = scale;
+}
+
+float scale_ui_times;
+
 static std::chrono::duration<double, std::milli> msElapsedWrite;
 static std::chrono::duration<double, std::milli> msElapsedRead;
 toml::table table;
@@ -539,6 +560,7 @@ void setupTOML(toml::table &tbl, const char* filepath) {
     }
 
     // values
+    settings.scaleUi                         = tbl["settings"]["scaleUi"].value_or<float>(100);
     settings.TARGET_FPS                      = tbl["settings"]["framerate"].value_or<float>(60);
     settings.LIMIT_FRAMERATE                 = tbl["settings"]["limit_framerate"].value_or<int8_t>(0);
     settings.ipcWriteWaitMs                  = tbl["settings"]["ipcWriteWaitMs"].value_or<float>(50);
@@ -555,6 +577,7 @@ void setupTOML(toml::table &tbl, const char* filepath) {
 }
 
 void TOMLSave(toml::table &tbl, const char* filepath) {
+    updateTableValue(tbl, "settings", "scaleUi", settings.scaleUi);
     updateTableValue(tbl, "settings", "framerate", settings.TARGET_FPS);
     updateTableValue(tbl, "settings", "limit_framerate", settings.LIMIT_FRAMERATE);
     updateTableValue(tbl, "settings", "ipcWriteWaitMs", settings.ipcWriteWaitMs);
@@ -615,8 +638,9 @@ void widgetPerformanceSelector(int width) {
 void appFrameRender() {
         ImGuiIO& io = ImGui::GetIO();
         ImGuiStyle& style = ImGui::GetStyle();
-        float buttonWidth = 110.0 * style.FontScaleDpi;
-        float buttonHeight = 50.0 * style.FontScaleDpi;
+        scale_ui_times = ImGui::GetFontSize() / ImGui::GetStyle().FontSizeBase;
+        float buttonWidth = 140.0 * scale_ui_times;
+        float buttonHeight = 70.0 * scale_ui_times;
 
         // Clock
         writeClock();
@@ -681,7 +705,7 @@ void appFrameRender() {
         #endif
 
         ImVec2 textSize = ImGui::CalcTextSize(currentTimeAndDate);
-        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), (3.5 * style.FontScaleDpi)));
+        ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (textSize.x / 2.0), (3.5 * scale_ui_times)));
         ImGui::Text("%s", currentTimeAndDate);
 
         {
@@ -689,7 +713,7 @@ void appFrameRender() {
             char text[100];
             sprintf(text, "SOC: %0.1f", battery.percentage);
             ImVec2 textSize = ImGui::CalcTextSize(text);
-            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - (10.0 * style.FontScaleDpi), (3.5 * style.FontScaleDpi)));
+            ImGui::SetCursorPos(ImVec2((io.DisplaySize.x - textSize.x) - (10.0 * scale_ui_times), (3.5 * scale_ui_times)));
             ImVec4 color = battery.charging ? ImVec4(0.0, 1.0, 0.0, 1.0) : ImVec4(1.0, 1.0, 1.0, 1.0);
             ImGui::TextColored(color, "%s", text);
 
@@ -709,14 +733,14 @@ void appFrameRender() {
         // Wh/km
         float powerWidgetWidth = 98.5;
         float powerWidgetScale = 1.15;
-        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * style.FontScaleDpi * powerWidgetScale));
+        ImGui::SetCursorPosX((ImGui::GetContentRegionAvail().x / 2.0) - (powerWidgetWidth * scale_ui_times * powerWidgetScale));
         ImGui::BeginGroup();
             int numOfBars = 84;
             float maxWatts = 12000;
             float indicateEveryWatts = 1000;
             powerWidget(numOfBars, maxWatts, indicateEveryWatts, battery.watts, powerWidgetScale);
 
-            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (powerWidgetWidth / 2.0 * style.FontScaleDpi), ImGui::GetCursorPosY()));
+            ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + (powerWidgetWidth / 2.0 * scale_ui_times), ImGui::GetCursorPosY()));
             ImGui::BeginGroup();
                 ImGui::PushFont(ImGui::GetFont(), style.FontSizeBase * 1.8);
                     if (settings.useTripStatsForDisplayingRangeAndWhPerKm) {
@@ -844,7 +868,7 @@ void appFrameRender() {
             ImGui::BeginGroup();
                 // ImGui::PushFont(ImGui::GetFont(),ImGui::GetFontSize() * 0.68);
 
-                // if (ImGui::Button("LIGHT", ImVec2(80 * main_scale, 50 * main_scale))) {
+                // if (ImGui::Button("LIGHT", ImVec2(80 * scale_ui_times, 50 * scale_ui_times))) {
                 //     std::string append = std::format("{};\n", static_cast<int>(COMMAND_ID::TOGGLE_FRONT_LIGHT));
                 //     toSendExtra.append(append);
                 // }
@@ -864,10 +888,10 @@ void appFrameRender() {
             movingAverages.whOverKm.moveAverage((float)whkmnow);
 
             // Bottom Left
-            ImGui::SetCursorPos(ImVec2(15.0f * style.FontScaleDpi, io.DisplaySize.y - ((80.0 + 60.0) * style.FontScaleDpi)));
+            ImGui::SetCursorPos(ImVec2(15.0f * scale_ui_times, io.DisplaySize.y - ((80.0 + 60.0) * scale_ui_times)));
             arcBar.WhKmNow.ProgressBarArc(movingAverages.whOverKm.output);
 
-            ImGui::SetCursorPos(ImVec2(15.0f * style.FontScaleDpi, io.DisplaySize.y - (80.0 * style.FontScaleDpi)));
+            ImGui::SetCursorPos(ImVec2(15.0f * scale_ui_times, io.DisplaySize.y - (80.0 * scale_ui_times)));
             if (settings.showMotorDutyInsteadOfMotorTemp) {
                 arcBar.motorDutyCycle.ProgressBarArc(backend.VESCCombined.duty_cycle);
             } else {
@@ -878,10 +902,10 @@ void appFrameRender() {
             }
 
             // Bottom right
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * style.FontScaleDpi), io.DisplaySize.y - ((80.0 + 60.0) * style.FontScaleDpi)));
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * scale_ui_times), io.DisplaySize.y - ((80.0 + 60.0) * scale_ui_times)));
             arcBar.motorPrimaryCurrent.ProgressBarArc(movingAverages.motorPrimaryCurrent.moveAverage(backend.VESCPrimary.phase_current));
 
-            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * style.FontScaleDpi), io.DisplaySize.y - (80.0 * style.FontScaleDpi)));
+            ImGui::SetCursorPos(ImVec2(io.DisplaySize.x - (90.0f * scale_ui_times), io.DisplaySize.y - (80.0 * scale_ui_times)));
             arcBar.motorSecondaryCurrent.ProgressBarArc(movingAverages.motorSecondaryCurrent.moveAverage(backend.VESCSecondary.phase_current));
 
         ImGui::EndGroup();
@@ -899,7 +923,7 @@ void appFrameRender() {
                     } else {
                         sprintf(textT, "%4.1f²:T", backend.trip_B.distance);
                     }
-                    ImGui::SetCursorPosY(io.DisplaySize.y - (27.0f * style.FontScaleDpi));
+                    ImGui::SetCursorPosY(io.DisplaySize.y - (27.0f * scale_ui_times));
                     ImGui::Separator();
                     TextCenteredOnLine(textO, 0.0f, false);
                     ImGui::SameLine();
@@ -909,16 +933,17 @@ void appFrameRender() {
                     }
                 ImGui::PopFont();
 
-                ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (115.0f / 2.0 * style.FontScaleDpi), io.DisplaySize.y - (24.0f * style.FontScaleDpi)));
+                ImGui::SetCursorPos(ImVec2((io.DisplaySize.x / 2.0) - (115.0f / 2.0 * scale_ui_times), io.DisplaySize.y - (24.0f * scale_ui_times)));
                 ImGui::PushFont(ImGui::GetFont(),ImGui::GetStyle().FontSizeBase * 1.3);
-                widgetPerformanceSelector(115.0 * style.FontScaleDpi);
+                widgetPerformanceSelector(115.0 * scale_ui_times);
                 ImGui::PopFont();
 
                 ImGui::EndGroup();
             }
 
         if (openAccelerationTester) {
-            static int width = 300;
+            float width = 160 * scale_ui_times;
+            float height = 125 * scale_ui_times;
             static int maxSpeed = 90;
             static int startSpeed = 0;
             static int endSpeed = 0;
@@ -929,11 +954,11 @@ void appFrameRender() {
             static bool endSpeedStarted = false;
 
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0);
-            ImGui::SetNextWindowSize(ImVec2(width, 180));
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 3.0 * scale_ui_times);
+            ImGui::SetNextWindowSize(ImVec2(width, height));
             if (ImGui::Begin("Acceleration Tester", &openAccelerationTester, ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse)) {
-                ImGui::SetNextItemWidth(width - 16); ImGui::SliderInt("##Start km/h\n", &startSpeed, 0, maxSpeed, "Start speed: %d");
-                ImGui::SetNextItemWidth(width - 16); ImGui::SliderInt("##End km/h\n", &endSpeed, 0, maxSpeed, "End speed: %d");
+                ImGui::SetNextItemWidth(width - (16.0 * scale_ui_times)); ImGui::SliderInt("##Start km/h\n", &startSpeed, 0, maxSpeed, "Start speed: %d");
+                ImGui::SetNextItemWidth(width - (16.0 * scale_ui_times)); ImGui::SliderInt("##End km/h\n", &endSpeed, 0, maxSpeed, "End speed: %d");
                 ImGui::Text("%d - %d km/h = %0.3fs", startSpeed, endSpeed, time);
                 ImGui::Dummy(ImVec2(20,0));
                 ImGui::Text("Time elapsed: %0.3f", timeElapsed);
@@ -977,8 +1002,8 @@ void appFrameRender() {
             ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.25f, 0.28f, 0.32f, 1.0f));
             if (ImGui::Begin("Settings", nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoDecoration)) {
 
-            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - (40.0 * style.FontScaleDpi));
-            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - (1.5 * style.FontScaleDpi));
+            ImGui::SetCursorPosX(ImGui::GetWindowContentRegionMax().x - (40.0 * scale_ui_times));
+            ImGui::SetCursorPosY(ImGui::GetWindowContentRegionMin().y - (1.5 * scale_ui_times));
             if (ImGui::Button("Close")) {
                 gesture.closeGesture();
             }
@@ -1012,17 +1037,19 @@ void appFrameRender() {
                         #endif
                     }
 
+                    ImGui::SetNextItemWidth(150 * scale_ui_times);
+                    ImGui::InputFloat("UI Scaling %", &settings.scaleUi, 5.0f);
                     ImGui::Checkbox("Limit framerate", &settings.LIMIT_FRAMERATE);
 
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(50 * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(50 * scale_ui_times);
                     const char* items[] = {"1", "5", "15", "30", "60", "90", "120", "240"};
                     static int item_current = findInArray_int(items, sizeof(items)/sizeof(items[0]), settings.TARGET_FPS);
                     if (ImGui::Combo("##v", &item_current, items, IM_ARRAYSIZE(items))) {
                         settings.TARGET_FPS = std::stof(items[item_current]);
                     }
 
-                    ImGui::SetNextItemWidth(150.0 * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(150.0 * scale_ui_times);
                     if (ImGui::InputText("Server Address", &settings.serverAddress, ImGuiInputTextFlags_EnterReturnsTrue)) {
                         TOMLSave(table, SETTINGS_FILEPATH.c_str());
                     }
@@ -1039,7 +1066,7 @@ void appFrameRender() {
                         gesture.closeGesture();
                     }
 
-                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth, buttonHeight))) {
                         TOMLSave(table, SETTINGS_FILEPATH.c_str());
                     }
 
@@ -1061,7 +1088,7 @@ void appFrameRender() {
 
                     ImGui::Text("Write wait time ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(100.0f * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(100.0f * scale_ui_times);
                     ImGui::InputFloat("ms", &settings.ipcWriteWaitMs, 0.2, 100, "%.1f");
 
                     ImGui::Dummy(ImVec2(0, 20));
@@ -1138,7 +1165,7 @@ void appFrameRender() {
                     ImGui::Text("Vesc Processing Loop Rate: %0.1f ms / %0.1f Hz", backend.loopTimeVescValueProcessing_ms, 1000.0 / backend.loopTimeVescValueProcessing_ms);
 
                     ImGui::Dummy(ImVec2(0, 20));
-                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Save\npreferences", ImVec2(buttonWidth, buttonHeight))) {
                         msg::start(toSendExtra, COMMAND_ID::SAVE_PREFERENCES);
                         msg::end(toSendExtra);
                     }
@@ -1173,7 +1200,7 @@ void appFrameRender() {
                                 );
 
                     ImGui::SameLine();
-                    if (ImGui::Button("Reset##1", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Reset##1", ImVec2(buttonWidth, buttonHeight))) {
                         msg::start(toSendExtra, COMMAND_ID::RESET_TRIP_A);
                         msg::end(toSendExtra);
                     }
@@ -1201,7 +1228,7 @@ void appFrameRender() {
                                 , (int)backend.trip_B.rideTime % 60 // seconds
                                 );
                     ImGui::SameLine();
-                    if (ImGui::Button("Reset##2", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Reset##2", ImVec2(buttonWidth, buttonHeight))) {
                         msg::start(toSendExtra, COMMAND_ID::RESET_TRIP_B);
                         msg::end(toSendExtra);
                     }
@@ -1225,10 +1252,10 @@ void appFrameRender() {
                     static char newOdometerValue[30];
                     ImGui::Text("New value: ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(50.0 * scale_ui_times);
                     ImGui::InputText("km", newOdometerValue, sizeof(newOdometerValue));
                     ImGui::SameLine();
-                    if (ImGui::Button("Send", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Send", ImVec2(buttonWidth, buttonHeight))) {
                         msg::start(toSendExtra, COMMAND_ID::SET_ODOMETER);
                         msg::addString(toSendExtra, "{}", newOdometerValue);
                         msg::end(toSendExtra);
@@ -1260,10 +1287,10 @@ void appFrameRender() {
                     static char newAmphoursUsedLifetimeValue[30];
                     ImGui::Text("Set Amphours Used (Lifetime) = ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(50.0 * scale_ui_times);
                     ImGui::InputText("Ah", newAmphoursUsedLifetimeValue, sizeof(newAmphoursUsedLifetimeValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
-                    if (ImGui::Button("Send##xx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Send##xx", ImVec2(buttonWidth, buttonHeight))) {
                         if (strlen(newAmphoursUsedLifetimeValue) > 0) {
                             msg::start(toSendExtra, COMMAND_ID::SET_AMPHOURS_USED_LIFETIME);
                             msg::addString(toSendExtra, "{}", newAmphoursUsedLifetimeValue);
@@ -1274,10 +1301,10 @@ void appFrameRender() {
                     static char newAmphoursChargedValue[30];
                     ImGui::Text("Set Amphours Rated (Now) = ");
                     ImGui::SameLine();
-                    ImGui::SetNextItemWidth(50.0 * style.FontScaleDpi);
+                    ImGui::SetNextItemWidth(50.0 * scale_ui_times);
                     ImGui::InputText("Ah##xx", newAmphoursChargedValue, sizeof(newAmphoursChargedValue), ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_CharsNoBlank);
                     // ImGui::SameLine();
-                    if (ImGui::Button("Send##xxx", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                    if (ImGui::Button("Send##xxx", ImVec2(buttonWidth, buttonHeight))) {
                         if (strlen(newAmphoursChargedValue) > 0) {
                             msg::start(toSendExtra, COMMAND_ID::SET_AMPHOURS_CHARGED);
                             msg::addString(toSendExtra, "{}", newAmphoursChargedValue);
@@ -1286,7 +1313,7 @@ void appFrameRender() {
                     }
 
                     auto displayVescSettings = [buttonWidth, buttonHeight, &style](VESC_MCCONF mcconf, Backend back) {
-                        float ItemWidth = 90.0 * style.FontScaleDpi;
+                        float ItemWidth = 90.0 * scale_ui_times;
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", mcconf.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", mcconf.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &mcconf.l_current_min_scale, 0.01);
@@ -1304,7 +1331,7 @@ void appFrameRender() {
                     };
 
                     auto displayProfileSettings = [buttonWidth, buttonHeight, &style](profile_t &profile, Backend back) {
-                        float ItemWidth = 90.0 * style.FontScaleDpi;
+                        float ItemWidth = 90.0 * scale_ui_times;
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Reverse Speed (km/h): %0.1f", profile.l_min_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Max Forward Speed (km/h): %0.1f", profile.l_max_erpm / backend.motor_magnetPairs / backend.motor_rpmPerKmh);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::InputFloat("Current Scaling (Braking)", &profile.l_current_min_scale, 0.01);
@@ -1321,12 +1348,12 @@ void appFrameRender() {
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Checkbox("Single Motor Acceleration", &profile.c_force_single_motor_acceleration);
                         ImGui::SetNextItemWidth(ItemWidth); ImGui::Text("Profile name = %s", profile.name.c_str());
 
-                        if (ImGui::Button("Get values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        if (ImGui::Button("Get values", ImVec2(buttonWidth, buttonHeight))) {
                             msg::start(toSendExtra, COMMAND_ID::GET_POWER_PROFILE_ALL);
                             msg::end(toSendExtra);
                         }
                         ImGui::SameLine();
-                        if (ImGui::Button("Set values", ImVec2(buttonWidth * main_scale, buttonHeight * main_scale))) {
+                        if (ImGui::Button("Set values", ImVec2(buttonWidth, buttonHeight))) {
                             setProfileValues(profile);
                         }
                         ImGui::EndTabItem();
@@ -1692,8 +1719,11 @@ int main(int argc, char** argv)
 
     // Setup scaling
     ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
+    // style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+    // style.FontScaleDpi = main_scale;        // Set initial font scale. (using io.ConfigDpiScaleFonts=true makes this unnecessary. We leave both here for documentation purpose)
+    baseStyle = style;
+    appliedScale = -1.0f;
+    UpdateUiScale();
 
     // Setup Platform/Renderer backends
     ImGui_ImplSDL3_InitForOpenGL(window, gl_context);
@@ -1701,7 +1731,7 @@ int main(int argc, char** argv)
 
     ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
 
-    style.FontScaleDpi = 2.0f;
+    // style.FontScaleDpi = 2.0f;
     // Main loop
     while (!done) {
         cpuUsage.ImGui.measureStart(1);
@@ -1733,6 +1763,7 @@ int main(int argc, char** argv)
         // Start the Dear ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplSDL3_NewFrame();
+        UpdateUiScale();
         ImGui::NewFrame();
 
         appFrameRender();
@@ -1926,10 +1957,13 @@ void Init(struct android_app* app)
     ImGui_ImplOpenGL3_Init("#version 300 es");
 
     // Setup scaling
-    float main_scale = 4.0f;
+    main_scale = 4.0f;
     ImGuiStyle& style = ImGui::GetStyle();
-    style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
-    style.FontScaleDpi = main_scale;        // Set initial font scale.
+    // style.ScaleAllSizes(main_scale);        // Bake a fixed style scale. (until we have a solution for dynamic style scaling, changing this requires resetting Style + calling this again)
+    // style.FontScaleDpi = main_scale;        // Set initial font scale.
+    baseStyle = style;
+    appliedScale = -1.0f;
+    UpdateUiScale();
 
     g_Initialized = true;
 }
@@ -1960,6 +1994,7 @@ void MainLoopStep()
     // Start the Dear ImGui frame
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplAndroid_NewFrame();
+    UpdateUiScale();
     ImGui::NewFrame();
 
     appFrameRender();
