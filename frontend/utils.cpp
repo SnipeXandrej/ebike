@@ -147,7 +147,7 @@ void drawRotatedRect(ImDrawList* draw_list, ImVec2 center, ImVec2 size, float an
 
 void powerWidget(int numOfBars, float maxWatts, float indicatorEveryWatts, float input, float scale) {
     ImGui::BeginGroup();
-    float fontScale = ImGui::GetStyle().FontScaleDpi * scale;
+    float fontScale = (ImGui::GetFontSize() / ImGui::GetStyle().FontSizeBase) * scale;
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + (10.0 * fontScale));
     ImVec2 pos = ImGui::GetCursorScreenPos();  // Reference point
     ImVec2 pos2 = ImGui::GetCursorScreenPos();  // Reference point
