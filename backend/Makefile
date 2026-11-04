@@ -5,7 +5,7 @@
 
 # Compiler options here.
 ifeq ($(USE_OPT),)
-  USE_OPT = -O2 -ggdb -fomit-frame-pointer -falign-functions=16
+  USE_OPT = -O2 -ggdb -fomit-frame-pointer -falign-functions=16 -Wno-psabi
 endif
 
 # C specific options here (added to USE_OPT).
@@ -133,7 +133,8 @@ CSRC = $(ALLCSRC) \
 CPPSRC = $(ALLCPPSRC) \
          main.cpp \
          adc3.cpp abstractions.cpp ../commonUtils.cpp \
-         VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp
+         VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp \
+         messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp
 
 # List ASM source files here.
 ASMSRC = $(ALLASMSRC)
@@ -165,7 +166,7 @@ UDEFS = -DCHPRINTF_USE_FLOAT=1 -DBACKEND
 UADEFS =
 
 # List all user directories here
-UINCDIR = ./compat $(SRC_ROOT)
+UINCDIR = ./compat $(SRC_ROOT) ../submodules/magic_enum/include/magic_enum
 
 # List the user directory to look for the libraries here
 ULIBDIR =

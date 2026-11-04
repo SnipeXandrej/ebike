@@ -2,24 +2,23 @@
 #include <iostream>
 #include <iomanip>
 #include <algorithm>
-#include <mutex>
 
-std::mutex mtx;
+// std::mutex mtx;
 
 void RollingRangeEstimation::addDeltaDistance(double _currentDistanceKm) {
-    mtx.lock();
+    // mtx.lock();
     currentDistanceKm += _currentDistanceKm;
-    mtx.unlock();
+    // mtx.unlock();
 }
 
 void RollingRangeEstimation::addDeltaWhUsed(double _currentWhUsed) {
-    mtx.lock();
+    // mtx.lock();
     currentWhUsed += _currentWhUsed;
-    mtx.unlock();
+    // mtx.unlock();
 }
 
 void RollingRangeEstimation::loop(double remainingEnergyWh) {
-    mtx.lock();
+    // mtx.lock();
     double rollOverKilometers = NUM_OF_KILOMETERS + (NUM_OF_KILOMETERS * (PERCENT/100.0));
     double ratio = rollOverKilometers / NUM_OF_KILOMETERS;
 
@@ -31,7 +30,7 @@ void RollingRangeEstimation::loop(double remainingEnergyWh) {
     whPerKm = currentWhUsed / currentDistanceKm;
     range = remainingEnergyWh / whPerKm;
 
-    mtx.unlock();
+    // mtx.unlock();
 }
 
 double RollingRangeEstimation::getRange() {

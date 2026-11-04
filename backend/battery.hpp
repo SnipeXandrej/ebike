@@ -1,14 +1,13 @@
 #pragma once
 
-#include "map.hpp"
-#include "rampLimiter.hpp"
+// #include "map.hpp"
+// #include "rampLimiter.hpp"
 #include "commonUtils.hpp"
 
 class Battery {
 private:
-    void setup();
-    ThrottleMap socVoltageMap;
-    RampLimiter voltageRampLimiter;
+    // ThrottleMap socVoltageMap;
+    // RampLimiter voltageRampLimiter;
     // TODO: adjust via TOML
     const float cell_nominal_voltage = 3.65;
     const float cell_maximum_voltage = 4.2;
@@ -43,12 +42,11 @@ private:
 
     double cycleCount = 0.0;
 
-    std::string estimateStatusString;
+    const char* estimateStatusString;
 
 public:
-    Battery() {
-        setup();
-    };
+    void setup();
+
     void processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased);
 
     double getAmpHoursFullyChargedWhenNew();
@@ -84,8 +82,6 @@ public:
     double wattHoursUsed; // just an approximation
     double wattHoursFullyDischarged; // just an approximation
     double wattHoursRemaining; // just an approximation // calculated at runtime
-
-    AtomicString statusString;
 
     bool charging = false;
 };

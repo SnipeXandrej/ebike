@@ -14,22 +14,131 @@
     limitations under the License.
 */
 
+extern "C" {
+  void* __dso_handle = &__dso_handle;
+  void _fini() {};
+}
+
 #include "ch.h"
 #include "hal.h"
 #include "portab.h"
 #include "usbcfg.h"
-#include "chprintf.h"
 
 #include "adc3.hpp"
 #include "abstractions.hpp"
 #include "commonUtils.hpp"
 #include "myUart.hpp"
 #include "VescUart/VescUart.h"
+#include "messagingUtils.hpp"
+#include "battery.hpp"
+#include "comm.h"
+#include "rollingRangeEstimation.hpp"
+#include "magic_enum.hpp"
 
-#include <string>
+#define EBIKE_NAME "EBIKE"
+#define EBIKE_VERSION "1.0.0"
 
+mutex_t mtx_toSendExtra;
+
+Battery battery;
+// ThrottleMap throttleMap;
+// ThrottleMap brakeMap;
+// PowerProfiles PP;
+RollingRangeEstimation rollingRangeEstimation;
+VescUart::dataPackage VESCCombined;
+VescUart::dataPackage VESCPrimary;
+VescUart::dataPackage VESCSecondary;
+
+struct Trip {
+    double distance; // in km
+    double wattHoursUsed;
+    double wattHoursConsumed;
+    double wattHoursRegenerated;
+
+    double range; // calculated at runtime
+    double WhPerKm; // calculated at runtime
+    double rideTime; // in seconds
+};
+Trip trip_A, trip_B;
+
+struct {
+    double rideTime; // in seconds
+    double distance; // in km
+} odometer;
+
+struct Settings {
+    bool batteryPercentageVoltageBased = 0;
+    bool automaticRegenerativeBraking = 0;
+    bool minimizeDrivetrainBacklash = 0;
+    bool enableDualVESC = 0;
+    int dualMotorDriveStyle = 0;
+    // only for Dual VESC
+    int primaryVESCID = 0;
+    int secondaryVESCID = 0;
+    int setSecondaryVescAsFirstAccelerationMotor = 0;
+    int setSecondaryVescAsFirstBrakingMotor = 0;
+};
+Settings settings;
+
+struct {
+    double analog0; // Throttle
+    double analog1; // Throtle brake
+    double analog2;
+    double analog3;
+    double analog4;
+    double analog5;
+    double analog6;
+    double analog7; // Battery voltage
+} analogReadings;
+
+struct {
+    int poles = 18;
+    int magnetPairs = 3;
+    float rpmPerKmh = 0; // calculated at runtime
+} motor;
+
+struct {
+    float diameter = 63.0;
+    float gear_ratio = 8.90625; // (25/10)*(57/16)
+    float rpmPerKmh = 0; // calculated at runtime
+} wheel;
+
+void estimatedRangeCalculateStats(Trip *trip, double availableWatthours) {
+    trip->WhPerKm = trip->wattHoursUsed / trip->distance;
+    double tmp = availableWatthours / trip->WhPerKm;
+    tmp != tmp ? trip->range = 0.0 : trip->range = tmp;
+}
+
+void tripReset(Trip *trip) {
+    trip->distance = 0;
+    trip->wattHoursConsumed = 0;
+    trip->wattHoursRegenerated = 0;
+    trip->range = 0;
+    trip->WhPerKm = 0;
+    trip->rideTime = 0;
+}
+
+float acceleration = 0;
+float motor_rpm = 0;
+float speed_kmh = 0;
+float throttleLevel = 0;
+float brakeLevel = 0;
+bool  powerOn = false;
+bool  done = false;
+float maxBrakingCurrent = 200.0;
+int throttleLoopRate = 100.0;
+std::string toSendExtra;
+std::string notes;
+std::string debuginfo;
+int throttleState = 0;
+float primaryVESCSaturatedLeftoverCurrent;
+float primaryCurrent;
+float secondaryCurrent;
 MyUart uartVesc;
 VescUart VESC;
+
+#include <cstring>
+#include <string>
 
 #define PIN_LED PAL_LINE(GPIOE, 3)
 #define PIN_BUTTON_K1 PAL_LINE(GPIOC, 13)
@@ -47,7 +156,7 @@ static volatile double current_ah = 0.0f;
 static volatile double current_amp_seconds = 0.0;
 
 // clock
-static volatile uint32_t uptime_seconds = 0; // can count up to 136.19 years, I think thats enough
+static volatile uint32_t uptimeInSeconds = 0; // can count up to 136.19 years, I think thats enough
 static volatile uint32_t clockSecondsSinceBoot = 0;
 static volatile uint32_t clockMinutesSinceBoot = 0;
 static volatile uint32_t clockHoursSinceBoot   = 0;
@@ -64,7 +173,7 @@ static volatile bool adc3_ok;
 
 static THD_WORKING_AREA(waCalibrationThread, 768);
 static THD_FUNCTION(CalibrationThread, arg) {
-  bool adc3_ready = false, adc3_cal_ok;
+  bool adc3_ready = false;
 
   (void)arg;
   chRegSetThreadName("CalibrationThread");
@@ -82,7 +191,7 @@ static THD_FUNCTION(CalibrationThread, arg) {
       adc3_ready = adc3_internal_start();
     }
 
-    adc3_ok = adc3_ready && adc3_read_raw(ADC3_CHANNEL_VREFINT, &_vrefint_raw) && adc3_read_raw(ADC3_CHANNEL_TEMPERATURE, &_temperature_raw);
+    adc3_ok = adc3_calculate(vrefint_raw, temperature_raw, &reference_mv, &vrefint_mv, &temperature_c);
 
     if (!adc3_ok) {
       adc3_ready = false;
@@ -95,11 +204,9 @@ static THD_FUNCTION(CalibrationThread, arg) {
     movingAverage_temperature_raw.initInput(_temperature_raw);
     temperature_raw = movingAverage_temperature_raw.moveAverage(_temperature_raw);
 
-    adc3_cal_ok = adc3_ok && adc3_calculate(vrefint_raw, temperature_raw, &reference_mv, &vrefint_mv, &temperature_c);
+    if (adc3_ok)
+      (void)adc3_calculate(vrefint_raw, temperature_raw, &reference_mv, &vrefint_mv, &temperature_c);
 
-    if (!adc3_cal_ok) {
-      chprintf((BaseSequentialStream*)&SDU1, "ADC3 voltage/temperature unavailable\r\n");
-    }
     nxx++;
   }
 }
@@ -112,11 +219,11 @@ static THD_FUNCTION(UptimeCountingThread, arg) {
   while (true) {
       systime_t next = chTimeAddX(prev, TIME_MS2I(1000));
 
-      uptime_seconds = uptime_seconds + 1;
-      clockSecondsSinceBoot = uptime_seconds % 60;
-      clockMinutesSinceBoot = (uint32_t)(uptime_seconds / 60.0f) % 60;
-      clockHoursSinceBoot   = (uint32_t)(uptime_seconds / 60.0f / 60.0f) % 24;
-      clockDaysSinceBoot    = uptime_seconds / 60.0f / 60.0f / 24;
+      uptimeInSeconds = uptimeInSeconds + 1;
+      clockSecondsSinceBoot = uptimeInSeconds % 60;
+      clockMinutesSinceBoot = (uint32_t)(uptimeInSeconds / 60.0f) % 60;
+      clockHoursSinceBoot   = (uint32_t)(uptimeInSeconds / 60.0f / 60.0f) % 24;
+      clockDaysSinceBoot    = uptimeInSeconds / 60.0f / 60.0f / 24;
 
       prev = chThdSleepUntilWindowed(prev, next);
   }
@@ -136,43 +243,392 @@ static THD_FUNCTION(LEDIntegratedThread, arg) {
   }
 }
 
-static THD_WORKING_AREA(waUSBSerialThread, 768);
+std::string ProcessRead(const std::string& message) {
+  std::string toSend;
+
+  if (message.empty())
+    return {};
+
+  auto readStringPacket = msg::split(message, msg::messageEnd);
+
+  for (int i = 0; i < (int)readStringPacket.size(); i++) {
+    auto packet = msg::split(readStringPacket[i], ";");
+
+    int index = 0;
+
+    int packet_command_id = -1;
+    packet_command_id = msg::getValueFromSplit_uint64(packet, index);
+
+    switch (packet_command_id) {
+      case COMMAND_ID::GET_BATTERY:
+        msg::start(toSend, COMMAND_ID::GET_BATTERY);
+        msg::addValue(toSend, battery.voltage, 4);
+        msg::addValue(toSend, battery.current, 4);
+        msg::addValue(toSend, battery.watts, 1);
+        msg::addValue(toSend, battery.wattHoursUsed, 15);
+        msg::addValue(toSend, battery.wattHoursFullyDischarged, 15);
+        msg::addValue(toSend, battery.getAmpHoursUsed(), 6);
+        msg::addValue(toSend, battery.getAmpHoursUsedLifetime(), 2);
+        msg::addValue(toSend, battery.getAmpHoursFullyCharged(), 2);
+        msg::addValue(toSend, battery.getAmpHoursFullyChargedWhenNew(), 2);
+        msg::addValue(toSend, battery.percentage, 1);
+        msg::addValue(toSend, battery.voltage_min, 1);
+        msg::addValue(toSend, battery.voltage_max, 1);
+        msg::addValue(toSend, battery.voltage_nominal, 1);
+        msg::addValue(toSend, battery.amphours_min_voltage, 1);
+        msg::addValue(toSend, battery.amphours_max_voltage, 1);
+        msg::addValue(toSend, battery.charging, 0);
+        msg::addValue(toSend, battery.getCycleCount(), 2);
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::ARE_YOU_ALIVE:
+        msg::start(toSend, COMMAND_ID::ARE_YOU_ALIVE);
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::GET_STATS:
+        msg::start(toSend, COMMAND_ID::GET_STATS);
+        msg::addValue(toSend, speed_kmh, 1);
+        msg::addValue(toSend, motor_rpm, 0);
+        msg::addValue(toSend, motor.rpmPerKmh, 7);
+        msg::addValue(toSend, motor.magnetPairs, 0);
+        msg::addValue(toSend, odometer.distance, 7);
+        msg::addValue(toSend, odometer.rideTime, 7);
+        msg::addValue(toSend, trip_A.distance, 15);
+        msg::addValue(toSend, trip_A.wattHoursUsed, 15);
+        msg::addValue(toSend, trip_A.wattHoursConsumed, 15);
+        msg::addValue(toSend, -(trip_A.wattHoursRegenerated), 15);
+        msg::addValue(toSend, trip_A.range, 15);
+        msg::addValue(toSend, trip_A.rideTime, 15);
+        msg::addValue(toSend, trip_B.distance, 15);
+        msg::addValue(toSend, trip_B.wattHoursUsed, 15);
+        msg::addValue(toSend, trip_B.wattHoursConsumed, 15);
+        msg::addValue(toSend, -(trip_B.wattHoursRegenerated), 15);
+        msg::addValue(toSend, trip_B.range, 15);
+        msg::addValue(toSend, trip_B.rideTime, 15);
+        msg::addValue(toSend, VESCPrimary.avgMotorCurrent, 1);
+        msg::addValue(toSend, VESCPrimary.avgCurrentDAxis, 1);
+        msg::addValue(toSend, VESCPrimary.avgCurrentQAxis, 1);
+        msg::addValue(toSend, VESCPrimary.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+        msg::addValue(toSend, VESCPrimary.tempMotor, 1);
+        msg::addValue(toSend, VESCPrimary.tempMosfet, 1);
+        msg::addValue(toSend, VESCSecondary.avgMotorCurrent, 1);
+        msg::addValue(toSend, VESCSecondary.avgCurrentDAxis, 1);
+        msg::addValue(toSend, VESCSecondary.avgCurrentQAxis, 1);
+        msg::addValue(toSend, VESCSecondary.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+        msg::addValue(toSend, VESCSecondary.tempMotor, 1);
+        msg::addValue(toSend, VESCSecondary.tempMosfet, 1);
+        msg::addValue(toSend, VESCCombined.avgMotorCurrent, 1);
+        msg::addValue(toSend, VESCCombined.avgCurrentDAxis, 1);
+        msg::addValue(toSend, VESCCombined.avgCurrentQAxis, 1);
+        msg::addValue(toSend, VESCCombined.dutyCycleNow * 100.0, 1); // value is now between 0 and 100
+        msg::addValue(toSend, VESCCombined.tempMotor, 1);
+        msg::addValue(toSend, VESCCombined.tempMosfet, 1);
+        msg::addValue(toSend, uptimeInSeconds, 0);
+        msg::addValue(toSend, -1.0 / 1000.0, 1); // whileLoopUsElapsed.count()
+        msg::addValue(toSend, 1000.0 / -1.0, 1); // loopRateLimiter.threadThrottle.getLoopRate()
+        msg::addValue(toSend, 1000.0 / -1.0, 1); // loopRateLimiter.threadVescProcessing.getLoopRate()
+        msg::addValue(toSend, acceleration, 1);
+        msg::addValue(toSend, powerOn, 0);
+        msg::addValue(toSend, settings.automaticRegenerativeBraking, 0);
+        msg::addValue(toSend, -1, 0); // PP.getProfile()
+        msg::addValue(toSend, settings.minimizeDrivetrainBacklash, 0);
+        msg::addValue(toSend, rollingRangeEstimation.getRange(), 15);
+        msg::addValue(toSend, rollingRangeEstimation.getWhPerKm(), 15);
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::SET_ODOMETER:
+        {
+        odometer.distance = msg::getValueFromSplit_double(packet, index);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Odometer was set to: {} km", odometer.distance);
+        msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::SAVE_PREFERENCES:
+        // TOMLSave(table, SETTINGS_FILEPATH);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Preferences were manually saved (not actually)");
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::RESET_TRIP_A:
+        tripReset(&trip_A);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Trip A was reset");
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::GET_FW:
+        {
+        msg::start(toSend, COMMAND_ID::GET_FW);
+        msg::addString(toSend, EBIKE_NAME);
+        msg::addString(toSend, EBIKE_VERSION);
+        msg::addString(toSend, "{} {}", __DATE__, __TIME__);
+        msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::SET_AMPHOURS_USED_LIFETIME:
+        {
+        battery.setAmpHoursUsedLifetime(msg::getValueFromSplit_double(packet, index));
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Amphours used (Lifetime) was set to: {} Ah", battery.getAmpHoursUsedLifetime());
+        msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::SET_AMPHOURS_CHARGED:
+        {
+            float newValue = msg::getValueFromSplit(packet, index);
+            battery.setAmpHoursFullyCharged(newValue);
+
+            msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+            msg::addString(toSend, "Amphours charged was set to: {} Ah", newValue);
+            msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::TOGGLE_CHARGING_STATE:
+        {
+        battery.charging = !battery.charging;
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Charging state was set to: {}", battery.charging);
+        msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::SET_AUTOMATIC_REGEN_BRAKING:
+        {
+        settings.automaticRegenerativeBraking = (bool)msg::getValueFromSplit(packet, index);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Regenerative braking state was set to: {}", settings.automaticRegenerativeBraking);
+        msg::end(toSend);
+        }
+        break;
+
+      case COMMAND_ID::RESET_TRIP_B:
+        tripReset(&trip_B);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Trip B was reset");
+        msg::end(toSend);
+        break;
+
+      case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
+        // msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
+
+        // listOfProfiles.clear();
+        // for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+        //     listOfProfiles.append(PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+        //     listOfProfiles += '\0';
+        // }
+
+        // msg::addString(toSend, "{}", listOfProfiles);
+        // msg::end(toSend);
+        break;
+
+      case COMMAND_ID::SET_POWER_PROFILE:
+        // PP.setProfile((int)msg::getValueFromSplit(packet, index));
+        // setMcconfFromCurrentProfile();
+
+        // msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        // msg::addString(toSend, "Power profile was set");
+        // msg::end(toSend);
+        break;
+
+      case COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH:
+        settings.minimizeDrivetrainBacklash = msg::getValueFromSplit(packet, index);
+
+        break;
+
+      case COMMAND_ID::GET_NOTES:
+        msg::start(toSend, COMMAND_ID::GET_NOTES);
+        msg::addString(toSend, "{}", notes);
+        msg::end(toSend);
+
+        break;
+
+      case COMMAND_ID::SET_NOTES:
+        notes = msg::getValueFromSplit_string(packet, index);
+
+        break;
+
+      case COMMAND_ID::GET_DEBUGINFO:
+        {
+          std::string throttleFunctionDebugInfo;
+            // auto _state = magic_enum::enum_cast<STATE>(throttleState);
+            // std::string _enum;
+            // if (_state) {
+            //     _enum = magic_enum::enum_name(*_state);
+            // } else {
+            //     _enum = "-";
+            // }
+            // throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
+
+            // char _enum[16] = "Unknown";
+            // char throttleFunctionDebugInfo[64] = snprintf(throttleFunctionDebugInfo, sizeof(throttleFunctionDebugInfo), "Throttle state: %s", _enum);
+
+            
+
+        //     debuginfo = std::format("Battery:\n"
+        //                             "{}\n"
+        //                             , battery.statusString.get()
+        //                             );
+
+        debuginfo = std::format("Speed: {} km/h\n"
+                                "{}\n"
+                                "VESC Primary Current\n"
+                                "       Requested: {} A\n"
+                                "       Actual:    {} A\n"
+                                "VESC Secondary Current\n"
+                                "       Requested: {} A\n"
+                                "       Actual:    {} A\n"
+                                "\n"
+                                "primaryVESCSaturatedLeftoverCurrent: {} A\n"
+                                , speed_kmh
+                                , throttleFunctionDebugInfo
+                                , primaryCurrent //VESCPrimary.avgCurrentQAxis
+                                , VESCPrimary.avgCurrentQAxis
+                                , secondaryCurrent //VESCSecondary.avgCurrentQAxis
+                                , VESCSecondary.avgCurrentQAxis
+                                , primaryVESCSaturatedLeftoverCurrent
+                                );
+
+        debuginfo += std::format("\nAnalog Readings:\n"
+                                "   Analog0: {:.6f} V\n"
+                                "   Analog1: {:.6f} V\n"
+                                "   Analog2: {:.6f} V\n"
+                                "   Analog3: {:.6f} V\n"
+                                "   Analog4: {:.6f} V\n"
+                                "   Analog5: {:.6f} V\n"
+                                "   Analog6: {:.6f} V\n"
+                                "   Analog7: {:.6f} V\n"
+                                , analogReadings.analog0
+                                , analogReadings.analog1
+                                , analogReadings.analog2
+                                , analogReadings.analog3
+                                , analogReadings.analog4
+                                , analogReadings.analog5
+                                , analogReadings.analog6
+                                , analogReadings.analog7
+                                );
+
+        msg::start(toSend, COMMAND_ID::GET_DEBUGINFO);
+        msg::addString(toSend, "{}", debuginfo);
+        msg::end(toSend);
+        }
+
+        break;
+
+    case COMMAND_ID::GET_POWER_PROFILE_ALL:
+      // run_command_GET_POWER_PROFILE_ALL(toSend);
+
+      break;
+
+      case COMMAND_ID::SET_POWER_PROFILE_VALUES:
+        // PP.setProfile(STRING_TO_PROFILE.at(msg::getValueFromSplit_string(packet, index)));
+        // PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_MIN_ERPM, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_MAX_ERPM, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_MIN_DUTY, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_MAX_DUTY, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_WATT_MIN, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+        // PP.set(PP.getProfile(), PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, msg::getValueFromSplit(packet, index));
+
+        // setMcconfFromCurrentProfile();
+        // run_command_GET_POWER_PROFILE_ALL(toSend);
+
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "New profile values set!");
+        msg::end(toSend);
+
+        break;
+    }
+  }
+
+  chMtxLock(&mtx_toSendExtra);
+  toSend.append(toSendExtra);
+  toSendExtra.clear();
+  chMtxUnlock(&mtx_toSendExtra);
+
+  return toSend;
+}
+
+// CLANKED ALERT: the insides of this function are clanked
+static THD_WORKING_AREA(waUSBSerialThread, 10240);
 static THD_FUNCTION(USBSerialThread, arg) {
   (void)arg;
   chRegSetThreadName("USBSerialThread");
 
+  // Keep incomplete input between reads. A frame is removed only after its
+  // complete messageEnd marker has been found and ProcessRead has consumed it.
+  char inputBuffer[1024];
+  std::size_t buffered = 0;
+
   while (true) {
-    chprintf((BaseSequentialStream*)&SDU1, "\n\rtesting value: %d, n: %d, ny: %d, nx: %d, adc3_ok: %d, vrefint_raw: %u, temperature_raw: %u, VREFINT_CAL: %u, NXX: %d\r\n", testing, n, ny, nx, adc3_ok, (unsigned)vrefint_raw, (unsigned)temperature_raw, (unsigned)ADC3_VREFINT_CAL, nxx);
-    chprintf((BaseSequentialStream*)&SDU1,
-              "vrefplus: %.3f V, vrefint: %.3f V, temperature: %.2f C, voltage_A0: %.2f, voltage_A1: %.2f, voltage_A2: %.2f, voltage_A3: %.2f, current: %.5f, current_2: %.5f, current_ah: %.10f, v_calc: %.3f, cycles_per_second: %d, calc: %f\r\n",
-              (float)reference_mv / 1000.0f,
-              (float)vrefint_mv / 1000.0f,
-              (float)temperature_c / 100.0f,
-              voltages_mv[0] / 1000.0,
-              voltages_mv[1] / 1000.0,
-              voltages_mv[2] / 1000.0,
-              voltages_mv[3] / 1000.0,
-              current,
-              current_2,
-              current_ah,
-              voltage,
-              cycles_per_second,
-            0.005f/0.0025f);
-    chprintf((BaseSequentialStream*)&SDU1,
-              "Uptime: %02d:%02d:%02d and %01d days, raw seconds: %d\r\n",
-              clockHoursSinceBoot,
-              clockMinutesSinceBoot,
-              clockSecondsSinceBoot,
-              clockDaysSinceBoot,
-              uptime_seconds);
+    // no space left for termination
+    if (buffered == sizeof(inputBuffer)) {
+      buffered = 0;
+    }
 
-    chThdSleepMilliseconds(100);
+    const std::size_t firstByte = chnReadTimeout(
+        &SDU1,
+        reinterpret_cast<std::uint8_t*>(inputBuffer + buffered),
+        1,
+        TIME_MS2I(100));
+    if (firstByte == 0)
+      continue;
+    buffered += firstByte;
 
-    std::string test = "tetstst";
-    chprintf((BaseSequentialStream*)&SDU1, "String: %s\r\n", test.c_str());
+    if (buffered < sizeof(inputBuffer)) {
+      buffered += chnReadTimeout(
+          &SDU1,
+          reinterpret_cast<std::uint8_t*>(inputBuffer + buffered),
+          sizeof(inputBuffer) - buffered,
+          TIME_IMMEDIATE);
+    }
 
+    while (buffered != 0) {
+      const std::string pending(inputBuffer, buffered);
+      const std::size_t endPosition = pending.find(msg::messageEnd);
+      if (endPosition == std::string_view::npos)
+        break;
 
-    VESC.setCurrent(1.0f);
+      const std::size_t frameSize = endPosition + msg::messageEnd.size();
+      const std::string response = ProcessRead(pending.substr(0, frameSize));
+
+      std::size_t written = 0;
+      while (written < response.size()) {
+        const std::size_t count = chnWrite(
+            &SDU1,
+            reinterpret_cast<const std::uint8_t*>(response.data() + written),
+            response.size() - written);
+        if (count == 0)
+          break;
+        written += count;
+      }
+
+      // Preserve data after this frame
+      // if this buffer contains another frame, that frame will be completed by another read.
+      const std::size_t remaining = buffered - frameSize;
+      std::memmove(inputBuffer, inputBuffer + frameSize, remaining);
+      buffered = remaining;
+    }
   }
 }
 
@@ -190,12 +646,12 @@ adcsample_t samples[CACHE_SIZE_ALIGN(adcsample_t, ADC_GRP2_NUM_CHANNELS * ADC_GR
 MovingAverage movingAverage_current;
 MovingAverage movingAverage_current_2;
 
-// this callback is partially clanked
 extern "C" void adccallback(ADCDriver *adcp) {
   movingAverage_current.smoothingFactor = 0.0002f;
   movingAverage_current_2.smoothingFactor = movingAverage_current.smoothingFactor;
 
 
+  // CLANKED FROM HERE
   const size_t sequences = ADC_GRP2_BUF_DEPTH / 2U;
   const size_t half_samples = sequences * ADC_GRP2_NUM_CHANNELS;
 
@@ -216,6 +672,7 @@ extern "C" void adccallback(ADCDriver *adcp) {
     raw_values[channel] = (float)sums[channel] / (float)sequences;
     voltages_mv[channel] = (float)(reference_mv * raw_values[channel]) / ((float)ADC_FULL_SCALE);
   }
+  // CLANKED TO HERE
 
   // // throttleLevel
   // static float throttleMinVoltage = 0.95;
@@ -289,6 +746,9 @@ int main(void) {
   chSysInit();
   portab_setup();
 
+  battery.setup();
+  chMtxObjectInit(&mtx_toSendExtra);
+
   // GPIO setup
   pinMode(PIN_BUTTON_K1, INPUT_PULLDOWN);
 
@@ -323,24 +783,15 @@ int main(void) {
   adcStartConversion(&PORTAB_ADC1, &portab_adcgrpcfg1, samples, ADC_GRP2_BUF_DEPTH);
   gptStartContinuous(&GPTD6, 500U);
 
-  // systime_t prev = chVTGetSystemTimeX();
-  // uint32_t _temp_iterations = 0;
   while (true) {
-    // // count how many _temp_iterations++ it can do every second
-    // _temp_iterations++;
-    // systime_t now = chVTGetSystemTimeX();
-    // sysinterval_t elapsed = chTimeDiffX(prev, now);
 
-    // if (elapsed >= TIME_MS2I(1000)) {
-    //   uint32_t time_elapsed_ms = chTimeI2MS(elapsed);
+    // loop so something changes in the gui
+    if (battery.voltage >= 49) {
+        battery.voltage = 0;
+    } else if (battery.voltage < 49) {
+        battery.voltage++;
+    }
 
-    //   // using floats so we can avoid multiplying by 1000, which can overflow the 32-bit integer value
-    //   cycles_per_second = (uint32_t) ((float)_temp_iterations / ((float)time_elapsed_ms / 1000.0f));
-
-    //   _temp_iterations = 0;
-    //   prev = now;
-    // }
-
-    chThdSleepMilliseconds(1000);
+    chThdSleepMilliseconds(10);
   }
 }
