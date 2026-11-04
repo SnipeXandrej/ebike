@@ -1,48 +1,199 @@
-CXX = clang++
-MAKEFLAGS += -j$(shell nproc)
+##############################################################################
+# Build global options
+# NOTE: Can be overridden externally.
+#
 
-SRC_ROOT := $(abspath ..)
-BUILD := build
-
-EXEC = ebike-backend
-SOURCES = main.cpp
-SOURCES += server.cpp battery.cpp myUart.cpp rollingRangeEstimation.cpp ../timer.cpp ../valueTransition.cpp ../messagingUtils.cpp ../commonUtils.cpp ../loopRateLimiter.cpp ../rampLimiter.cpp
-SOURCES += VescUart/VescUart.cpp VescUart/crc.cpp VescUart/buffer.cpp
-
-CXXFLAGS = -std=c++23 -g -Wall -Wextra -I$(SRC_ROOT) -DMSG_DISABLE_MTX
-CXXFLAGS += -I../submodules/magic_enum/include/magic_enum
-
-# CXXFLAGS += -fsanitize=address -fno-omit-frame-pointer -g
-# LIBS  += -fsanitize=address
-
-UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S), Linux) #LINUX
-	ifndef notrpi
-		LIBS += -lwiringPi
-		SOURCES += ads1115.cpp
-	endif
+# Compiler options here.
+ifeq ($(USE_OPT),)
+  USE_OPT = -O2 -ggdb -fomit-frame-pointer -falign-functions=16
 endif
 
-NORM_SOURCES := $(patsubst $(SRC_ROOT)/%,%,$(abspath $(SOURCES)))
-OBJS := $(NORM_SOURCES:%.cpp=$(BUILD)/%.o)
+# C specific options here (added to USE_OPT).
+ifeq ($(USE_COPT),)
+  USE_COPT =
+endif
 
-.PHONY: all clean notrpi
+# C++ specific options here (added to USE_OPT).
+ifeq ($(USE_CPPOPT),)
+  USE_CPPOPT = -fno-rtti -fno-exceptions -std=gnu++23
+endif
 
-## BUILD RULES
-$(BUILD)/%.o: $(SRC_ROOT)/%.cpp
-	@mkdir -p $(dir $@)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+# Enable this if you want the linker to remove unused code and data.
+ifeq ($(USE_LINK_GC),)
+  USE_LINK_GC = yes
+endif
 
-all: $(EXEC)
-		@echo Build complete
+# Linker extra options here.
+ifeq ($(USE_LDOPT),)
+  USE_LDOPT =
+endif
 
-## NOT_RPI BUILD (adds #define NOT_RPI)
-notrpi: CXXFLAGS += -DNOT_RPI
-notrpi: $(EXEC)
-	@echo Build complete for NOT_RPI
+# Enable this if you want link time optimizations (LTO).
+ifeq ($(USE_LTO),)
+  USE_LTO = yes
+endif
 
-$(EXEC): $(OBJS)
-		$(CXX) -o $@ $^ $(CXXFLAGS) $(LIBS)
+# Enable this if you want to see the full log while compiling.
+ifeq ($(USE_VERBOSE_COMPILE),)
+  USE_VERBOSE_COMPILE = no
+endif
 
-clean:
-		rm -f $(EXEC) $(OBJS)
+# If enabled, this option makes the build process faster by not compiling
+# modules not used in the current configuration.
+ifeq ($(USE_SMART_BUILD),)
+  USE_SMART_BUILD = yes
+endif
+
+#
+# Build global options
+##############################################################################
+
+##############################################################################
+# Architecture or project specific options
+#
+
+# Stack size to be allocated to the Cortex-M process stack. This stack is
+# the stack used by the main() thread.
+ifeq ($(USE_PROCESS_STACKSIZE),)
+  USE_PROCESS_STACKSIZE = 0x400
+endif
+
+# Stack size to the allocated to the Cortex-M main/exceptions stack. This
+# stack is used for processing interrupts and exceptions.
+ifeq ($(USE_EXCEPTIONS_STACKSIZE),)
+  USE_EXCEPTIONS_STACKSIZE = 0x400
+endif
+
+# Enables the use of FPU (no, softfp, hard).
+ifeq ($(USE_FPU),)
+  USE_FPU = no
+endif
+
+# FPU-related options.
+ifeq ($(USE_FPU_OPT),)
+  USE_FPU_OPT = -mfloat-abi=$(USE_FPU) -mfpu=fpv5-d16
+endif
+
+#
+# Architecture or project specific options
+##############################################################################
+
+##############################################################################
+# Project, target, sources and paths
+#
+
+SRC_ROOT := $(abspath ..)
+
+# Define project name here
+PROJECT = ch
+
+# Target settings.
+MCU  = cortex-m7
+
+# Imported source files and paths.
+CHIBIOS  := ./ChibiOS
+CONFDIR  := ./cfg
+BUILDDIR := ./build
+DEPDIR   := ./.dep
+
+# Licensing files.
+include $(CHIBIOS)/os/license/license.mk
+# Startup files.
+include $(CHIBIOS)/os/common/startup/ARMCMx/compilers/GCC/mk/startup_stm32h7xx.mk
+# HAL-OSAL files (optional).
+include $(CHIBIOS)/os/hal/hal.mk
+include $(CHIBIOS)/os/hal/ports/STM32/STM32H7xx/platform_type2.mk
+include ./board/board.mk
+include $(CHIBIOS)/os/hal/osal/rt-nil/osal.mk
+# RTOS files (optional).
+include $(CHIBIOS)/os/rt/rt.mk
+include $(CHIBIOS)/os/common/ports/ARMv7-M/compilers/GCC/mk/port.mk
+# Auto-build files in ./source recursively.
+include $(CHIBIOS)/tools/mk/autobuild.mk
+# Other files (optional).
+include $(CHIBIOS)/os/test/test.mk
+include $(CHIBIOS)/test/rt/rt_test.mk
+include $(CHIBIOS)/test/oslib/oslib_test.mk
+include $(CHIBIOS)/os/hal/lib/streams/streams.mk
+#include $(CHIBIOS)/os/various/shell/shell.mk
+
+# Define linker script file here.
+LDSCRIPT= $(STARTUPLD)/STM32H723xG_ITCM64k.ld
+
+# C sources that can be compiled in ARM or THUMB mode depending on the global
+# setting.
+CSRC = $(ALLCSRC) \
+       $(CHIBIOS)/os/various/newlib_bindings/syscalls.c \
+       $(TESTSRC) \
+       $(CONFDIR)/portab.c \
+       usbcfg.c \
+
+# C++ sources that can be compiled in ARM or THUMB mode depending on the global
+# setting.
+CPPSRC = $(ALLCPPSRC) \
+         main.cpp \
+         adc3.cpp abstractions.cpp ../commonUtils.cpp \
+         VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp
+
+# List ASM source files here.
+ASMSRC = $(ALLASMSRC)
+
+# List ASM with preprocessor source files here.
+ASMXSRC = $(ALLXASMSRC)
+
+# Inclusion directories.
+INCDIR = $(CONFDIR) $(ALLINC) $(TESTINC)
+
+# Define C warning options here.
+CWARN = -Wall -Wextra -Wundef -Wstrict-prototypes
+
+# Define C++ warning options here.
+CPPWARN = -Wall -Wextra -Wundef
+
+#
+# Project, target, sources and paths
+##############################################################################
+
+##############################################################################
+# Start of user section
+#
+
+# List all user C define here, like -D_DEBUG=1
+UDEFS = -DCHPRINTF_USE_FLOAT=1 -DBACKEND
+
+# Define ASM defines here
+UADEFS =
+
+# List all user directories here
+UINCDIR = ./compat $(SRC_ROOT)
+
+# List the user directory to look for the libraries here
+ULIBDIR =
+
+# List all user libraries here
+ULIBS =
+
+#
+# End of user section
+##############################################################################
+
+##############################################################################
+# Common rules
+#
+
+RULESPATH = $(CHIBIOS)/os/common/startup/ARMCMx/compilers/GCC/mk
+include $(RULESPATH)/arm-none-eabi.mk
+LD = $(TRGT)g++
+include $(RULESPATH)/rules.mk
+
+#
+# Common rules
+##############################################################################
+
+##############################################################################
+# Custom rules
+#
+
+#
+# Custom rules
+##############################################################################

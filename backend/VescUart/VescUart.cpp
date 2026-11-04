@@ -2,7 +2,13 @@
 #include "VescUart.h"
 #include <string.h>
 
+/* Keep the library's existing debug call sites, but route them through the
+ * configured embedded serial stream instead of hosted libc stdout. */
+#define printf(...) if (debugPort != NULL) debugPort->printf(__VA_ARGS__);
+
 VescUart::VescUart(uint32_t timeout_ms) : _TIMEOUT(timeout_ms) {
+	chMtxObjectInit(&mtx);
+	chMtxObjectInit(&mtx_packSendPayload);
 	nunchuck.valueX         = 127;
 	nunchuck.valueY         = 127;
 	nunchuck.lowerButton  	= false;
@@ -20,14 +26,16 @@ void VescUart::setDebugPort(MyUart* port)
 }
 
 int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
-	const std::lock_guard<std::mutex> lock(mtx);
+	chMtxLock(&mtx);
 
 	// Messages <= 255 starts with "2", 2nd byte is length
 	// Messages > 255 starts with "3" 2nd and 3rd byte is length combined with 1st >>8 and then &0xFF
 
 	// Makes no sense to run this function if no serialPort is defined.
-	if (serialPort == NULL)
+	if (serialPort == NULL) {
+		chMtxUnlock(&mtx);
 		return -1;
+	}
 
 	uint16_t counter = 0;
 	uint16_t endMessage = 256;
@@ -36,9 +44,9 @@ int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
 	uint8_t messageReceived[256];
 	uint16_t lenPayload = 0;
 	
-	uint32_t timeout = millis() + _TIMEOUT; // Defining the timestamp for timeout (100ms before timeout)
+	const uint32_t started = millis();
 
-	while ( millis() < timeout && messageRead == false && packetSizeExceeded == false) {
+	while ((uint32_t)(millis() - started) < _TIMEOUT && messageRead == false && packetSizeExceeded == false) {
 
 		while (serialPort->available()) {
 
@@ -104,6 +112,7 @@ int VescUart::receiveUartMessage(uint8_t * payloadReceived) {
 		ret = 0;
 	}
 
+	chMtxUnlock(&mtx);
 	return ret;
 }
 
@@ -147,7 +156,7 @@ bool VescUart::unpackPayload(uint8_t * message, int lenMes, uint8_t * payload) {
 }
 
 int VescUart::packSendPayload(uint8_t * payload, int lenPay) {
-	const std::lock_guard<std::mutex> lock(mtx_packSendPayload);
+	chMtxLock(&mtx_packSendPayload);
 
 	uint16_t crcPayload = crc16(payload, lenPay);
 	int count = 0;
@@ -183,6 +192,7 @@ int VescUart::packSendPayload(uint8_t * payload, int lenPay) {
 		serialPort->write(messageSend, count);
 
 	// Returns number of send bytes
+	chMtxUnlock(&mtx_packSendPayload);
 	return count;
 }
 
@@ -536,25 +546,10 @@ void VescUart::serialPrint(uint8_t * data, int len) {
 	}
 }
 
-unsigned int VescUart::millis (void) {
-  uint64_t now ;
-
-#ifdef	OLD_WAY
-  struct timeval tv ;
-
-  gettimeofday (&tv, NULL) ;
-  now  = (uint64_t)tv.tv_sec * (uint64_t)1000 + (uint64_t)(tv.tv_usec / 1000) ;
-
-#else
-  struct  timespec ts ;
-
-  clock_gettime (CLOCK_MONOTONIC_RAW, &ts) ;
-  now  = (uint64_t)ts.tv_sec * (uint64_t)1000 + (uint64_t)(ts.tv_nsec / 1000000L) ;
-#endif
-
-std::this_thread::sleep_for(std::chrono::microseconds(200));
-
-  return (uint32_t)(now - epochMilli) ;
+uint32_t VescUart::millis (void) {
+	return static_cast<uint32_t>(
+        TIME_I2MS(chVTGetSystemTimeX())
+    );
 }
 
 void VescUart::printVescValues() {

@@ -1,86 +1,63 @@
 #include "myUart.hpp"
-#include <stdio.h>
+#include "ch.h"
+#include "chprintf.h"
+
+#include <stdarg.h>
 #include <string.h>
-#include <errno.h>
-#include <unistd.h>
-#include <sys/ioctl.h>
-#include <fcntl.h>
 
-int MyUart::begin(speed_t BAUDRATE) {
-    struct termios options;
-    int status;
+void MyUart::setUartPort(SerialDriver* _port) {
+    uartPort = _port;
+}
 
-    if ((fd = open ("/dev/ttyAMA0", O_RDWR | O_NOCTTY | O_NDELAY | O_NONBLOCK)) == -1) {
+int MyUart::begin(int BAUDRATE) {
+    if (BAUDRATE <= 0) {
         return -1;
     }
 
-    fcntl (fd, F_SETFL, O_RDWR);
+    const SerialConfig config = {
+        static_cast<uint32_t>(BAUDRATE),
+        0U,
+        0U,
+        0U
+    };
 
-    tcgetattr (fd, &options);
-
-    cfmakeraw   (&options);
-    cfsetispeed (&options, BAUDRATE);
-    cfsetospeed (&options, BAUDRATE);
-
-    options.c_cflag |= (CLOCAL | CREAD);
-    options.c_cflag &= ~PARENB;
-    options.c_cflag &= ~CSTOPB;
-    options.c_cflag &= ~CSIZE;
-    options.c_cflag |= CS8;
-    options.c_lflag &= ~(ICANON | ECHO | ECHOE | ISIG);
-    options.c_oflag &= ~OPOST;
-
-    options.c_cc [VMIN]  =   0;
-    options.c_cc [VTIME] = 100; // 10s
-
-    tcsetattr (fd, TCSANOW, &options) ;
-
-    ioctl (fd, TIOCMGET, &status);
-
-    status |= TIOCM_DTR ;
-    status |= TIOCM_RTS ;
-
-    ioctl (fd, TIOCMSET, &status);
-
-    usleep (10000) ;	// 10mS
-
-    if (fd < 0) {
-        fprintf(stderr, "Unable to open serial device: %s\n", strerror (errno));
-        return -1;
-    }
-
-    return 0;
+    return static_cast<int>(sdStart(uartPort, &config));
 }
 
 void MyUart::print(const char* data) {
-    ::write(fd, (const char*)data, strlen(data));
+    if (data != nullptr) {
+        chnWrite(uartPort, reinterpret_cast<const uint8_t *>(data), strlen(data));
+    }
 }
 
 void MyUart::printf(const char* format, ...) {
-    ::write(fd, (const char*)format, strlen(format));
-}
-
-int MyUart::read() {
-    uint8_t c = 0;
-
-    ::read(fd, &c, 1);
-
-    return c;
-}
-
-int MyUart::available() {
-    size_t available;
-    if (ioctl(fd, FIONREAD, &available) == -1) {
-        return -1;
-    }
-
-    return available;
-}
-
-void MyUart::write(const uint8_t *data, size_t len) {
-    if (data == NULL || !len) {
+    if (format == nullptr) {
         return;
     }
 
-    ::write(fd, data, len);
+    va_list args;
+    va_start(args, format);
+    chvprintf(reinterpret_cast<BaseSequentialStream *>(uartPort), format, args);
+    va_end(args);
+}
+
+int MyUart::read() {
+    const msg_t value = chnGetTimeout(uartPort, TIME_INFINITE);
+    return value == MSG_TIMEOUT ? -1 : static_cast<int>(value);
+}
+
+int MyUart::available() {
+    size_t count;
+
+    chSysLock();
+    count = iqGetFullI(&uartPort->iqueue);
+    chSysUnlock();
+
+    return static_cast<int>(count);
+}
+
+void MyUart::write(const uint8_t *data, size_t len) {
+    if ((data != nullptr) && (len != 0U)) {
+        chnWrite(uartPort, data, len);
+    }
 }

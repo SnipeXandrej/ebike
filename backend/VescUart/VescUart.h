@@ -5,9 +5,7 @@
 #include "datatypes.h"
 #include "buffer.h"
 #include "crc.h"
-#include <string>
-#include <thread>
-#include <mutex>
+#include "ch.h"
 
 // this header is located in the ebike repository
 #include "../myUart.hpp"
@@ -42,7 +40,7 @@ class VescUart
       float l_watt_max;
       float l_in_current_min;
       float l_in_current_max;
-      std::string name = "Default"; // its being set by us, not by the VESC
+      const char* name = "Default"; // application metadata, not set by the VESC
       float c_phase_current_max; // its being set by us, not by the VESC
       bool c_force_single_motor_acceleration; // its being set by us, not by the VESC
       // int motor_poles;
@@ -240,8 +238,8 @@ class VescUart
         bool printDebug = false;
 
 	private: 
-    std::mutex mtx;
-    std::mutex mtx_packSendPayload;
+    mutex_t mtx;
+    mutex_t mtx_packSendPayload;
 
 		/** Variabel to hold the reference to the Serial object to use for UART */
 		MyUart* serialPort = NULL;
@@ -251,7 +249,7 @@ class VescUart
 		MyUart* debugPort = NULL;
 
     uint64_t epochMilli;
-    unsigned int millis (void);
+    uint32_t millis (void);
 
 		/**
 		 * @brief      Packs the payload and sends it over Serial

@@ -5,3 +5,6 @@
 	path = submodules/magic_enum
 	url = https://github.com/Neargye/magic_enum
 	branch = master
+[submodule "backend/ChibiOS"]
+	path = backend/ChibiOS
+	url = https://github.com/ChibiOS/ChibiOS.git

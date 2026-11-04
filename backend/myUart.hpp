@@ -3,11 +3,13 @@
 
 #include <inttypes.h>
 #include <stdio.h>
-#include <termios.h>
+#include "hal.h"
 
 class MyUart {
 public:
-    int begin(speed_t BAUDRATE);
+    void setUartPort(SerialDriver* _port);
+
+    int begin(int BAUDRATE);
 
     void print(const char* data);
 
@@ -19,7 +21,10 @@ public:
 
     void write(const uint8_t *data, size_t len);
 
-    int fd;
+    int fd = -1;
+
+private:
+    SerialDriver* uartPort = nullptr;
 };
 
 #endif

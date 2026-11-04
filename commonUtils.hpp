@@ -2,6 +2,8 @@
 #define COMMONUTILS_H
 
 #include <iostream>
+
+#ifndef BACKEND
 #include "toml.hpp"
 #include <mutex>
 #include <thread>
@@ -14,6 +16,7 @@ public:
     void set(std::string value);
     std::string get();
 };
+#endif
 
 struct profile_t {
     std::string name;
@@ -53,10 +56,12 @@ float map_f_nochecks(float x, float in_min, float in_max, float out_min, float o
 
 double map_d_nochecks(double x, double in_min, double in_max, double out_min, double out_max);
 
+#ifndef BACKEND
 void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, const char* setting_name, double value);
 void updateTableValue(toml::table &tbl, const char* table_name, const char* setting_name, double value);
 void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, const char* setting_name, std::string string);
 void updateTableValue(toml::table &tbl, const char* table_name, const char* setting_name, std::string string);
 void saveTableToFile(toml::table &tbl, const char* SETTINGS_FILEPATH);
+#endif
 
 #endif

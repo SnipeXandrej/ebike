@@ -1,6 +1,7 @@
 #include "commonUtils.hpp"
-#include <print>
 
+#ifndef BACKEND
+#include <print>
 void AtomicString::set(std::string value) {
     std::lock_guard lock(mutex_);
     value_ = std::move(value);
@@ -10,6 +11,7 @@ std::string AtomicString::get() {
     std::lock_guard lock(mutex_);
     return value_;
 }
+#endif
 
 float MovingAverage::smoothValue(float newValue, float previousValue, float smoothingFactor) {
     return previousValue + smoothingFactor * (newValue - previousValue);
@@ -53,7 +55,7 @@ double map_d_nochecks(double x, double in_min, double in_max, double out_min, do
     return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-
+#ifndef BACKEND
 void updateTableValue(const char* SETTINGS_FILEPATH, const char* table_name, const char* setting_name, double value) {
     toml::table tbl = toml::parse_file(SETTINGS_FILEPATH);
     toml::table* settings = tbl[table_name].as_table();
@@ -114,3 +116,4 @@ void saveTableToFile(toml::table &tbl, const char* SETTINGS_FILEPATH) {
     file.close();
     std::print("table was saved to {}\n", SETTINGS_FILEPATH);
 }
+#endif
