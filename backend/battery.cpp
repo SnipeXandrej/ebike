@@ -1,8 +1,8 @@
 #include "battery.hpp"
 #include "commonUtils.hpp"
-#include <chrono>
-#include <thread>
 #include <format>
+#include <cmath>
+#include <cstring>
 
 // this implementation requires the use of SoC vs Voltage values
 
@@ -125,10 +125,14 @@ struct {
     double estimatedCapacityAmpHours;
 } AMPHOUR_ESTIMATE_T;
 
-void Battery::processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased) {
-    static auto t1 = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::micro> usElapsed = std::chrono::high_resolution_clock::now() - t1;
+static bool firstTime = true;
+static double accAmpHours = 0.0;
+static double accAmpHours_abs = 0.0;
+static double accPercentageChange = 0.0;
+static bool state_isVoltageBased = false;
+static double ampHoursLifetime_savedVoltagePercentage = 0.0;
 
+void Battery::processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt) {
     voltage = voltage_;
     current = current_;
 
@@ -137,8 +141,8 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     wattHoursRemaining = wattHoursFullyDischarged * (_percentage / 100.0);
     wattHoursUsed = wattHoursFullyDischarged - wattHoursRemaining;
 
-    ampHoursUsedInElapsedTime = current / (1000000.0 / usElapsed.count()) / 3600.0;
-    wattHoursUsedInElapsedTime = (current * voltage) / (1000000.0 / usElapsed.count()) / 3600.0;
+    ampHoursUsedInElapsedTime = current / (1.0 / dt) / 3600.0;
+    wattHoursUsedInElapsedTime = (current * voltage) / (1.0 / dt) / 3600.0;
 
     if ((wattHoursUsedInElapsedTime >= 20.0) || (wattHoursUsedInElapsedTime <= -20.0)) {
         wattHoursUsedInElapsedTime = 0.0;
@@ -148,35 +152,22 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         ampHoursUsedInElapsedTime = 0.0;
     }
 
-    percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000);
+    percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000, dt);
 
     // combined percentage
-    static auto timeVoltageSettledStart = std::chrono::high_resolution_clock::now();
-    std::chrono::duration<double, std::milli> timeVoltageSettledMsElapsed = std::chrono::high_resolution_clock::now() - timeVoltageSettledStart;
+    static double timeVoltageSettledMsElapsed = 0.0;
+    timeVoltageSettledMsElapsed += (dt * 1000.0);
 
     if (current <= idleMaxDischargingCurrent && current >= -idleMaxChargingCurrent) {
-        if (timeVoltageSettledMsElapsed.count() >= voltageSettlingTimeMs) {
+        if (timeVoltageSettledMsElapsed >= voltageSettlingTimeMs) {
             AMPHOUR_ESTIMATE_T.isVoltageBased = true;
-
-            // if (/*something*/) {
-            //     // disable idle
-            //     AMPHOUR_ESTIMATE_T.isVoltageBased = false;
-            //     timeVoltageSettledStart = std::chrono::high_resolution_clock::now();
-            // }
         } else {
             AMPHOUR_ESTIMATE_T.isVoltageBased = false;
         }
     } else {
         AMPHOUR_ESTIMATE_T.isVoltageBased = false;
-        timeVoltageSettledStart = std::chrono::high_resolution_clock::now();
+        timeVoltageSettledMsElapsed = 0.0;
     }
-
-    static bool firstTime = true;
-    static double accAmpHours = 0.0;
-    static double accAmpHours_abs = 0.0;
-    static double accPercentageChange = 0.0;
-    static bool state_isVoltageBased = false;
-    static double ampHoursLifetime_savedVoltagePercentage = 0.0;
 
     // - also does lifetime amphours counting
     // - when isVoltageBased=true save the percentageVoltageBased, when isVoltageBased=false calculate the amphour used
@@ -238,24 +229,23 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     // and just the voltagePercentage one
     if (!AMPHOUR_ESTIMATE_T.isVoltageBased) {
         if ((_percentage2 - _percentage) >= 0.1 || (_percentage - _percentage2) >= 0.1) {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt);
         } else {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1, dt);
         }
     } else {
-        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000);
+        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt);
     }
 
     // AMPHOUR COUNTING WITH DATA ACCUMULATED DURING USAGE
     // only used for setting/changing the value of ampHoursFullyCharged
     switch(AMPHOUR_ESTIMATE_T.state) {
         case AMPHOUR_ESTIMATE::START: {
-            estimateStatusString = "Waiting for voltage to settle"; // || current > -idleMaxDischargingCurrent
-            estimateStatusString += std::format("\n wait {:.2f} second(s)", (voltageSettlingTimeMs - timeVoltageSettledMsElapsed.count()) / 1000.0);
-            // if (current <= -idleMaxDischargingCurrent) break; // charging ||
+            strcpy(estimateStatusString, "Waiting for voltage to settle"); // || current > -idleMaxDischargingCurrent
+            // estimateStatusString += std::format("\n wait {:.2f} second(s)", (voltageSettlingTimeMs - timeVoltageSettledMsElapsed) / 1000.0);
             if (AMPHOUR_ESTIMATE_T.isVoltageBased) {
                 AMPHOUR_ESTIMATE_T.startVoltagePercentage = percentageVoltageBased;
-                estimateStatusString = "(IN START) 1. Ready to start collecting data";
+                strcpy(estimateStatusString, "(IN START) 1. Ready to start collecting data");
                 AMPHOUR_ESTIMATE_T.state = AMPHOUR_ESTIMATE::START_TO_RUNNING;
             }
             break;
@@ -263,7 +253,7 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         case AMPHOUR_ESTIMATE::START_TO_RUNNING: {
             if (AMPHOUR_ESTIMATE_T.isVoltageBased) {
                 AMPHOUR_ESTIMATE_T.startVoltagePercentage = percentageVoltageBased;
-                estimateStatusString = "1. Ready to start collecting data";
+                strcpy(estimateStatusString, "1. Ready to start collecting data");
             } else {
                 AMPHOUR_ESTIMATE_T.accAmpHours = 0;
                 AMPHOUR_ESTIMATE_T.accWattHours = 0;
@@ -272,7 +262,7 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
             break;
         }
         case AMPHOUR_ESTIMATE::RUNNING: {
-            estimateStatusString = "2. Collecting data";
+            strcpy(estimateStatusString, "2. Collecting data");
 
             AMPHOUR_ESTIMATE_T.accAmpHours += ampHoursUsedInElapsedTime;
             AMPHOUR_ESTIMATE_T.accWattHours += wattHoursUsedInElapsedTime; // TODO: NOT USED RIGHT NOW
@@ -280,7 +270,7 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
             if (AMPHOUR_ESTIMATE_T.isVoltageBased) {
                 if (AMPHOUR_ESTIMATE_T.accAmpHours < accumulatedAmpHoursThreshold) {
                     AMPHOUR_ESTIMATE_T.state = AMPHOUR_ESTIMATE::START;
-                    estimateStatusString = "3. Not enough data accumulated";
+                    strcpy(estimateStatusString, "3. Not enough data accumulated");
                     break;
                 };
 
@@ -294,7 +284,7 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
             AMPHOUR_ESTIMATE_T.deltaPercentage = AMPHOUR_ESTIMATE_T.startVoltagePercentage - AMPHOUR_ESTIMATE_T.endVoltagePercentage;
             if (AMPHOUR_ESTIMATE_T.deltaPercentage < 0.0) {
                 AMPHOUR_ESTIMATE_T.state = AMPHOUR_ESTIMATE::START;
-                estimateStatusString = "4. delta percentage was in the negatives, failed";
+                strcpy(estimateStatusString, "4. delta percentage was in the negatives, failed");
                 break;
             }
 
@@ -307,7 +297,7 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
                                                 ? AMPHOUR_ESTIMATE_T.estimatedCapacityAmpHours
                                                 : (ampHoursFullyCharged + AMPHOUR_ESTIMATE_T.estimatedCapacityAmpHours) / 2.0;
 
-            estimateStatusString = "(IN END) 5. New estimated capacity saved";
+            strcpy(estimateStatusString, "(IN END) 5. New estimated capacity saved");
             AMPHOUR_ESTIMATE_T.state = AMPHOUR_ESTIMATE::START;
             break;
         }
@@ -320,20 +310,23 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         percentage = _percentage2;
     }
 
-    std::string _statusString = std::format(
-        "   IsVoltageBased:                  {}\n"
-        "   Percentage shown:                {:.3f} %\n"
-        "   percentage Voltage Based:        {:.3f} %\n"
-        "\n   AmpHours Estimated Used:         {:.3f} A\n"
-        "   AmpHours Estimated Full:         {:.3f} A\n"
-        "   Acc AmpHours During Usage:       {:.3f}\n"
-        "   Acc AmpHours (abs) During Usage: {:.3f}\n"
-        "   Acc Percentage During Usage:     {:.3f}\n"
-        "   Collecting data status:          {}\n"
-        "   Accumulated Amphours during usage:  {:.3f} Ah\n"
-        "   Accumulated Watthours during usage: {:.3f} Wh\n"
-        "   Estimated Capacity from test:       {:.3f} %\n"
-        "   Delta Percentage:                   {:.3f} %\n"
+}
+
+char* Battery::getStatus() {
+    snprintf(_statusString, sizeof(_statusString),
+        "   IsVoltageBased:                  %d\n"
+        "   Percentage shown:                %.3f %%\n"
+        "   percentage Voltage Based:        %.3f %%\n"
+        "\n   AmpHours Estimated Used:         %.3f A\n"
+        "   AmpHours Estimated Full:         %.3f A\n"
+        "   Acc AmpHours During Usage:       %.3f\n"
+        "   Acc AmpHours (abs) During Usage: %.3f\n"
+        "   Acc Percentage During Usage:     %.3f\n"
+        "   Collecting data status:          %s\n"
+        "   Accumulated Amphours during usage:  %.3f Ah\n"
+        "   Accumulated Watthours during usage: %.3f Wh\n"
+        "   Estimated Capacity from test:       %.3f %%\n"
+        "   Delta Percentage:                   %.3f %%\n"
         , AMPHOUR_ESTIMATE_T.isVoltageBased
         , percentage
         , percentageVoltageBased
@@ -349,18 +342,17 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         , AMPHOUR_ESTIMATE_T.deltaPercentage
     );
 
-    _statusString += std::format(
-        "\n   idleMaxDischargingCurrent:    {} A\n"
-        "   idleMaxChargingCurrent:       {} A\n"
-        "   voltageSettlingTimeMs:        {:.1f}\n"
-        "   accumulatedAmpHoursThreshold: {} Ah\n"
-        ,idleMaxDischargingCurrent
-        ,idleMaxChargingCurrent
-        ,voltageSettlingTimeMs
-        ,accumulatedAmpHoursThreshold
-    );
+    // _statusString += std::format(
+    //     "\n   idleMaxDischargingCurrent:    {} A\n"
+    //     "   idleMaxChargingCurrent:       {} A\n"
+    //     "   voltageSettlingTimeMs:        {:.1f}\n"
+    //     "   accumulatedAmpHoursThreshold: {} Ah\n"
+    //     ,idleMaxDischargingCurrent
+    //     ,idleMaxChargingCurrent
+    //     ,voltageSettlingTimeMs
+    //     ,accumulatedAmpHoursThreshold
+    // );
 
-    statusString.set(_statusString);
-
-    t1 = std::chrono::high_resolution_clock::now();
+    strcpy(statusString, _statusString);
+    return statusString;
 }

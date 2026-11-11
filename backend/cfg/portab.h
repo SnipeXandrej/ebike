@@ -60,7 +60,7 @@
 #define PORTAB_ADC1                 ADCD1
 
 // #define ADC_GRP1_NUM_CHANNELS       2
-#define ADC_GRP2_NUM_CHANNELS       4
+#define ADC_GRP2_NUM_CHANNELS       6
 #define ADC_CHANNELS  ADC_GRP2_NUM_CHANNELS
 
 extern const GPTConfig timer_2khz_config;

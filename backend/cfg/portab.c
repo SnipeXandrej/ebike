@@ -100,8 +100,8 @@ void adcerrorcallback(ADCDriver *adcp, adcerror_t err);
 
 /*
  * ADC conversion group 2.
- * Mode:        Continuous, 2 channels, HW triggered by GPT4-TRGO.
- * Channels:    IN0, IN5.
+ * Mode:        Continuous, 6 channels, HW triggered by TIM6-TRGO.
+ * Channels:    IN16, IN17, IN14, IN15, IN3, IN7.
  */
 const ADCConversionGroup portab_adcgrpcfg1 = {
   .circular     = true,
@@ -111,7 +111,7 @@ const ADCConversionGroup portab_adcgrpcfg1 = {
   .cfgr         = ADC_CFGR_CONT_DISABLED | ADC_CFGR_EXTEN_RISING | ADC_CFGR_EXTSEL_SRC(13), // TIM6_TRGO is defined as 13 in ST's HAL ADC driver
   .cfgr2        = 0U,
   .ccr          = 0U,
-  .pcsel        = ADC_SELMASK_IN16 | ADC_SELMASK_IN17 | ADC_SELMASK_IN14 | ADC_SELMASK_IN15,
+  .pcsel        = ADC_SELMASK_IN16 | ADC_SELMASK_IN17 | ADC_SELMASK_IN14 | ADC_SELMASK_IN15 | ADC_SELMASK_IN3  | ADC_SELMASK_IN7,
   .ltr1         = 0x00000000U,
   .htr1         = 0x03FFFFFFU,
   .ltr2         = 0x00000000U,
@@ -119,7 +119,8 @@ const ADCConversionGroup portab_adcgrpcfg1 = {
   .ltr3         = 0x00000000U,
   .htr3         = 0x03FFFFFFU,
   .smpr         = {
-    0U,
+    ADC_SMPR1_SMP_AN3(ADC_SMPR_SMP_64P5) |
+    ADC_SMPR1_SMP_AN7(ADC_SMPR_SMP_64P5),
     ADC_SMPR2_SMP_AN16(ADC_SMPR_SMP_64P5) |
     ADC_SMPR2_SMP_AN17(ADC_SMPR_SMP_64P5) |
     ADC_SMPR2_SMP_AN14(ADC_SMPR_SMP_64P5) |
@@ -130,7 +131,8 @@ const ADCConversionGroup portab_adcgrpcfg1 = {
     ADC_SQR1_SQ2_N(ADC_CHANNEL_IN17) |
     ADC_SQR1_SQ3_N(ADC_CHANNEL_IN14) |
     ADC_SQR1_SQ4_N(ADC_CHANNEL_IN15),
-    0U,
+    ADC_SQR2_SQ5_N(ADC_CHANNEL_IN3) |
+    ADC_SQR2_SQ6_N(ADC_CHANNEL_IN7),
     0U,
     0U
   }
@@ -167,6 +169,8 @@ void portab_setup(void) {
     palSetPadMode(GPIOA, 1, PAL_MODE_INPUT_ANALOG);
     palSetPadMode(GPIOA, 2, PAL_MODE_INPUT_ANALOG);
     palSetPadMode(GPIOA, 3, PAL_MODE_INPUT_ANALOG);
+    palSetPadMode(GPIOA, 6, PAL_MODE_INPUT_ANALOG);
+    palSetPadMode(GPIOA, 7, PAL_MODE_INPUT_ANALOG);
 }
 
 /** @} */

@@ -6,7 +6,6 @@
 
 class Battery {
 private:
-    void setup();
     ThrottleMap socVoltageMap;
     RampLimiter voltageRampLimiter;
     // TODO: adjust via TOML
@@ -43,13 +42,14 @@ private:
 
     double cycleCount = 0.0;
 
-    std::string estimateStatusString;
+    char estimateStatusString[128];
+    char _statusString[512];
+    char statusString[512];
 
 public:
-    Battery() {
-        setup();
-    };
-    void processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased);
+    void setup();
+
+    void processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt);
 
     double getAmpHoursFullyChargedWhenNew();
     void   setAmpHoursFullyChargedWhenNew(double newValue);
@@ -66,6 +66,8 @@ public:
 
     double getCycleCount();
     void   setCycleCount(double newValue);
+
+    char* getStatus();
 
     // precalculated
     float voltage_nominal = cell_nominal_voltage * cell_series;
@@ -84,8 +86,6 @@ public:
     double wattHoursUsed; // just an approximation
     double wattHoursFullyDischarged; // just an approximation
     double wattHoursRemaining; // just an approximation // calculated at runtime
-
-    AtomicString statusString;
 
     bool charging = false;
 };
