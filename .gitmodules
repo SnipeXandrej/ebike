@@ -8,3 +8,6 @@
 [submodule "backend/ChibiOS"]
 	path = backend/ChibiOS
 	url = https://github.com/ChibiOS/ChibiOS.git
+[submodule "backend/ArduinoJson"]
+	path = backend/ArduinoJson
+	url = https://github.com/bblanchon/ArduinoJson.git

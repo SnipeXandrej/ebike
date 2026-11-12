@@ -8,6 +8,14 @@
 
 bool spiFlashLittleFsInit();
 
+bool spiFlashWriteBytes(const char *path, const void *data, size_t size);
+bool spiFlashReadBytes(
+    const char *path,
+    void *data,
+    size_t capacity,
+    size_t &bytesRead
+);
+
 namespace spiFlashDetail {
 bool writeFileExact(const char *path, const void *data, size_t size);
 bool readFileExact(const char *path, void *data, size_t size);

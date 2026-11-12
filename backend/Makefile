@@ -168,7 +168,8 @@ UDEFS = -DCHPRINTF_USE_FLOAT=1 -DBACKEND
 UADEFS =
 
 # List all user directories here
-UINCDIR = ./compat $(SRC_ROOT) ../submodules/magic_enum/include/magic_enum
+UINCDIR = ./compat $(SRC_ROOT) ../submodules/magic_enum/include/magic_enum \
+          ./ArduinoJson/src
 
 # List the user directory to look for the libraries here
 ULIBDIR =

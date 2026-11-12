@@ -35,6 +35,8 @@ extern "C" {
 #include "rollingRangeEstimation.hpp"
 #include "spiFlashLittleFs.hpp"
 #include "magic_enum.hpp"
+#include <ArduinoJson.h>
+#include "profiles.hpp"
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "1.0.0"
@@ -59,11 +61,15 @@ mutex_t mtx_toSendExtra;
 Battery battery;
 // ThrottleMap throttleMap;
 // ThrottleMap brakeMap;
-// PowerProfiles PP;
+PowerProfiles PP;
 RollingRangeEstimation rollingRangeEstimation;
 VescUart::dataPackage VESCCombined;
 VescUart::dataPackage VESCPrimary;
 VescUart::dataPackage VESCSecondary;
+
+#define JSON_SETTINGS_SIZE 10240
+JsonDocument jsonSettings;
+static char jsonSettingsBuffer[JSON_SETTINGS_SIZE];
 
 struct Trip {
     double distance; // in km
@@ -152,6 +158,219 @@ float primaryCurrent;
 float secondaryCurrent;
 MyUart uartVesc;
 VescUart VESC;
+
+bool settingsLoad(JsonDocument &doc) {
+  size_t length = 0;
+
+  if (!spiFlashReadBytes(
+          "settings.json",
+          jsonSettingsBuffer,
+          sizeof(jsonSettingsBuffer) - 1,
+          length)) {
+      return false;
+  }
+
+  jsonSettingsBuffer[length] = '\0';
+
+  const DeserializationError error = deserializeJson(doc, jsonSettingsBuffer, length);
+  if (error) {
+    return false;
+  }
+
+  JsonObjectConst tbl = doc.as<JsonObjectConst>();
+  if (tbl.isNull()) {
+    return false;
+  }
+
+  odometer.distance                       = tbl["odometer"]["distance"] | odometer.distance;
+  odometer.rideTime                       = tbl["odometer"]["rideTime"] | odometer.rideTime;
+  trip_A.distance                         = tbl["trip"]["distance"] | trip_A.distance;
+  trip_A.wattHoursConsumed                = tbl["trip"]["wattHoursConsumed"] | trip_A.wattHoursConsumed;
+  trip_A.wattHoursRegenerated             = tbl["trip"]["wattHoursRegenerated"] | trip_A.wattHoursRegenerated;
+  trip_A.rideTime                         = tbl["trip"]["rideTime"] | trip_A.rideTime;
+  trip_B.distance                         = tbl["trip_B"]["distance"] | trip_B.distance;
+  trip_B.wattHoursConsumed                = tbl["trip_B"]["wattHoursConsumed"] | trip_B.wattHoursConsumed;
+  trip_B.wattHoursRegenerated             = tbl["trip_B"]["wattHoursRegenerated"] | trip_B.wattHoursRegenerated;
+  trip_B.rideTime                         = tbl["trip_B"]["rideTime"] | trip_B.rideTime;
+  battery.setAmpHoursUsed(                  tbl["battery"]["ampHoursUsed"] | 0.0);
+  battery.setAmpHoursFullyCharged(          tbl["battery"]["ampHoursFullyCharged"] | 0.0);
+  battery.setAmpHoursFullyChargedWhenNew(   tbl["battery"]["ampHoursFullyChargedWhenNew"] | 0.0);
+  battery.setAmpHoursUsedLifetime(          tbl["battery"]["ampHoursUsedLifetime"] | 0.0);
+  battery.setCycleCount(                    tbl["battery"]["cycleCount"] | 0.0);
+  battery.wattHoursUsed                   = tbl["battery"]["wattHoursUsed"] | battery.wattHoursUsed;
+  battery.wattHoursFullyDischarged        = tbl["battery"]["wattHoursFullyDischarged"] | battery.wattHoursFullyDischarged;
+  settings.batteryPercentageVoltageBased  = tbl["settings"]["batteryPercentageVoltageBased"] | settings.batteryPercentageVoltageBased;
+  settings.automaticRegenerativeBraking   = tbl["settings"]["automaticRegenerativeBraking"] | settings.automaticRegenerativeBraking;
+  settings.minimizeDrivetrainBacklash     = tbl["settings"]["minimizeDrivetrainBacklash"] | settings.minimizeDrivetrainBacklash;
+  settings.enableDualVESC                 = tbl["settings"]["enableDualVESC"] | settings.enableDualVESC;
+  settings.dualMotorDriveStyle            = tbl["settings"]["dualMotorDriveStyle"] | settings.dualMotorDriveStyle;
+  settings.secondaryVESCID                = tbl["settings"]["secondaryVESCID"] | settings.secondaryVESCID;
+  settings.setSecondaryVescAsFirstAccelerationMotor   = tbl["settings"]["setSecondaryVescAsFirstAccelerationMotor"] | settings.setSecondaryVescAsFirstAccelerationMotor;
+  settings.setSecondaryVescAsFirstBrakingMotor        = tbl["settings"]["setSecondaryVescAsFirstBrakingMotor"] | settings.setSecondaryVescAsFirstBrakingMotor;
+  PP.setProfile(                            tbl["PP"]["setProfile"] | (int)0);
+  notes                                   = tbl["notes"]["note1"] | "";
+
+  for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+      for (int var = 0; var < PP_VALS::VALS_COUNT; var++) {
+          double ret = tbl
+                          [PROFILE_TO_STRING.at(static_cast<PROFILE>(profile))]
+                          [PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var))]
+                          | 0.0;
+
+          PP.set(profile, var, ret);
+      }
+  }
+
+  return true;
+}
+
+bool settingsSave(JsonDocument &doc) {
+  JsonObject tbl = doc.to<JsonObject>();
+  tbl["odometer"]["distance"] = odometer.distance;
+  tbl["odometer"]["rideTime"] = odometer.rideTime;
+  tbl["trip"]["distance"] = trip_A.distance;
+  tbl["trip"]["wattHoursConsumed"] = trip_A.wattHoursConsumed;
+  tbl["trip"]["wattHoursRegenerated"] = trip_A.wattHoursRegenerated;
+  tbl["trip"]["rideTime"] = trip_A.rideTime;
+  tbl["trip_B"]["distance"] = trip_B.distance;
+  tbl["trip_B"]["wattHoursConsumed"] = trip_B.wattHoursConsumed;
+  tbl["trip_B"]["wattHoursRegenerated"] = trip_B.wattHoursRegenerated;
+  tbl["trip_B"]["rideTime"] = trip_B.rideTime;
+  tbl["battery"]["ampHoursUsed"] = battery.getAmpHoursUsed();
+  tbl["battery"]["ampHoursFullyCharged"] = battery.getAmpHoursFullyCharged();
+  tbl["battery"]["ampHoursFullyChargedWhenNew"] = battery.getAmpHoursFullyChargedWhenNew();
+  tbl["battery"]["ampHoursUsedLifetime"] = battery.getAmpHoursUsedLifetime();
+  tbl["battery"]["cycleCount"] = battery.getCycleCount();
+  tbl["battery"]["wattHoursUsed"] = battery.wattHoursUsed;
+  tbl["battery"]["wattHoursFullyDischarged"] = battery.wattHoursFullyDischarged;
+  tbl["settings"]["batteryPercentageVoltageBased"] = settings.batteryPercentageVoltageBased;
+  tbl["settings"]["automaticRegenerativeBraking"] = settings.automaticRegenerativeBraking;
+  tbl["settings"]["minimizeDrivetrainBacklash"] = settings.minimizeDrivetrainBacklash;
+  tbl["settings"]["enableDualVESC"] = settings.enableDualVESC;
+  tbl["settings"]["dualMotorDriveStyle"] = settings.dualMotorDriveStyle;
+  tbl["settings"]["primaryVESCID"] = settings.primaryVESCID;
+  tbl["settings"]["secondaryVESCID"] = settings.secondaryVESCID;
+  tbl["settings"]["setSecondaryVescAsFirstAccelerationMotor"] = settings.setSecondaryVescAsFirstAccelerationMotor;
+  tbl["settings"]["setSecondaryVescAsFirstBrakingMotor"] = settings.setSecondaryVescAsFirstBrakingMotor;
+  tbl["PP"]["setProfile"] = PP.getProfile();
+  tbl["notes"]["note1"] = notes;
+
+  for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+      for (int var = 0; var < PP_VALS::VALS_COUNT; var++) {
+          double ret = PP.get(profile, var);
+
+          tbl[PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)).c_str()]
+             [PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var)).c_str()] = ret;
+      }
+  }
+
+  const size_t length = serializeJsonPretty(doc, jsonSettingsBuffer, sizeof(jsonSettingsBuffer));
+
+  if (length == 0 || length >= sizeof(jsonSettingsBuffer)) {
+      return false;
+  }
+
+  return spiFlashWriteBytes(
+      "settings.json",
+      jsonSettingsBuffer,
+      length
+  );
+}
+
+void setMcconfFromCurrentProfile() {
+    int profile = PP.getProfile();
+    bool distributeSettingsEvenlyBetweenDrivers = (!PP.get(PP.getProfile(), PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION) && settings.enableDualVESC) ? true : false;
+
+    VESC.data_mcconf.l_current_min_scale = PP.get(profile, PP_VALS::L_CURRENT_MIN_SCALE);
+    VESC.data_mcconf.l_current_max_scale = PP.get(profile, PP_VALS::L_CURRENT_MAX_SCALE);
+    VESC.data_mcconf.l_min_erpm = PP.get(profile, PP_VALS::L_MIN_ERPM) / 1000.0 * 1.234625970641421;
+    VESC.data_mcconf.l_max_erpm = PP.get(profile, PP_VALS::L_MAX_ERPM) / 1000.0 * 1.234625970641421;
+    VESC.data_mcconf.l_min_duty = PP.get(profile, PP_VALS::L_MIN_DUTY);
+    VESC.data_mcconf.l_max_duty = PP.get(profile, PP_VALS::L_MAX_DUTY);
+    if (distributeSettingsEvenlyBetweenDrivers) {
+        VESC.data_mcconf.l_watt_min = PP.get(profile, PP_VALS::L_WATT_MIN) / 2.0;
+        VESC.data_mcconf.l_watt_max = PP.get(profile, PP_VALS::L_WATT_MAX) / 2.0;
+        VESC.data_mcconf.l_in_current_min = PP.get(profile, PP_VALS::L_IN_CURRENT_MIN) / 2.0;
+        VESC.data_mcconf.l_in_current_max = PP.get(profile, PP_VALS::L_IN_CURRENT_MAX) / 2.0;
+        VESC.data_mcconf.c_phase_current_max = PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX) / 2.0;
+    } else {
+        VESC.data_mcconf.l_watt_min = PP.get(profile, PP_VALS::L_WATT_MIN);
+        VESC.data_mcconf.l_watt_max = PP.get(profile, PP_VALS::L_WATT_MAX);
+        VESC.data_mcconf.l_in_current_min = PP.get(profile, PP_VALS::L_IN_CURRENT_MIN);
+        VESC.data_mcconf.l_in_current_max = PP.get(profile, PP_VALS::L_IN_CURRENT_MAX);
+        VESC.data_mcconf.c_phase_current_max = PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX);
+    }
+    VESC.data_mcconf.c_force_single_motor_acceleration = PP.get(profile, PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION);
+    VESC.data_mcconf.name = PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)).c_str();
+
+    VESC.setMcconfTempValues();
+    if (distributeSettingsEvenlyBetweenDrivers)
+        VESC.setMcconfTempValues(settings.secondaryVESCID);
+}
+
+void run_command_GET_POWER_PROFILE_ALL(std::string& toSend) {
+    VescUart::mcconf_t _mcconf_vesc1;
+    VescUart::mcconf_t _mcconf_vesc2;
+    // int VESC1Success = false;
+    // int VESC2Success = false;
+
+    if (VESC.getMcconfTempValues()) {
+        _mcconf_vesc1 = VESC.data_mcconf;
+
+        // VESC1Success = true;
+    }
+
+    if (settings.enableDualVESC) {
+        if (VESC.getMcconfTempValues(settings.secondaryVESCID)) {
+            _mcconf_vesc2 = VESC.data_mcconf;
+
+            // VESC2Success = true;
+        }
+    }
+
+    int profile = PP.getProfile();
+
+    msg::start(toSend, COMMAND_ID::GET_POWER_PROFILE_ALL);
+    // Profile values
+    msg::addString(toSend, "{}", PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_CURRENT_MIN_SCALE), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_CURRENT_MAX_SCALE), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MIN_ERPM), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MAX_ERPM), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MIN_DUTY), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_MAX_DUTY), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_WATT_MIN), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_WATT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_IN_CURRENT_MIN), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::L_IN_CURRENT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::C_PHASE_CURRENT_MAX), 7);
+    msg::addValue(toSend, PP.get(profile, PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION), 7);
+    // VESC ONE
+    msg::addValue(toSend, _mcconf_vesc1.l_current_min_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_current_max_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_min_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_max_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_min_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_max_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_watt_min, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_watt_max, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_in_current_min, 7);
+    msg::addValue(toSend, _mcconf_vesc1.l_in_current_max, 7);
+    msg::addValue(toSend, _mcconf_vesc1.c_phase_current_max, 7);
+    // VESC TWO
+    msg::addValue(toSend, _mcconf_vesc2.l_current_min_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_current_max_scale, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_min_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_max_erpm, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_min_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_max_duty, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_watt_min, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_watt_max, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_in_current_min, 7);
+    msg::addValue(toSend, _mcconf_vesc2.l_in_current_max, 7);
+    msg::addValue(toSend, _mcconf_vesc2.c_phase_current_max, 7);
+    msg::end(toSend);
+}
 
 #include <cstring>
 #include <string>
@@ -347,7 +566,7 @@ std::string ProcessRead(const std::string& message) {
         msg::addValue(toSend, acceleration, 1);
         msg::addValue(toSend, powerOn, 0);
         msg::addValue(toSend, settings.automaticRegenerativeBraking, 0);
-        msg::addValue(toSend, -1, 0); // PP.getProfile()
+        msg::addValue(toSend, PP.getProfile(), 0);
         msg::addValue(toSend, settings.minimizeDrivetrainBacklash, 0);
         msg::addValue(toSend, rollingRangeEstimation.getRange(), 15);
         msg::addValue(toSend, rollingRangeEstimation.getWhPerKm(), 15);
@@ -366,7 +585,7 @@ std::string ProcessRead(const std::string& message) {
 
       case COMMAND_ID::SAVE_PREFERENCES:
       {
-        const bool saved = spiFlashWriteFile("settings.bin", settings);
+        const bool saved = settingsSave(jsonSettings);
 
         msg::start(toSend, COMMAND_ID::BACKEND_LOG);
         msg::addString(toSend, "Preferences save {}", saved ? "succeeded" : "failed");
@@ -442,25 +661,27 @@ std::string ProcessRead(const std::string& message) {
         break;
 
       case COMMAND_ID::GET_AVAILABLE_POWER_PROFILES:
-        // msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
+      {
+        msg::start(toSend, COMMAND_ID::GET_AVAILABLE_POWER_PROFILES);
 
-        // listOfProfiles.clear();
-        // for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
-        //     listOfProfiles.append(PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
-        //     listOfProfiles += '\0';
-        // }
+        std::string listOfProfiles;
+        for (int profile = 0; profile < PROFILE::PROFILE_COUNT; profile++) {
+            listOfProfiles.append(PROFILE_TO_STRING.at(static_cast<PROFILE>(profile)));
+            listOfProfiles += '\0';
+        }
 
-        // msg::addString(toSend, "{}", listOfProfiles);
-        // msg::end(toSend);
+        msg::addString(toSend, "{}", listOfProfiles);
+        msg::end(toSend);
+      }
         break;
 
       case COMMAND_ID::SET_POWER_PROFILE:
-        // PP.setProfile((int)msg::getValueFromSplit(packet, index));
-        // setMcconfFromCurrentProfile();
+        PP.setProfile((int)msg::getValueFromSplit(packet, index));
+        setMcconfFromCurrentProfile();
 
-        // msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-        // msg::addString(toSend, "Power profile was set");
-        // msg::end(toSend);
+        msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+        msg::addString(toSend, "Power profile was set");
+        msg::end(toSend);
         break;
 
       case COMMAND_ID::SET_MINIMIZE_DRIVETRAIN_BACKLASH:
@@ -547,27 +768,27 @@ std::string ProcessRead(const std::string& message) {
         break;
 
     case COMMAND_ID::GET_POWER_PROFILE_ALL:
-      // run_command_GET_POWER_PROFILE_ALL(toSend);
+      run_command_GET_POWER_PROFILE_ALL(toSend);
 
       break;
 
       case COMMAND_ID::SET_POWER_PROFILE_VALUES:
-        // PP.setProfile(STRING_TO_PROFILE.at(msg::getValueFromSplit_string(packet, index)));
-        // PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_MIN_ERPM, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_MAX_ERPM, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_MIN_DUTY, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_MAX_DUTY, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_WATT_MIN, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
-        // PP.set(PP.getProfile(), PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, msg::getValueFromSplit(packet, index));
+        PP.setProfile(STRING_TO_PROFILE.at(msg::getValueFromSplit_string(packet, index)));
+        PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MIN_SCALE, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_CURRENT_MAX_SCALE, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_MIN_ERPM, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_MAX_ERPM, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_MIN_DUTY, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_MAX_DUTY, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_WATT_MIN, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_WATT_MAX, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MIN, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::L_IN_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::C_PHASE_CURRENT_MAX, msg::getValueFromSplit(packet, index));
+        PP.set(PP.getProfile(), PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, msg::getValueFromSplit(packet, index));
 
-        // setMcconfFromCurrentProfile();
-        // run_command_GET_POWER_PROFILE_ALL(toSend);
+        setMcconfFromCurrentProfile();
+        run_command_GET_POWER_PROFILE_ALL(toSend);
 
         msg::start(toSend, COMMAND_ID::BACKEND_LOG);
         msg::addString(toSend, "New profile values set!");
@@ -865,11 +1086,58 @@ int main(void) {
   chSysInit();
   portab_setup();
 
+  PP_VALS_TO_STRING = {
+    {PP_VALS::L_CURRENT_MIN_SCALE, "L_CURRENT_MIN_SCALE"},
+    {PP_VALS::L_CURRENT_MAX_SCALE, "L_CURRENT_MAX_SCALE"},
+    {PP_VALS::L_MIN_ERPM, "L_MIN_ERPM"},
+    {PP_VALS::L_MAX_ERPM, "L_MAX_ERPM"},
+    {PP_VALS::L_MIN_DUTY, "L_MIN_DUTY"},
+    {PP_VALS::L_MAX_DUTY, "L_MAX_DUTY"},
+    {PP_VALS::L_WATT_MIN, "L_WATT_MIN"},
+    {PP_VALS::L_WATT_MAX, "L_WATT_MAX"},
+    {PP_VALS::L_IN_CURRENT_MIN, "L_IN_CURRENT_MIN"},
+    {PP_VALS::L_IN_CURRENT_MAX, "L_IN_CURRENT_MAX"},
+    {PP_VALS::C_PHASE_CURRENT_MAX, "C_PHASE_CURRENT_MAX"},
+    {PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION, "C_FORCE_SINGLE_MOTOR_ACCELERATION"},
+  };
+
+  STRING_TO_PP_VALS = {
+      {"L_CURRENT_MIN_SCALE", PP_VALS::L_CURRENT_MIN_SCALE},
+      {"L_CURRENT_MAX_SCALE", PP_VALS::L_CURRENT_MAX_SCALE},
+      {"L_MIN_ERPM", PP_VALS::L_MIN_ERPM},
+      {"L_MAX_ERPM", PP_VALS::L_MAX_ERPM},
+      {"L_MIN_DUTY", PP_VALS::L_MIN_DUTY},
+      {"L_MAX_DUTY", PP_VALS::L_MAX_DUTY},
+      {"L_WATT_MIN", PP_VALS::L_WATT_MIN},
+      {"L_WATT_MAX", PP_VALS::L_WATT_MAX},
+      {"L_IN_CURRENT_MIN", PP_VALS::L_IN_CURRENT_MIN},
+      {"L_IN_CURRENT_MAX", PP_VALS::L_IN_CURRENT_MAX},
+      {"C_PHASE_CURRENT_MAX", PP_VALS::C_PHASE_CURRENT_MAX},
+      {"C_FORCE_SINGLE_MOTOR_ACCELERATION", PP_VALS::C_FORCE_SINGLE_MOTOR_ACCELERATION},
+  };
+
+  PROFILE_TO_STRING = {
+      {PROFILE::LEGAL, "Legal"},
+      {PROFILE::ECO, "Eco"},
+      {PROFILE::BALANCED, "Balanced"},
+      {PROFILE::PERFORMANCE1, "Performance1"},
+      {PROFILE::PERFORMANCE2, "Performance2"},
+      {PROFILE::CUSTOM, "Custom"},
+  };
+
+  STRING_TO_PROFILE = {
+      {"Legal", PROFILE::LEGAL},
+      {"Eco", PROFILE::ECO},
+      {"Balanced", PROFILE::BALANCED},
+      {"Performance1", PROFILE::PERFORMANCE1},
+      {"Performance2", PROFILE::PERFORMANCE2},
+      {"Custom", PROFILE::CUSTOM},
+  };
+
   if (!spiFlashLittleFsInit()) {
     chSysHalt("SPI flash/LittleFS init failed");
   }
-
-  spiFlashReadFile("settings.bin", settings);
+  settingsLoad(jsonSettings);
 
   wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
   motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;

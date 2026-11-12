@@ -384,6 +384,50 @@ bool spiFlashDetail::writeFileExact(
            closeResult == LFS_ERR_OK;
 }
 
+bool spiFlashWriteBytes(
+    const char *path,
+    const void *data,
+    size_t size
+) {
+    return spiFlashDetail::writeFileExact(path, data, size);
+}
+
+bool spiFlashReadBytes(
+    const char *path,
+    void *data,
+    size_t capacity,
+    size_t &bytesRead
+) {
+    bytesRead = 0;
+
+    if (path == nullptr || data == nullptr) {
+        return false;
+    }
+
+    lfs_file_t file{};
+    if (lfs_file_open(&littleFs, &file, path, LFS_O_RDONLY) < 0) {
+        return false;
+    }
+
+    const lfs_soff_t fileSize = lfs_file_size(&littleFs, &file);
+    if (fileSize < 0 || static_cast<size_t>(fileSize) > capacity) {
+        lfs_file_close(&littleFs, &file);
+        return false;
+    }
+
+    const size_t size = static_cast<size_t>(fileSize);
+    const lfs_ssize_t count = lfs_file_read(&littleFs, &file, data, size);
+    const int closeResult = lfs_file_close(&littleFs, &file);
+
+    if (count != static_cast<lfs_ssize_t>(size) ||
+        closeResult != LFS_ERR_OK) {
+        return false;
+    }
+
+    bytesRead = size;
+    return true;
+}
+
 bool spiFlashDetail::readFileExact(
     const char *path,
     void *data,
