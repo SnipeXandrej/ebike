@@ -115,6 +115,7 @@ include $(CHIBIOS)/os/test/test.mk
 include $(CHIBIOS)/test/rt/rt_test.mk
 include $(CHIBIOS)/test/oslib/oslib_test.mk
 include $(CHIBIOS)/os/hal/lib/streams/streams.mk
+include $(CHIBIOS)/os/various/littlefs_bindings/littlefs.mk
 #include $(CHIBIOS)/os/various/shell/shell.mk
 
 # Define linker script file here.
@@ -134,7 +135,8 @@ CPPSRC = $(ALLCPPSRC) \
          main.cpp \
          adc3.cpp abstractions.cpp ../commonUtils.cpp \
          VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp \
-         messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp map.cpp rampLimiter.cpp
+         messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp map.cpp rampLimiter.cpp \
+         spiFlashLittleFs.cpp
 
 # List ASM source files here.
 ASMSRC = $(ALLASMSRC)

@@ -33,6 +33,7 @@ extern "C" {
 #include "battery.hpp"
 #include "comm.h"
 #include "rollingRangeEstimation.hpp"
+#include "spiFlashLittleFs.hpp"
 #include "magic_enum.hpp"
 
 #define EBIKE_NAME "EBIKE"
@@ -66,13 +67,14 @@ VescUart::dataPackage VESCSecondary;
 
 struct Trip {
     double distance; // in km
-    double wattHoursUsed;
     double wattHoursConsumed;
     double wattHoursRegenerated;
-
-    double range; // calculated at runtime
-    double WhPerKm; // calculated at runtime
     double rideTime; // in seconds
+
+    // calculated at runtime
+    double wattHoursUsed;
+    double range;
+    double WhPerKm;
 };
 Trip trip_A, trip_B;
 
@@ -363,11 +365,13 @@ std::string ProcessRead(const std::string& message) {
         break;
 
       case COMMAND_ID::SAVE_PREFERENCES:
-        // TOMLSave(table, SETTINGS_FILEPATH);
+      {
+        const bool saved = spiFlashWriteFile("settings.bin", settings);
 
         msg::start(toSend, COMMAND_ID::BACKEND_LOG);
-        msg::addString(toSend, "Preferences were manually saved (not actually)");
+        msg::addString(toSend, "Preferences save {}", saved ? "succeeded" : "failed");
         msg::end(toSend);
+      }
         break;
 
       case COMMAND_ID::RESET_TRIP_A:
@@ -860,6 +864,12 @@ int main(void) {
   halInit();
   chSysInit();
   portab_setup();
+
+  if (!spiFlashLittleFsInit()) {
+    chSysHalt("SPI flash/LittleFS init failed");
+  }
+
+  spiFlashReadFile("settings.bin", settings);
 
   wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
   motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
