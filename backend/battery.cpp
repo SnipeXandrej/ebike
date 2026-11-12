@@ -131,6 +131,7 @@ static double accAmpHours_abs = 0.0;
 static double accPercentageChange = 0.0;
 static bool state_isVoltageBased = false;
 static double ampHoursLifetime_savedVoltagePercentage = 0.0;
+static double timeVoltageSettledMsElapsed = 0.0;
 
 void Battery::processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt) {
     voltage = voltage_;
@@ -155,7 +156,6 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000, dt);
 
     // combined percentage
-    static double timeVoltageSettledMsElapsed = 0.0;
     timeVoltageSettledMsElapsed += (dt * 1000.0);
 
     if (current <= idleMaxDischargingCurrent && current >= -idleMaxChargingCurrent) {
@@ -242,7 +242,6 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     switch(AMPHOUR_ESTIMATE_T.state) {
         case AMPHOUR_ESTIMATE::START: {
             strcpy(estimateStatusString, "Waiting for voltage to settle"); // || current > -idleMaxDischargingCurrent
-            // estimateStatusString += std::format("\n wait {:.2f} second(s)", (voltageSettlingTimeMs - timeVoltageSettledMsElapsed) / 1000.0);
             if (AMPHOUR_ESTIMATE_T.isVoltageBased) {
                 AMPHOUR_ESTIMATE_T.startVoltagePercentage = percentageVoltageBased;
                 strcpy(estimateStatusString, "(IN START) 1. Ready to start collecting data");
@@ -323,6 +322,7 @@ char* Battery::getStatus() {
         "   Acc AmpHours (abs) During Usage: %.3f\n"
         "   Acc Percentage During Usage:     %.3f\n"
         "   Collecting data status:          %s\n"
+        "   Collecting data wait seconds:    %.2f\n"
         "   Accumulated Amphours during usage:  %.3f Ah\n"
         "   Accumulated Watthours during usage: %.3f Wh\n"
         "   Estimated Capacity from test:       %.3f %%\n"
@@ -336,6 +336,7 @@ char* Battery::getStatus() {
         , accAmpHours_abs
         , accPercentageChange
         , estimateStatusString
+        , (voltageSettlingTimeMs - timeVoltageSettledMsElapsed) / 1000.0
         , AMPHOUR_ESTIMATE_T.accAmpHours
         , AMPHOUR_ESTIMATE_T.accWattHours
         , AMPHOUR_ESTIMATE_T.estimatedCapacityAmpHours

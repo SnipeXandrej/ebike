@@ -43,8 +43,8 @@ private:
     double cycleCount = 0.0;
 
     char estimateStatusString[128];
-    char _statusString[512];
-    char statusString[512];
+    char _statusString[1024];
+    char statusString[1024];
 
 public:
     void setup();

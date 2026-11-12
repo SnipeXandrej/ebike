@@ -46,6 +46,11 @@ extern "C" {
 #define ADC_PA6 4
 #define ADC_PA7 5
 
+time_measurement_t vesc_tm;
+
+static volatile uint32_t _loopRateCount_VESC = 0;
+static volatile uint32_t loopRate_VESC = 0;
+
 static volatile uint32_t _timerCallbackCount = 0;
 static volatile uint32_t timerCallbacksLastSecond = 0;
 mutex_t mtx_toSendExtra;
@@ -80,7 +85,7 @@ struct Settings {
     bool batteryPercentageVoltageBased = 0;
     bool automaticRegenerativeBraking = 0;
     bool minimizeDrivetrainBacklash = 0;
-    bool enableDualVESC = 0;
+    bool enableDualVESC = 1; //TODO: REVERT TO 0
     int dualMotorDriveStyle = 0;
     // only for Dual VESC
     int primaryVESCID = 0;
@@ -128,15 +133,14 @@ void tripReset(Trip *trip) {
     trip->rideTime = 0;
 }
 
-float acceleration = 0;
-float motor_rpm = 0;
-float speed_kmh = 0;
-float throttleLevel = 0;
-float brakeLevel = 0;
-bool  powerOn = false;
-bool  done = false;
-float maxBrakingCurrent = 200.0;
-int throttleLoopRate = 100.0;
+static float acceleration = 0;
+static float motor_rpm = 0;
+static float speed_kmh = 0;
+static float throttleLevel = 0;
+static float brakeLevel = 0;
+static bool  powerOn = false;
+static float maxBrakingCurrent = 200.0;
+static int throttleLoopRate = 100.0;
 std::string toSendExtra;
 std::string notes;
 std::string debuginfo;
@@ -336,8 +340,8 @@ std::string ProcessRead(const std::string& message) {
         msg::addValue(toSend, VESCCombined.tempMosfet, 1);
         msg::addValue(toSend, uptimeInSeconds, 0);
         msg::addValue(toSend, -1.0 / 1000.0, 1); // whileLoopUsElapsed.count()
-        msg::addValue(toSend, 1000.0 / -1.0, 1); // loopRateLimiter.threadThrottle.getLoopRate()
-        msg::addValue(toSend, 1000.0 / -1.0, 1); // loopRateLimiter.threadVescProcessing.getLoopRate()
+        msg::addValue(toSend, 1000.0 / loopRate_VESC, 1); // threadThrottle.getLoopRate()
+        msg::addValue(toSend, 1000.0 / loopRate_VESC, 1); // threadVescProcessing.getLoopRate()
         msg::addValue(toSend, acceleration, 1);
         msg::addValue(toSend, powerOn, 0);
         msg::addValue(toSend, settings.automaticRegenerativeBraking, 0);
@@ -682,20 +686,20 @@ extern "C" void adccallback(ADCDriver *adcp) {
   }
   // CLANKED TO HERE
 
-  // // throttleLevel
-  // static float throttleMinVoltage = 0.95;
-  // static float throttleMaxVoltage = 2.5;
+  // throttleLevel
+  static float throttleMinVoltage = 0.95;
+  static float throttleMaxVoltage = 2.5;
 
-  // // brakeLevel
-  // static float brakeMinVoltage = 0.845;
-  // static float brakeMaxVoltage = 2.48;
+  // brakeLevel
+  static float brakeMinVoltage = 0.845;
+  static float brakeMaxVoltage = 2.48;
 
   // battery.voltage
   static float batteryVoltageR1 = 220000 + 2150 /* +2150 is the correction value */;
   static float batteryVoltageR2 = 4700;
 
-  // throttleLevel = map_f(analogReadings.analog0, throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
-  // brakeLevel    = map_f(analogReadings.analog1, brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
+  throttleLevel = map_f((voltages_mv[ADC_PA6]/1000.0), throttleMinVoltage, throttleMaxVoltage, 0.0, 100.0);
+  brakeLevel    = map_f((voltages_mv[ADC_PA2]/1000.0), brakeMinVoltage, brakeMaxVoltage, 0.0, 100.0);
   _voltage      = (voltages_mv[ADC_PA7]/1000.0) / (batteryVoltageR2 / (batteryVoltageR1 + batteryVoltageR2));
 
   // CALIBRATED!!! on pin A0
@@ -734,6 +738,107 @@ extern "C" void adcerrorcallback(ADCDriver *adcp, adcerror_t err) {
   chSysHalt("it happened");
 }
 
+static THD_WORKING_AREA(waVescDataProcessingThread, 3072);
+static THD_FUNCTION(VescDataProcessingThread, arg) {
+  (void)arg;
+  chRegSetThreadName("VescDataProcessingThread");
+
+  double timeNowS = 0.0;
+  float speed_kmh_previous = 0.0f;
+  vesc_tm.last = MS2RTC(SystemCoreClock, 1000);
+
+  while(true) {
+    double dt_local = (double)RTC2US(SystemCoreClock, vesc_tm.last) / 1000000.0;
+    chTMStartMeasurementX(&vesc_tm);
+    _loopRateCount_VESC += 1;
+
+    VESC.setCurrent(throttleLevel, 0.0);
+    VESC.setCurrent(throttleLevel, 7.0);
+
+    if (VESC.getVescValues()) {
+      VESCPrimary = VESC.data;
+      VescUart::dataPackage tempData = VESCPrimary;
+
+      if (settings.enableDualVESC && VESC.getVescValues(settings.secondaryVESCID)) {
+          VESCSecondary = VESC.data;
+
+          tempData.ampHours += VESCSecondary.ampHours;
+          tempData.ampHoursCharged += VESCSecondary.ampHoursCharged;
+          tempData.avgCurrentDAxis += VESCSecondary.avgCurrentDAxis;
+          tempData.avgCurrentQAxis += VESCSecondary.avgCurrentQAxis;
+          tempData.avgInputCurrent += VESCSecondary.avgInputCurrent;
+          tempData.avgMotorCurrent += VESCSecondary.avgMotorCurrent;
+          if (tempData.dutyCycleNow < VESCSecondary.dutyCycleNow) {
+              tempData.dutyCycleNow = VESCSecondary.dutyCycleNow;
+          }
+          tempData.wattHours += VESCSecondary.wattHours;
+          tempData.wattHoursCharged += VESCSecondary.wattHoursCharged;
+          if (tempData.tempMotor < VESCSecondary.tempMotor) {
+              tempData.tempMotor = VESCSecondary.tempMosfet;
+          }
+          if (tempData.tempMosfet < VESCSecondary.tempMosfet) {
+              tempData.tempMosfet = VESCSecondary.tempMosfet;
+          }
+      }
+      VESCCombined = tempData;
+
+      static RampLimiter _tempPrimaryAvgMotorCurrent;
+      if (VESCPrimary.avgMotorCurrent < primaryCurrent) {
+          float _temp = primaryCurrent - VESCPrimary.avgMotorCurrent;
+          if (_temp < 0.0)
+              _temp = 0.0;
+
+          primaryVESCSaturatedLeftoverCurrent = _tempPrimaryAvgMotorCurrent.getValue(_temp, 100, 200, 100, dt_local);
+
+      } else {
+          primaryVESCSaturatedLeftoverCurrent = _tempPrimaryAvgMotorCurrent.getValue(0.0, 100, 1000, 80, dt_local);
+      }
+
+      static double tachometer_abs_previous;
+      static double tachometer_abs_diff;
+      static double distanceDiff;
+
+      // if the previous measurement is bigger than the current, that means
+      // that the VESC was probably powered off and on, so the stats got reset...
+      // So this makes sure that we do not make a tachometer_abs_diff thats suddenly a REALLY
+      // large number and therefore screw up our distance measurement
+      if (tachometer_abs_previous > VESCCombined.tachometerAbs) {
+          tachometer_abs_previous = VESCCombined.tachometerAbs;
+      }
+
+      // prevent the diff to be something extremely big
+      if ((VESCCombined.tachometerAbs - tachometer_abs_previous) >= 1000) {
+          tachometer_abs_previous = VESCCombined.tachometerAbs;
+      }
+
+      if (tachometer_abs_previous < VESCCombined.tachometerAbs) {
+          tachometer_abs_diff = VESCCombined.tachometerAbs - tachometer_abs_previous;
+          tachometer_abs_previous = VESCCombined.tachometerAbs;
+
+          distanceDiff = ((tachometer_abs_diff / (double)motor.poles) / (double)wheel.gear_ratio) * (double)wheel.diameter * 3.14159265 / 100000.0; // divide by 100000 for trip distance to be in kilometers
+
+          trip_A.distance += distanceDiff;
+          trip_B.distance += distanceDiff;
+          odometer.distance += distanceDiff;
+          rollingRangeEstimation.addDeltaDistance(distanceDiff);
+
+      }
+
+      motor_rpm = (VESCCombined.rpm / (float)motor.magnetPairs);
+      speed_kmh = (motor_rpm / wheel.gear_ratio) * wheel.diameter * 3.14159265f * 60.0f/*minutes*/ / 100000.0f/*1 km in cm*/;
+
+      timeNowS += dt_local;
+      if (timeNowS >= 0.4 /*s*/) {
+
+          acceleration = (speed_kmh - speed_kmh_previous) * (1.0 / timeNowS);
+          speed_kmh_previous = speed_kmh;
+          timeNowS = 0.0;
+      }
+    }
+    chTMStopMeasurementX(&vesc_tm);
+  }
+}
+
 // the main logic will run here
 extern "C" void timer_2khz_callback(GPTDriver *gptp) {
   (void)gptp;
@@ -756,8 +861,12 @@ int main(void) {
   chSysInit();
   portab_setup();
 
+  wheel.rpmPerKmh = (1.0 /*km/h*/ * 1000.0 /*meters*/) / ((3.14 * wheel.diameter) * 60 /*minutes*/) * 100.0 /*?*/;
+  motor.rpmPerKmh = wheel.rpmPerKmh * wheel.gear_ratio;
+
   battery.setup();
   chMtxObjectInit(&mtx_toSendExtra);
+  chTMObjectInit(&vesc_tm);
 
   // GPIO setup
   pinMode(PIN_BUTTON_K1, INPUT_PULLDOWN);
@@ -765,10 +874,15 @@ int main(void) {
   // USART3 (VESC)
   // PB10 (TX)
   // PB11 (RX)
+  // The board defaults USART3 to the ST-Link VCP on PD8/PD9.
+  // Disconnect those AF pads before remapping USART3 to PB10/PB11,
+  // otherwise it interferes with receiving messages.
+  palSetLineMode(PAL_LINE(GPIOD, 8U), PAL_MODE_INPUT_ANALOG);
+  palSetLineMode(PAL_LINE(GPIOD, 9U), PAL_MODE_INPUT_ANALOG);
   palSetLineMode(PAL_LINE(GPIOB, 10U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
   palSetLineMode(PAL_LINE(GPIOB, 11U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
   uartVesc.setUartPort(&SD3);
-  uartVesc.begin(115200);
+  uartVesc.begin(230400);
   VESC.setSerialPort(&uartVesc);
 
   // starts the cdc serial driver
@@ -785,6 +899,7 @@ int main(void) {
   chThdCreateStatic(waUptimeCountingThread, sizeof(waUptimeCountingThread), NORMALPRIO, UptimeCountingThread, NULL);
   chThdCreateStatic(waLEDIntegratedThread, sizeof(waLEDIntegratedThread), NORMALPRIO, LEDIntegratedThread, NULL);
   chThdCreateStatic(waUSBSerialThread, sizeof(waUSBSerialThread), NORMALPRIO, USBSerialThread, NULL);
+  chThdCreateStatic(waVescDataProcessingThread, sizeof(waVescDataProcessingThread), NORMALPRIO, VescDataProcessingThread, NULL);
 
   // ADC12
   adcStart(&PORTAB_ADC1, &portab_adccfg1);
@@ -793,6 +908,8 @@ int main(void) {
   adcStartConversion(&PORTAB_ADC1, &portab_adcgrpcfg1, samples, ADC_GRP2_BUF_DEPTH);
   gptStartContinuous(&GPTD6, 500U);
 
+  uint32_t previous_VESC = _loopRateCount_VESC;
+
   uint32_t previous = _timerCallbackCount;
   while (true) {
     chThdSleepMilliseconds(1000);
@@ -800,13 +917,8 @@ int main(void) {
     timerCallbacksLastSecond = current - previous;
     previous = current;
 
-    // loop so something changes in the gui
-    // if (battery.voltage >= 49) {
-    //     battery.voltage = 0;
-    // } else if (battery.voltage < 49) {
-    //     battery.voltage++;
-    // }
-
-    // chThdSleepMilliseconds(10);
+    const uint32_t current_VESC = _loopRateCount_VESC;
+    loopRate_VESC = current_VESC - previous_VESC;
+    previous_VESC = current_VESC;
   }
 }
