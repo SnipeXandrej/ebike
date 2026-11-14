@@ -135,7 +135,7 @@ CPPSRC = $(ALLCPPSRC) \
          main.cpp \
          adc3.cpp abstractions.cpp ../commonUtils.cpp \
          VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp \
-         messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp map.cpp rampLimiter.cpp \
+         messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp map.cpp rampLimiter.cpp valueTransition.cpp timer.cpp \
          spiFlashLittleFs.cpp
 
 # List ASM source files here.

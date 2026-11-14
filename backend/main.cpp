@@ -37,6 +37,8 @@ extern "C" {
 #include "magic_enum.hpp"
 #include <ArduinoJson.h>
 #include "profiles.hpp"
+#include "valueTransition.hpp"
+#include "timer.hpp"
 
 #define EBIKE_NAME "EBIKE"
 #define EBIKE_VERSION "1.0.0"
@@ -59,8 +61,11 @@ static volatile uint32_t timerCallbacksLastSecond = 0;
 mutex_t mtx_toSendExtra;
 
 Battery battery;
-// ThrottleMap throttleMap;
-// ThrottleMap brakeMap;
+ThrottleMap throttleMap;
+ThrottleMap brakeMap;
+std::vector<Point> throttleCurve;
+std::vector<Point> throttleCurveDualVESC;
+std::vector<Point> brakeCurve;
 PowerProfiles PP;
 RollingRangeEstimation rollingRangeEstimation;
 VescUart::dataPackage VESCCombined;
@@ -70,6 +75,34 @@ VescUart::dataPackage VESCSecondary;
 #define JSON_SETTINGS_SIZE 10240
 JsonDocument jsonSettings;
 static char jsonSettingsBuffer[JSON_SETTINGS_SIZE];
+
+enum DUAL_MOTOR_DRIVE_STYLE {
+    SIMPLE = 0,
+    ADVANCED_1 = 1,
+    ADVANCED_2 = 2,
+};
+
+enum STATE {
+    POWER_OFF_OR_CHARGING = 0,
+    THROTTLE = 1,
+    BRAKING = 2,
+    THROTTLE_TRANSITION_TO_BRAKING = 3,
+    BRAKING_TRANSITION_TO_THROTTLE = 4,
+    POWER_OFF_OR_CHARGING_BRAKING = 5,
+};
+
+struct {
+    int is_accelerating = 1;
+    float requested_current = 0;
+    float maximum_current = 1;
+} throttle_info;
+
+struct {
+    ValueTransition throttleShockCurrent;
+    ValueTransition throttleReal;
+    ValueTransition throttleToBrake;
+    ValueTransition toRealBrake;
+} valueTransition;
 
 struct Trip {
     double distance; // in km
@@ -93,7 +126,7 @@ struct Settings {
     bool batteryPercentageVoltageBased = 0;
     bool automaticRegenerativeBraking = 0;
     bool minimizeDrivetrainBacklash = 0;
-    bool enableDualVESC = 1; //TODO: REVERT TO 0
+    bool enableDualVESC = 0;
     int dualMotorDriveStyle = 0;
     // only for Dual VESC
     int primaryVESCID = 0;
@@ -146,9 +179,8 @@ static float motor_rpm = 0;
 static float speed_kmh = 0;
 static float throttleLevel = 0;
 static float brakeLevel = 0;
-static bool  powerOn = false;
+static bool  powerOn = true; // TODO: revert to false
 static float maxBrakingCurrent = 200.0;
-static int throttleLoopRate = 100.0;
 std::string toSendExtra;
 std::string notes;
 std::string debuginfo;
@@ -159,24 +191,7 @@ float secondaryCurrent;
 MyUart uartVesc;
 VescUart VESC;
 
-bool settingsLoad(JsonDocument &doc) {
-  size_t length = 0;
-
-  if (!spiFlashReadBytes(
-          "settings.json",
-          jsonSettingsBuffer,
-          sizeof(jsonSettingsBuffer) - 1,
-          length)) {
-      return false;
-  }
-
-  jsonSettingsBuffer[length] = '\0';
-
-  const DeserializationError error = deserializeJson(doc, jsonSettingsBuffer, length);
-  if (error) {
-    return false;
-  }
-
+bool settingsApply(const JsonDocument &doc) {
   JsonObjectConst tbl = doc.as<JsonObjectConst>();
   if (tbl.isNull()) {
     return false;
@@ -204,6 +219,7 @@ bool settingsLoad(JsonDocument &doc) {
   settings.minimizeDrivetrainBacklash     = tbl["settings"]["minimizeDrivetrainBacklash"] | settings.minimizeDrivetrainBacklash;
   settings.enableDualVESC                 = tbl["settings"]["enableDualVESC"] | settings.enableDualVESC;
   settings.dualMotorDriveStyle            = tbl["settings"]["dualMotorDriveStyle"] | settings.dualMotorDriveStyle;
+  settings.primaryVESCID                  = tbl["settings"]["primaryVESCID"] | settings.primaryVESCID;
   settings.secondaryVESCID                = tbl["settings"]["secondaryVESCID"] | settings.secondaryVESCID;
   settings.setSecondaryVescAsFirstAccelerationMotor   = tbl["settings"]["setSecondaryVescAsFirstAccelerationMotor"] | settings.setSecondaryVescAsFirstAccelerationMotor;
   settings.setSecondaryVescAsFirstBrakingMotor        = tbl["settings"]["setSecondaryVescAsFirstBrakingMotor"] | settings.setSecondaryVescAsFirstBrakingMotor;
@@ -224,7 +240,28 @@ bool settingsLoad(JsonDocument &doc) {
   return true;
 }
 
-bool settingsSave(JsonDocument &doc) {
+bool settingsLoad(JsonDocument &doc) {
+  size_t length = 0;
+
+  if (!spiFlashReadBytes(
+          "settings.json",
+          jsonSettingsBuffer,
+          sizeof(jsonSettingsBuffer) - 1,
+          length)) {
+      return false;
+  }
+
+  jsonSettingsBuffer[length] = '\0';
+
+  const DeserializationError error = deserializeJson(doc, jsonSettingsBuffer, length);
+  if (error) {
+    return false;
+  }
+
+  return settingsApply(doc);
+}
+
+void settingsBuild(JsonDocument &doc) {
   JsonObject tbl = doc.to<JsonObject>();
   tbl["odometer"]["distance"] = odometer.distance;
   tbl["odometer"]["rideTime"] = odometer.rideTime;
@@ -263,6 +300,10 @@ bool settingsSave(JsonDocument &doc) {
              [PP_VALS_TO_STRING.at(static_cast<PP_VALS>(var)).c_str()] = ret;
       }
   }
+}
+
+bool settingsSave(JsonDocument &doc) {
+  settingsBuild(doc);
 
   const size_t length = serializeJsonPretty(doc, jsonSettingsBuffer, sizeof(jsonSettingsBuffer));
 
@@ -314,7 +355,7 @@ void run_command_GET_POWER_PROFILE_ALL(std::string& toSend) {
     // int VESC1Success = false;
     // int VESC2Success = false;
 
-    if (VESC.getMcconfTempValues()) {
+    if (VESC.getMcconfTempValues(settings.primaryVESCID)) {
         _mcconf_vesc1 = VESC.data_mcconf;
 
         // VESC1Success = true;
@@ -703,18 +744,14 @@ std::string ProcessRead(const std::string& message) {
 
       case COMMAND_ID::GET_DEBUGINFO:
         {
-          std::string throttleFunctionDebugInfo;
-            // auto _state = magic_enum::enum_cast<STATE>(throttleState);
-            // std::string _enum;
-            // if (_state) {
-            //     _enum = magic_enum::enum_name(*_state);
-            // } else {
-            //     _enum = "-";
-            // }
-            // throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
-
-            // char _enum[16] = "Unknown";
-            // char throttleFunctionDebugInfo[64] = snprintf(throttleFunctionDebugInfo, sizeof(throttleFunctionDebugInfo), "Throttle state: %s", _enum);
+        auto _state = magic_enum::enum_cast<STATE>(throttleState);
+        std::string _enum;
+        if (_state) {
+            _enum = magic_enum::enum_name(*_state);
+        } else {
+            _enum = "-";
+        }
+        std::string throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
 
         uint32_t callbacks = timerCallbacksLastSecond;
         debuginfo = std::format("Battery:\n"
@@ -727,6 +764,7 @@ std::string ProcessRead(const std::string& message) {
                                 "VESC Secondary Current\n"
                                 "       Requested: {} A\n"
                                 "       Actual:    {} A\n"
+                                "throttle_info.requested_current: {}\n"
                                 "\n"
                                 "primaryVESCSaturatedLeftoverCurrent: {} A\n"
                                 "2kHz callback rate: {} \n"
@@ -737,6 +775,7 @@ std::string ProcessRead(const std::string& message) {
                                 , VESCPrimary.avgCurrentQAxis
                                 , secondaryCurrent //VESCSecondary.avgCurrentQAxis
                                 , VESCSecondary.avgCurrentQAxis
+                                , throttle_info.requested_current
                                 , primaryVESCSaturatedLeftoverCurrent
                                 , callbacks
                                 );
@@ -795,6 +834,47 @@ std::string ProcessRead(const std::string& message) {
         msg::end(toSend);
 
         break;
+
+    case COMMAND_ID::GET_SETTINGS:
+    {
+      settingsBuild(jsonSettings);
+
+      std::string json;
+      const size_t length = serializeJsonPretty(jsonSettings, json);
+
+      // remove whitespace
+      std::erase(json, '\r');
+
+      msg::start(toSend, COMMAND_ID::GET_SETTINGS);
+      if (length != 0) {
+        msg::addString(toSend, "{}", json);
+      } else {
+        msg::addString(toSend, "");
+      }
+      msg::end(toSend);
+
+      msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+      msg::addString(toSend, "GET_SETTINGS!");
+      msg::end(toSend);
+    }
+    break;
+
+    case COMMAND_ID::SET_SETTINGS:
+    {
+      const std::string json = msg::getValueFromSplit_string(packet, index);
+      const DeserializationError error = deserializeJson(jsonSettings, json);
+
+      bool success = false;
+
+      if (!error) {
+          success = settingsApply(jsonSettings) && settingsSave(jsonSettings);
+      }
+
+      msg::start(toSend, COMMAND_ID::BACKEND_LOG);
+      msg::addString(toSend, "SET_SETTINGS! Success??: {}", success ? "yes!!" : "no!!!!");
+      msg::end(toSend);
+    }
+    break;
     }
   }
 
@@ -807,14 +887,14 @@ std::string ProcessRead(const std::string& message) {
 }
 
 // CLANKED ALERT: the insides of this function are clanked
-static THD_WORKING_AREA(waUSBSerialThread, 10240);
+static THD_WORKING_AREA(waUSBSerialThread, 20480);
 static THD_FUNCTION(USBSerialThread, arg) {
   (void)arg;
   chRegSetThreadName("USBSerialThread");
 
   // Keep incomplete input between reads. A frame is removed only after its
   // complete messageEnd marker has been found and ProcessRead has consumed it.
-  char inputBuffer[1024];
+  char inputBuffer[16384];
   std::size_t buffered = 0;
 
   while (true) {
@@ -916,7 +996,7 @@ extern "C" void adccallback(ADCDriver *adcp) {
   static float throttleMaxVoltage = 2.5;
 
   // brakeLevel
-  static float brakeMinVoltage = 0.845;
+  static float brakeMinVoltage = 1.2;// 0.845;
   static float brakeMaxVoltage = 2.48;
 
   // battery.voltage
@@ -963,6 +1043,229 @@ extern "C" void adcerrorcallback(ADCDriver *adcp, adcerror_t err) {
   chSysHalt("it happened");
 }
 
+float clampValue(float input, float clampTo) {
+    float output = 0.0;
+
+    if (input < clampTo) {
+        output = input;
+    }
+
+    if (input >= clampTo) {
+        output = clampTo;
+    }
+
+    return output;
+}
+
+void ThrottleApplyThrottle(float current, float maxCurrent) {
+    throttle_info.is_accelerating = 1;
+    throttle_info.requested_current = current;
+    throttle_info.maximum_current = maxCurrent;
+}
+
+void ThrottleApplyBraking(float current) {
+    throttle_info.is_accelerating = 0;
+    throttle_info.requested_current = current;
+    throttle_info.maximum_current = 100; // TODO
+}
+
+/*
+* Primary Motor = noisy at braking, silent at acceleration
+* Secondary Motor = noisy at acceleration, silent at braking
+*/
+void throttleFunction(double elapsedMs) {   
+    static float throttleCurrentToApply = 0.0;
+    static float brakingCurrentToApply = 0.0;
+    static float minCurrent = 5.5; // used when minimizeDrivetrainBacklash is enabled
+    static float initialShockTransitionTime = 80.0;
+    static float realThrottleTransitionTime = 60.0;
+    static float throttleToBrakeTransitionTime = 40.0;
+    static float realBrakeTransitionTime = 20.0;
+    static float automaticRegenerativeBrakingCurrent = 12.0; // 12A
+    static float minSpeedKmh = 0.1; // used for automaticRegenerativeBraking and throttle transitioning
+
+    static bool _throttleFunctionOneTime = false;
+    if (!_throttleFunctionOneTime) {
+      _throttleFunctionOneTime = true;
+      
+      throttleState = STATE::POWER_OFF_OR_CHARGING;
+      brakeMap.setCurve(brakeCurve);
+    }
+
+    valueTransition.throttleReal.timer.addElapsedTime(elapsedMs);
+    valueTransition.throttleShockCurrent.timer.addElapsedTime(elapsedMs);
+    valueTransition.throttleToBrake.timer.addElapsedTime(elapsedMs);
+    valueTransition.toRealBrake.timer.addElapsedTime(elapsedMs);
+
+    if (settings.enableDualVESC) {
+        throttleMap.setCurve(throttleCurveDualVESC);
+    } else {
+        throttleMap.setCurve(throttleCurve);
+    }
+
+    static RampLimiter throttleRamp;
+    float throttleClampCurrent = PP.get(PP.getProfile(), PP_VALS::C_PHASE_CURRENT_MAX);
+    float throttleCurrent = throttleRamp.getValue(
+                                clampValue(
+                                        throttleMap.map(throttleLevel),
+                                        throttleClampCurrent
+                                ),
+                                100,
+                                15,
+                                15,
+                                elapsedMs
+                            );
+
+    static RampLimiter brakeRamp;
+    float brakeCurrent = brakeRamp.getValue(
+                            clampValue(
+                                    brakeMap.map(brakeLevel),
+                                    maxBrakingCurrent
+                            ),
+                            100,
+                            40,
+                            15,
+                            elapsedMs
+                          );
+
+    if (!powerOn || battery.charging) {
+        if (brakeLevel > 0.0) {
+            throttleState = STATE::POWER_OFF_OR_CHARGING_BRAKING;
+        } else {
+            throttleState = STATE::POWER_OFF_OR_CHARGING;
+        }
+    }
+
+    switch (throttleState) {
+        case STATE::POWER_OFF_OR_CHARGING:
+            ThrottleApplyThrottle(0.0, throttleClampCurrent);
+            if (powerOn && !battery.charging) {
+                throttleState = STATE::THROTTLE;
+            }
+            break;
+
+        case STATE::THROTTLE:
+            if (!settings.minimizeDrivetrainBacklash) {
+                if (settings.automaticRegenerativeBraking && throttleLevel == 0.0 && speed_kmh > minSpeedKmh) {
+                    throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                    valueTransition.throttleToBrake.start();
+                    break;
+                }
+
+                if (brakeLevel == 0.0) {
+                    ThrottleApplyThrottle(throttleCurrent, throttleClampCurrent);
+                    break;
+                } else {
+                    // ThrottleApplyBraking(brakeCurrent);
+                }
+            }
+
+            if (brakeLevel > 0.0) {
+                throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                valueTransition.throttleToBrake.start();
+                break;
+            }
+
+            static bool movingBecauseThrottle = false;
+
+            if (throttleLevel == 0.0) {
+                if (speed_kmh > minSpeedKmh) {
+                    if (movingBecauseThrottle)
+                        throttleCurrentToApply = minCurrent;
+                    else
+                        throttleCurrentToApply = 0;
+
+                    if (settings.automaticRegenerativeBraking) {
+                        throttleState = STATE::THROTTLE_TRANSITION_TO_BRAKING;
+                        valueTransition.throttleToBrake.start();
+                    }
+                } else {
+                    movingBecauseThrottle = false;
+                    valueTransition.throttleShockCurrent.start();
+                    throttleCurrentToApply = 0.0;
+                }
+
+                ThrottleApplyThrottle(throttleCurrentToApply, throttleClampCurrent);
+                break;
+            }
+
+            if (throttleLevel > 0.0) {
+                movingBecauseThrottle = true;
+                if (valueTransition.throttleShockCurrent.timer.getTime_ms_now() < initialShockTransitionTime) {
+                    throttleCurrentToApply = valueTransition.throttleShockCurrent.getValueDifference(0.0, minCurrent, initialShockTransitionTime);
+                    valueTransition.throttleReal.start();
+                } else {
+                    if (throttleCurrent < minCurrent)
+                        throttleCurrentToApply = minCurrent;
+                    else {
+                        if (valueTransition.throttleReal.timer.getTime_ms_now() < realThrottleTransitionTime) {
+                            throttleCurrentToApply = valueTransition.throttleReal.getValueDifference(minCurrent, throttleCurrent, realThrottleTransitionTime);
+                        } else {
+                            throttleCurrentToApply = throttleCurrent;
+                        }
+                    }
+                }
+            }
+
+            ThrottleApplyThrottle(throttleCurrentToApply, throttleClampCurrent);
+            break;
+
+        case STATE::BRAKING:
+            static float _brakeCurrent;
+            if (brakeLevel == 0.0 && (throttleLevel != 0.0 || speed_kmh <= minSpeedKmh || (settings.minimizeDrivetrainBacklash && !settings.automaticRegenerativeBraking))) {
+                throttleState = STATE::BRAKING_TRANSITION_TO_THROTTLE;
+                break;
+            }
+
+            if (settings.automaticRegenerativeBraking) {
+                _brakeCurrent = automaticRegenerativeBrakingCurrent;
+
+                if (brakeCurrent > automaticRegenerativeBrakingCurrent) {
+                    _brakeCurrent += brakeCurrent - automaticRegenerativeBrakingCurrent;
+                }
+            } else {
+                _brakeCurrent = brakeCurrent;
+            }
+
+            if (valueTransition.toRealBrake.timer.getTime_ms_now() < realBrakeTransitionTime) {
+                brakingCurrentToApply = valueTransition.toRealBrake.getValueDifference(0.0, _brakeCurrent, realBrakeTransitionTime);
+
+                ThrottleApplyBraking(brakingCurrentToApply); //brakingCurrentToApply
+            } else {
+                ThrottleApplyBraking(_brakeCurrent); //_brakeCurrent
+            }
+
+            break;
+
+        case STATE::THROTTLE_TRANSITION_TO_BRAKING:
+            static float _currentToApply;
+
+            if (valueTransition.throttleToBrake.timer.getTime_ms_now() < throttleToBrakeTransitionTime) {
+                _currentToApply = valueTransition.throttleToBrake.getValueDifference(throttleCurrentToApply, 0.0, throttleToBrakeTransitionTime);
+
+                ThrottleApplyThrottle(_currentToApply, throttleClampCurrent);
+            } else {
+                throttleState = STATE::BRAKING;
+                valueTransition.toRealBrake.start();
+            }
+
+            break;
+
+        case STATE::BRAKING_TRANSITION_TO_THROTTLE:
+            valueTransition.throttleShockCurrent.start();
+
+            throttleState = STATE::THROTTLE;
+            break;
+
+        case STATE::POWER_OFF_OR_CHARGING_BRAKING:
+            ThrottleApplyBraking(brakeCurrent);
+            if (powerOn && !battery.charging) {
+                throttleState = STATE::THROTTLE;
+            }
+            break;
+    }
+}
+
 static THD_WORKING_AREA(waVescDataProcessingThread, 3072);
 static THD_FUNCTION(VescDataProcessingThread, arg) {
   (void)arg;
@@ -977,10 +1280,110 @@ static THD_FUNCTION(VescDataProcessingThread, arg) {
     chTMStartMeasurementX(&vesc_tm);
     _loopRateCount_VESC += 1;
 
-    VESC.setCurrent(throttleLevel, 0.0);
-    VESC.setCurrent(throttleLevel, 7.0);
+    throttleFunction(dt_local * 1000.0);
 
-    if (VESC.getVescValues()) {
+    const int _primaryAcceleratorVESCID = settings.setSecondaryVescAsFirstAccelerationMotor ? settings.secondaryVESCID : settings.primaryVESCID;
+    const int _secondaryAcceleratorVESCID = settings.setSecondaryVescAsFirstAccelerationMotor ? settings.primaryVESCID : settings.secondaryVESCID;
+
+    const int _primaryBrakerVESCID = settings.setSecondaryVescAsFirstBrakingMotor ? settings.secondaryVESCID : settings.primaryVESCID;
+    const int _secondaryBrakerVESCID = settings.setSecondaryVescAsFirstBrakingMotor ? settings.primaryVESCID : settings.secondaryVESCID;
+
+    static bool _wasBraking = false;
+    static bool _wasAccelerating = true;
+
+    switch (throttle_info.is_accelerating) {
+        case true:
+            // make sure the motors are not braking
+            // if force_single_motor_acceleration is enabled and we are breaking, and now we apply throttle on the other motor that
+            // wasnt braking, the braking motor will still be braking for a few moments, because when we stop sending any signal to
+            // the previously braking motor it will stop braking only after a certain timeout
+            // This sounds so dumb and wrongly worded that I am not even gonna bother....
+            if (_wasBraking) {
+                _wasBraking = false;
+
+                VESC.setBrakeCurrent(0.0, _primaryBrakerVESCID);
+                VESC.setBrakeCurrent(0.0, _secondaryBrakerVESCID);
+            }
+            _wasAccelerating = true;
+
+            if (settings.enableDualVESC && !VESC.data_mcconf.c_force_single_motor_acceleration) {
+                if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::SIMPLE) {
+                    primaryCurrent = throttle_info.requested_current / 2.0;
+                    secondaryCurrent = throttle_info.requested_current / 2.0;
+                } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_1) {
+                    primaryCurrent = throttle_info.requested_current;
+                    secondaryCurrent = primaryVESCSaturatedLeftoverCurrent;
+                } else if (settings.dualMotorDriveStyle == DUAL_MOTOR_DRIVE_STYLE::ADVANCED_2) {
+                    float singleMotorCurrent = 200;
+                    const float defaultRatio = 1.0;
+                    float ratioMaximumCurrent = 225;
+
+                    if (throttle_info.requested_current > throttle_info.maximum_current)
+                        throttle_info.requested_current = throttle_info.maximum_current;
+
+                    float ratio = defaultRatio - (((0.5 - (1.0 - defaultRatio)) / (ratioMaximumCurrent - singleMotorCurrent)) * (throttle_info.requested_current - singleMotorCurrent));
+                    if (ratio > defaultRatio)
+                        ratio = defaultRatio;
+
+                    if (ratio < 0.5)
+                        ratio = 0.5;
+
+                    primaryCurrent = throttle_info.requested_current * ratio;
+                    secondaryCurrent = (throttle_info.requested_current * (1.0 - ratio)) + primaryVESCSaturatedLeftoverCurrent;
+
+                    // if (throttle_info.maximum_current >= (500.0 / 2.0)) {
+                    //     if (primaryCurrent > throttle_info.maximum_current / 2.0)
+                    //         primaryCurrent = throttle_info.maximum_current / 2.0;
+
+                    //     if (secondaryCurrent > throttle_info.maximum_current / 2.0)
+                    //         secondaryCurrent = throttle_info.maximum_current / 2.0;
+                    // }
+                }
+
+                VESC.setCurrent(primaryCurrent, _primaryAcceleratorVESCID);
+                VESC.setCurrent(secondaryCurrent, _secondaryAcceleratorVESCID);
+            } else {
+                if (VESC.data_mcconf.c_force_single_motor_acceleration) {
+                    VESC.setCurrent(throttle_info.requested_current, _primaryAcceleratorVESCID);
+                } else {
+                    VESC.setCurrent(throttle_info.requested_current);
+                }
+            }
+            break;
+
+        case false:
+            // make sure the motors are not accelerating
+            // if force_single_motor_acceleration is enabled and we are accelerating, and now we apply braking on the other motor that 
+            // wasnt accelerating, the accelerating motor will still be accelerating for a few moments, because when we stop sending any
+            // signal to the previously accelerating motor it will stop accelerating only after a certain timeout
+            // This sounds so dumb and wrongly worded that I am not even gonna bother....
+            if (_wasAccelerating) {
+                _wasAccelerating = false;
+
+                VESC.setCurrent(0.0, _primaryAcceleratorVESCID);
+                VESC.setCurrent(0.0, _secondaryAcceleratorVESCID);
+            }
+            _wasBraking = true;
+
+            if (settings.enableDualVESC) {
+                if (!VESC.data_mcconf.c_force_single_motor_acceleration) {
+                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.9, _primaryBrakerVESCID);
+                    VESC.setBrakeCurrent(throttle_info.requested_current * 0.1, _secondaryBrakerVESCID);
+                } else {
+                    bool areMotorsCoupled = false;
+                    if (areMotorsCoupled) {
+                        VESC.setBrakeCurrent(throttle_info.requested_current, _primaryBrakerVESCID);
+                    } else {
+                        VESC.setBrakeCurrent(throttle_info.requested_current, _primaryAcceleratorVESCID);
+                    }
+                }
+            } else {
+                VESC.setBrakeCurrent(throttle_info.requested_current);
+            }
+            break;
+    }
+
+    if (VESC.getVescValues(settings.primaryVESCID)) {
       VESCPrimary = VESC.data;
       VescUart::dataPackage tempData = VESCPrimary;
 
@@ -1074,6 +1477,44 @@ extern "C" void timer_2khz_callback(GPTDriver *gptp) {
   double _current = _currentHighSens;
 
   battery.processLoop(_voltage, _current, false, dt);
+
+  rollingRangeEstimation.loop(battery.wattHoursRemaining);
+
+  // should be accurate, only measures while moving
+  if (!battery.charging && speed_kmh != 0.0) {
+      rollingRangeEstimation.addDeltaWhUsed(battery.getWattHoursUsedInPreviousLoopCycle());
+
+      if (battery.getWattHoursUsedInPreviousLoopCycle() >= 0.0) {
+          trip_A.wattHoursConsumed += battery.getWattHoursUsedInPreviousLoopCycle();
+          trip_B.wattHoursConsumed += battery.getWattHoursUsedInPreviousLoopCycle();
+      }
+
+      if (battery.getWattHoursUsedInPreviousLoopCycle() < 0.0) {
+          trip_A.wattHoursRegenerated += battery.getWattHoursUsedInPreviousLoopCycle();
+          trip_B.wattHoursRegenerated += battery.getWattHoursUsedInPreviousLoopCycle();
+      }
+  }
+
+  trip_A.wattHoursUsed = trip_A.wattHoursConsumed + trip_A.wattHoursRegenerated;
+  trip_B.wattHoursUsed = trip_B.wattHoursConsumed + trip_B.wattHoursRegenerated;
+
+  estimatedRangeCalculateStats(&trip_A, battery.wattHoursRemaining);
+  estimatedRangeCalculateStats(&trip_B, battery.wattHoursRemaining);
+
+  {
+    static double uptimeInSeconds_rideTime_tmp;
+    static double uptimeInSeconds_rideTime_freeze = 0.0;
+    uptimeInSeconds_rideTime_freeze += dt;
+    if (speed_kmh == 0.0) {
+      uptimeInSeconds_rideTime_tmp = uptimeInSeconds_rideTime_freeze;
+    } else {
+      double delta = uptimeInSeconds_rideTime_freeze - uptimeInSeconds_rideTime_tmp;
+      trip_A.rideTime += delta;
+      trip_B.rideTime += delta;
+      odometer.rideTime += delta;
+      uptimeInSeconds_rideTime_tmp = uptimeInSeconds_rideTime_freeze;
+    }
+  }
 }
 
 int main(void) {
@@ -1086,6 +1527,7 @@ int main(void) {
   chSysInit();
   portab_setup();
 
+  // PROFILES
   PP_VALS_TO_STRING = {
     {PP_VALS::L_CURRENT_MIN_SCALE, "L_CURRENT_MIN_SCALE"},
     {PP_VALS::L_CURRENT_MAX_SCALE, "L_CURRENT_MAX_SCALE"},
@@ -1134,6 +1576,48 @@ int main(void) {
       {"Custom", PROFILE::CUSTOM},
   };
 
+  // throttle/brake curves
+  throttleCurve = {
+      {0, 0},
+      {8, 8},
+      {15, 13},
+      {20, 18},
+      {30, 30},
+      {40, 60},
+      {50, 100},
+      {75, 180},
+      {87, 220},
+      {100, 250}
+  };
+
+  throttleCurveDualVESC = {
+      {0, 0},
+      {8, 8},
+      {15, 15},
+      {20, 25},
+      {30, 45},
+      {40, 70},
+      {50, 110},
+      {60, 150},
+      {70, 250},
+      {80, 350},
+      {90, 420},
+      {100, 500}
+  };
+
+  brakeCurve = {
+      {0, 0},
+      {8, 8},
+      {15, 13},
+      {20, 18},
+      {30, 30},
+      {40, 45},
+      {60, 72},
+      {75, 105},
+      {87, 150},
+      {100, 200}
+  };
+
   if (!spiFlashLittleFsInit()) {
     chSysHalt("SPI flash/LittleFS init failed");
   }
@@ -1160,8 +1644,10 @@ int main(void) {
   palSetLineMode(PAL_LINE(GPIOB, 10U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
   palSetLineMode(PAL_LINE(GPIOB, 11U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
   uartVesc.setUartPort(&SD3);
-  uartVesc.begin(230400);
+  uartVesc.begin(115200);
   VESC.setSerialPort(&uartVesc);
+
+  setMcconfFromCurrentProfile();
 
   // starts the cdc serial driver
   sduObjectInit(&SDU1);

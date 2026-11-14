@@ -133,7 +133,7 @@ static bool state_isVoltageBased = false;
 static double ampHoursLifetime_savedVoltagePercentage = 0.0;
 static double timeVoltageSettledMsElapsed = 0.0;
 
-void Battery::processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt) {
+void Battery::processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt_s) {
     voltage = voltage_;
     current = current_;
 
@@ -142,8 +142,8 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     wattHoursRemaining = wattHoursFullyDischarged * (_percentage / 100.0);
     wattHoursUsed = wattHoursFullyDischarged - wattHoursRemaining;
 
-    ampHoursUsedInElapsedTime = current / (1.0 / dt) / 3600.0;
-    wattHoursUsedInElapsedTime = (current * voltage) / (1.0 / dt) / 3600.0;
+    ampHoursUsedInElapsedTime = current / (1.0 / dt_s) / 3600.0;
+    wattHoursUsedInElapsedTime = (current * voltage) / (1.0 / dt_s) / 3600.0;
 
     if ((wattHoursUsedInElapsedTime >= 20.0) || (wattHoursUsedInElapsedTime <= -20.0)) {
         wattHoursUsedInElapsedTime = 0.0;
@@ -153,10 +153,10 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         ampHoursUsedInElapsedTime = 0.0;
     }
 
-    percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000, dt);
+    percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000, dt_s * 1000.0);
 
     // combined percentage
-    timeVoltageSettledMsElapsed += (dt * 1000.0);
+    timeVoltageSettledMsElapsed += (dt_s * 1000.0);
 
     if (current <= idleMaxDischargingCurrent && current >= -idleMaxChargingCurrent) {
         if (timeVoltageSettledMsElapsed >= voltageSettlingTimeMs) {
@@ -229,12 +229,12 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
     // and just the voltagePercentage one
     if (!AMPHOUR_ESTIMATE_T.isVoltageBased) {
         if ((_percentage2 - _percentage) >= 0.1 || (_percentage - _percentage2) >= 0.1) {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s);
         } else {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1, dt);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1, dt_s);
         }
     } else {
-        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt);
+        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s);
     }
 
     // AMPHOUR COUNTING WITH DATA ACCUMULATED DURING USAGE

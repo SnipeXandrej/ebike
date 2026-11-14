@@ -49,7 +49,7 @@ private:
 public:
     void setup();
 
-    void processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt);
+    void processLoop(double voltage_, double current_, bool batteryPercentageVoltageBased, double dt_s);
 
     double getAmpHoursFullyChargedWhenNew();
     void   setAmpHoursFullyChargedWhenNew(double newValue);
