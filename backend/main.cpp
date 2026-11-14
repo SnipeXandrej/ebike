@@ -27,8 +27,7 @@ extern "C" {
 #include "adc3.hpp"
 #include "abstractions.hpp"
 #include "commonUtils.hpp"
-#include "myUart.hpp"
-#include "VescUart/VescUart.h"
+#include "vescCan.hpp"
 #include "messagingUtils.hpp"
 #include "battery.hpp"
 #include "comm.h"
@@ -68,9 +67,9 @@ std::vector<Point> throttleCurveDualVESC;
 std::vector<Point> brakeCurve;
 PowerProfiles PP;
 RollingRangeEstimation rollingRangeEstimation;
-VescUart::dataPackage VESCCombined;
-VescUart::dataPackage VESCPrimary;
-VescUart::dataPackage VESCSecondary;
+VescCan::dataPackage VESCCombined;
+VescCan::dataPackage VESCPrimary;
+VescCan::dataPackage VESCSecondary;
 
 #define JSON_SETTINGS_SIZE 10240
 JsonDocument jsonSettings;
@@ -188,8 +187,7 @@ int throttleState = 0;
 float primaryVESCSaturatedLeftoverCurrent;
 float primaryCurrent;
 float secondaryCurrent;
-MyUart uartVesc;
-VescUart VESC;
+VescCan VESC;
 
 bool settingsApply(const JsonDocument &doc) {
   JsonObjectConst tbl = doc.as<JsonObjectConst>();
@@ -350,8 +348,8 @@ void setMcconfFromCurrentProfile() {
 }
 
 void run_command_GET_POWER_PROFILE_ALL(std::string& toSend) {
-    VescUart::mcconf_t _mcconf_vesc1;
-    VescUart::mcconf_t _mcconf_vesc2;
+    VescCan::mcconf_t _mcconf_vesc1;
+    VescCan::mcconf_t _mcconf_vesc2;
     // int VESC1Success = false;
     // int VESC2Success = false;
 
@@ -754,6 +752,7 @@ std::string ProcessRead(const std::string& message) {
         std::string throttleFunctionDebugInfo = std::format("Throttle state: {}\n", _enum);
 
         uint32_t callbacks = timerCallbacksLastSecond;
+        const VescCan::Diagnostics canDiagnostics = VESC.getDiagnostics();
         debuginfo = std::format("Battery:\n"
                                 "{}\n"
                                 "Speed: {} km/h\n"
@@ -768,6 +767,8 @@ std::string ProcessRead(const std::string& message) {
                                 "\n"
                                 "primaryVESCSaturatedLeftoverCurrent: {} A\n"
                                 "2kHz callback rate: {} \n"
+                                "VESC CAN: tx {}/{} ({} timeout), rx {}, bus-off recoveries {}\n"
+                                "          ECR 0x{:08x}, PSR 0x{:08x}\n"
                                 , battery.getStatus()
                                 , speed_kmh
                                 , throttleFunctionDebugInfo
@@ -778,6 +779,13 @@ std::string ProcessRead(const std::string& message) {
                                 , throttle_info.requested_current
                                 , primaryVESCSaturatedLeftoverCurrent
                                 , callbacks
+                                , canDiagnostics.txCompleted
+                                , canDiagnostics.txAttempts
+                                , canDiagnostics.txTimeouts
+                                , canDiagnostics.rxFrames
+                                , canDiagnostics.busOffRecoveries
+                                , canDiagnostics.errorCounter
+                                , canDiagnostics.protocolStatus
                                 );
 
         debuginfo += std::format("\nAnalog Readings:\n"
@@ -1385,7 +1393,7 @@ static THD_FUNCTION(VescDataProcessingThread, arg) {
 
     if (VESC.getVescValues(settings.primaryVESCID)) {
       VESCPrimary = VESC.data;
-      VescUart::dataPackage tempData = VESCPrimary;
+      VescCan::dataPackage tempData = VESCPrimary;
 
       if (settings.enableDualVESC && VESC.getVescValues(settings.secondaryVESCID)) {
           VESCSecondary = VESC.data;
@@ -1463,6 +1471,8 @@ static THD_FUNCTION(VescDataProcessingThread, arg) {
           timeNowS = 0.0;
       }
     }
+
+    // chThdSleepMilliseconds(5);
     chTMStopMeasurementX(&vesc_tm);
   }
 }
@@ -1633,19 +1643,10 @@ int main(void) {
   // GPIO setup
   pinMode(PIN_BUTTON_K1, INPUT_PULLDOWN);
 
-  // USART3 (VESC)
-  // PB10 (TX)
-  // PB11 (RX)
-  // The board defaults USART3 to the ST-Link VCP on PD8/PD9.
-  // Disconnect those AF pads before remapping USART3 to PB10/PB11,
-  // otherwise it interferes with receiving messages.
-  palSetLineMode(PAL_LINE(GPIOD, 8U), PAL_MODE_INPUT_ANALOG);
-  palSetLineMode(PAL_LINE(GPIOD, 9U), PAL_MODE_INPUT_ANALOG);
-  palSetLineMode(PAL_LINE(GPIOB, 10U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
-  palSetLineMode(PAL_LINE(GPIOB, 11U), PAL_MODE_ALTERNATE(7U) | PAL_STM32_OSPEED_HIGHEST);
-  uartVesc.setUartPort(&SD3);
-  uartVesc.begin(115200);
-  VESC.setSerialPort(&uartVesc);
+  // VESC FDCAN2: PB12 RX, PB13 TX (AF9) 500 kbit/s.
+  if (!VESC.begin(settings.primaryVESCID)) {
+    chSysHalt("FDCAN2 start failed");
+  }
 
   setMcconfFromCurrentProfile();
 

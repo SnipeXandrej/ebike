@@ -11,3 +11,6 @@
 [submodule "backend/ArduinoJson"]
 	path = backend/ArduinoJson
 	url = https://github.com/bblanchon/ArduinoJson.git
+[submodule "backend/libVescCan"]
+	path = backend/libVescCan
+	url = https://github.com/AlvaroBajceps/libVescCan.git

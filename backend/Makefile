@@ -127,6 +127,8 @@ CSRC = $(ALLCSRC) \
        $(CHIBIOS)/os/various/newlib_bindings/syscalls.c \
        $(TESTSRC) \
        $(CONFDIR)/portab.c \
+       libVescCan/src/libVescCan/VESC_Convert.c \
+       libVescCan/src/libVescCan/VESC_Endian.c \
        usbcfg.c \
 
 # C++ sources that can be compiled in ARM or THUMB mode depending on the global
@@ -134,7 +136,7 @@ CSRC = $(ALLCSRC) \
 CPPSRC = $(ALLCPPSRC) \
          main.cpp \
          adc3.cpp abstractions.cpp ../commonUtils.cpp \
-         VescUart/VescUart.cpp VescUart/buffer.cpp VescUart/crc.cpp myUart.cpp \
+         vescCan.cpp \
          messagingUtils.cpp battery.cpp rollingRangeEstimation.cpp map.cpp rampLimiter.cpp valueTransition.cpp timer.cpp \
          spiFlashLittleFs.cpp
 
@@ -169,7 +171,7 @@ UADEFS =
 
 # List all user directories here
 UINCDIR = ./compat $(SRC_ROOT) ../submodules/magic_enum/include/magic_enum \
-          ./ArduinoJson/src
+          ./ArduinoJson/src ./libVescCan/include
 
 # List the user directory to look for the libraries here
 ULIBDIR =

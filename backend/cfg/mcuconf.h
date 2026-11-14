@@ -236,7 +236,7 @@
  * CAN driver system settings.
  */
 #define STM32_CAN_USE_FDCAN1                FALSE
-#define STM32_CAN_USE_FDCAN2                FALSE
+#define STM32_CAN_USE_FDCAN2                TRUE
 #define STM32_CAN_USE_FDCAN3                FALSE
 
 /*
