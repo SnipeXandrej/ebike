@@ -20,21 +20,21 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 - [x] Motor temperature
 - [x] VESC MOSFET temperature
 - [ ] Outside temperature
-- [ ] Speed (calculated from the motor speed)
-- [ ] Odometer
-- [ ] Trip A / Trip B with Wh/km usage separate for both trips
+- [x] Speed (calculated from the motor speed)
+- [x] Odometer
+- [x] Trip A / Trip B with Wh/km usage separate for both trips
 - [x] Voltage reading
 - [x] Current reading
-- [ ] Immediate Wh/km usage
+- [x] Immediate Wh/km usage
 - [x] Battery Percentage calculated from amphour usage
 - [x] Battery cycle counter
 - [ ] External battery
-- [ ] Immediate Wh/km usage
-- [ ] Longterm Wh/km usage
-- [ ] Estimated range
+- [x] Immediate Wh/km usage
+- [x] Longterm Wh/km usage
+- [x] Estimated range
 - [x] Software poweroff
 - [ ] Hardware poweroff (disconnect everything from battery, to prevent battery drain)
-- [ ] Runtime changing of power profiles
+- [x] Runtime changing of power profiles
 - [ ] Lights
     - [x] Front light (physical switch)
     - [ ] Back light
@@ -47,4 +47,3 @@ Dear ImGui with SDL3 + OpenGL 2 is used for the frontend.
 - [x] Charge the battery with a custom power supply (84V 16A Max)
 - [ ] Onboard USB-C PD Charger 65W + 18W (USB-C + USB-A) (for a phone for example)
 - [ ] Logging of stats like the battery voltage, current, motor speed, phase current, etc.
-- [ ] Screen recording

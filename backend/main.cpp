@@ -132,6 +132,8 @@ struct Settings {
     int secondaryVESCID = 0;
     int setSecondaryVescAsFirstAccelerationMotor = 0;
     int setSecondaryVescAsFirstBrakingMotor = 0;
+    float highSensOffset_mv = 0.0;
+    float lowSensOffset_mv = 0.0;
 };
 Settings settings;
 
@@ -221,6 +223,8 @@ bool settingsApply(const JsonDocument &doc) {
   settings.secondaryVESCID                = tbl["settings"]["secondaryVESCID"] | settings.secondaryVESCID;
   settings.setSecondaryVescAsFirstAccelerationMotor   = tbl["settings"]["setSecondaryVescAsFirstAccelerationMotor"] | settings.setSecondaryVescAsFirstAccelerationMotor;
   settings.setSecondaryVescAsFirstBrakingMotor        = tbl["settings"]["setSecondaryVescAsFirstBrakingMotor"] | settings.setSecondaryVescAsFirstBrakingMotor;
+  settings.highSensOffset_mv              = tbl["settings"]["highSensOffset_mv"] | settings.highSensOffset_mv;
+  settings.lowSensOffset_mv               = tbl["settings"]["lowSensOffset_mv"] | settings.lowSensOffset_mv;
   PP.setProfile(                            tbl["PP"]["setProfile"] | (int)0);
   notes                                   = tbl["notes"]["note1"] | "";
 
@@ -287,6 +291,8 @@ void settingsBuild(JsonDocument &doc) {
   tbl["settings"]["secondaryVESCID"] = settings.secondaryVESCID;
   tbl["settings"]["setSecondaryVescAsFirstAccelerationMotor"] = settings.setSecondaryVescAsFirstAccelerationMotor;
   tbl["settings"]["setSecondaryVescAsFirstBrakingMotor"] = settings.setSecondaryVescAsFirstBrakingMotor;
+  tbl["settings"]["highSensOffset_mv"] = settings.highSensOffset_mv;
+  tbl["settings"]["lowSensOffset_mv"] = settings.lowSensOffset_mv;
   tbl["PP"]["setProfile"] = PP.getProfile();
   tbl["notes"]["note1"] = notes;
 
@@ -426,6 +432,7 @@ static volatile double voltages_mv[ADC_CHANNELS] = {};
 static volatile double _voltage = 0.0f;
 static volatile double _currentLowSens = 0.0f;
 static volatile double _currentHighSens = 0.0f;
+static volatile bool adc12_ok = false;
 
 // clock
 static volatile uint32_t uptimeInSeconds = 0; // can count up to 136.19 years, I think thats enough
@@ -438,10 +445,10 @@ size_t n= 0, nx = 0, ny = 0, nxx = 0;
 static volatile uint32_t cycles_per_second = 0;
 
 // ADC3
-static uint32_t vrefint_raw, temperature_raw;
-static uint32_t reference_mv, vrefint_mv;
-static int32_t temperature_c;
-static volatile bool adc3_ok;
+static volatile uint32_t vrefint_raw, temperature_raw;
+static volatile uint32_t reference_mv, vrefint_mv;
+static volatile int32_t temperature_c;
+static volatile bool adc3_ok = false;
 
 static THD_WORKING_AREA(waCalibrationThread, 768);
 static THD_FUNCTION(CalibrationThread, arg) {
@@ -450,13 +457,17 @@ static THD_FUNCTION(CalibrationThread, arg) {
   (void)arg;
   chRegSetThreadName("CalibrationThread");
 
-  MovingAverage movingAverage_vrefint_raw;
   MovingAverage movingAverage_temperature_raw;
-  movingAverage_vrefint_raw.smoothingFactor = 0.3f;
   movingAverage_temperature_raw.smoothingFactor = 0.3f;
+
+  MovingAverage movingAverage_reference_mv;
+  movingAverage_reference_mv.smoothingFactor = 0.005f;
 
   uint32_t _vrefint_raw = 0;
   uint32_t _temperature_raw = 0;
+
+  uint32_t _reference_mv, _vrefint_mv;
+  int32_t _temperature_c;
 
   while (true) {
     if (!adc3_ready) {
@@ -471,13 +482,16 @@ static THD_FUNCTION(CalibrationThread, arg) {
       temperature_raw = 0U;
     }
 
-    movingAverage_vrefint_raw.initInput(_vrefint_raw);
-    vrefint_raw = movingAverage_vrefint_raw.moveAverage(_vrefint_raw);
+    vrefint_raw = _vrefint_raw;
     movingAverage_temperature_raw.initInput(_temperature_raw);
     temperature_raw = movingAverage_temperature_raw.moveAverage(_temperature_raw);
 
     if (adc3_ok) {
-      adc3_calculate(vrefint_raw, temperature_raw, &reference_mv, &vrefint_mv, &temperature_c);
+      adc3_calculate(vrefint_raw, temperature_raw, &_reference_mv, &_vrefint_mv, &_temperature_c);
+
+      reference_mv = movingAverage_reference_mv.moveAverage(_reference_mv);
+      vrefint_mv = _vrefint_mv;
+      temperature_c = _temperature_c;
     }
 
     nxx++;
@@ -753,7 +767,11 @@ std::string ProcessRead(const std::string& message) {
 
         uint32_t callbacks = timerCallbacksLastSecond;
         const VescCan::Diagnostics canDiagnostics = VESC.getDiagnostics();
-        debuginfo = std::format("Battery:\n"
+        debuginfo = std::format("STM32:\n"
+                                "   3.3V Rail:      {} mV\n"
+                                "   VREFINT Rail:   {} mV\n"
+                                "   Temperature:    {} c\n\n"
+                                "Battery:\n"
                                 "{}\n"
                                 "Speed: {} km/h\n"
                                 "{}\n"
@@ -769,6 +787,9 @@ std::string ProcessRead(const std::string& message) {
                                 "2kHz callback rate: {} \n"
                                 "VESC CAN: tx {}/{} ({} timeout), rx {}, bus-off recoveries {}\n"
                                 "          ECR 0x{:08x}, PSR 0x{:08x}\n"
+                                , (uint32_t)reference_mv
+                                , (uint32_t)vrefint_mv
+                                , (int32_t)temperature_c / 100
                                 , battery.getStatus()
                                 , speed_kmh
                                 , throttleFunctionDebugInfo
@@ -975,6 +996,9 @@ extern "C" void adccallback(ADCDriver *adcp) {
   movingAverage_currentHighSens.smoothingFactor = 1.0f;
   movingAverage_currentLowSens.smoothingFactor = movingAverage_currentHighSens.smoothingFactor;
 
+  if (!adc3_ok || reference_mv == 0) {
+    return;
+  }
 
   // CLANKED FROM HERE
   const size_t sequences = ADC_GRP2_BUF_DEPTH / 2U;
@@ -1017,7 +1041,7 @@ extern "C" void adccallback(ADCDriver *adcp) {
 
   // CALIBRATED!!! on pin A0
   {
-    double measuring_zero_input_offset_mv = ((double)reference_mv * 0.5) + 0.002; // 0.04
+    double measuring_zero_input_offset_mv = ((double)reference_mv * 0.5) + (double)settings.lowSensOffset_mv;
     double amplifier_gain = 50.0;
     double shunt_resistance_mohms = 0.0867; // setting this to 1.0 will make the "current" output show the number of milivolts at the analog input pin
     _currentLowSens = movingAverage_currentLowSens.moveAverage(
@@ -1027,13 +1051,15 @@ extern "C" void adccallback(ADCDriver *adcp) {
 
   // CALIBRATED!!! on pin A1
   {
-    double measuring_zero_input_offset_mv = ((double)reference_mv * 0.5) + 0.002; // 0.04
+    double measuring_zero_input_offset_mv = ((double)reference_mv * 0.5) + (double)settings.highSensOffset_mv;
     double amplifier_gain = 50.0;
-    double shunt_resistance_mohms = 0.241; // setting this to 1.0 will make the "current" output show the number of milivolts at the analog input pin
+    double shunt_resistance_mohms = 0.2892; //0.241; // setting this to 1.0 will make the "current" output show the number of milivolts at the analog input pin
     _currentHighSens = movingAverage_currentHighSens.moveAverage(
       (voltages_mv[ADC_PA1] - measuring_zero_input_offset_mv) / (amplifier_gain * shunt_resistance_mohms)
     );
   }
+
+  adc12_ok = true;
 
   n++;
   if (adcIsBufferComplete(adcp)) {
@@ -1071,10 +1097,10 @@ void ThrottleApplyThrottle(float current, float maxCurrent) {
     throttle_info.maximum_current = maxCurrent;
 }
 
-void ThrottleApplyBraking(float current) {
+void ThrottleApplyBraking(float current, float maxCurrent) {
     throttle_info.is_accelerating = 0;
     throttle_info.requested_current = current;
-    throttle_info.maximum_current = 100; // TODO
+    throttle_info.maximum_current = maxCurrent;
 }
 
 /*
@@ -1164,7 +1190,7 @@ void throttleFunction(double elapsedMs) {
                     ThrottleApplyThrottle(throttleCurrent, throttleClampCurrent);
                     break;
                 } else {
-                    // ThrottleApplyBraking(brakeCurrent);
+                    // ThrottleApplyBraking(brakeCurrent, maxBrakingCurrent);
                 }
             }
 
@@ -1238,9 +1264,9 @@ void throttleFunction(double elapsedMs) {
             if (valueTransition.toRealBrake.timer.getTime_ms_now() < realBrakeTransitionTime) {
                 brakingCurrentToApply = valueTransition.toRealBrake.getValueDifference(0.0, _brakeCurrent, realBrakeTransitionTime);
 
-                ThrottleApplyBraking(brakingCurrentToApply); //brakingCurrentToApply
+                ThrottleApplyBraking(brakingCurrentToApply, maxBrakingCurrent);
             } else {
-                ThrottleApplyBraking(_brakeCurrent); //_brakeCurrent
+                ThrottleApplyBraking(_brakeCurrent, maxBrakingCurrent);
             }
 
             break;
@@ -1266,7 +1292,7 @@ void throttleFunction(double elapsedMs) {
             break;
 
         case STATE::POWER_OFF_OR_CHARGING_BRAKING:
-            ThrottleApplyBraking(brakeCurrent);
+            ThrottleApplyBraking(brakeCurrent, maxBrakingCurrent);
             if (powerOn && !battery.charging) {
                 throttleState = STATE::THROTTLE;
             }
@@ -1360,6 +1386,8 @@ static THD_FUNCTION(VescDataProcessingThread, arg) {
             break;
 
         case false:
+            // TODO: throttle_info.maximum_current is not being used here
+
             // make sure the motors are not accelerating
             // if force_single_motor_acceleration is enabled and we are accelerating, and now we apply braking on the other motor that 
             // wasnt accelerating, the accelerating motor will still be accelerating for a few moments, because when we stop sending any
@@ -1477,16 +1505,38 @@ static THD_FUNCTION(VescDataProcessingThread, arg) {
   }
 }
 
+MovingAverage movingAverage_current;
+MovingAverage movingAverage_voltage;
+static float smoothCurrentThresholdA = 2.0;
+
 // the main logic will run here
 extern "C" void timer_2khz_callback(GPTDriver *gptp) {
   (void)gptp;
   _timerCallbackCount += 1;
   double dt = 1.0/2000.0;
 
+  if (!adc3_ok || !adc12_ok || reference_mv == 0) {
+    return;
+  }
+
   // TODO: wire up and interpolate when switching between _currentHighSens and _currentLowSens values
   double _current = _currentHighSens;
 
-  battery.processLoop(_voltage, _current, false, dt);
+  if (_current <= smoothCurrentThresholdA) {
+    movingAverage_current.smoothingFactor = 0.005f;
+    movingAverage_voltage.smoothingFactor = 0.005f;
+
+    movingAverage_current.moveAverage(_current);
+    movingAverage_voltage.moveAverage(_voltage);
+  } else {
+    movingAverage_current.smoothingFactor = 1.0f;
+    movingAverage_voltage.smoothingFactor = 1.0f;
+
+    movingAverage_current.moveAverage(_current);
+    movingAverage_voltage.moveAverage(_voltage);
+  }
+
+  battery.processLoop(movingAverage_voltage.output, movingAverage_current.output, settings.batteryPercentageVoltageBased, dt);
 
   rollingRangeEstimation.loop(battery.wattHoursRemaining);
 
@@ -1525,6 +1575,7 @@ extern "C" void timer_2khz_callback(GPTDriver *gptp) {
       uptimeInSeconds_rideTime_tmp = uptimeInSeconds_rideTime_freeze;
     }
   }
+
 }
 
 int main(void) {

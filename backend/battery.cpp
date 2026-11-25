@@ -153,7 +153,9 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
         ampHoursUsedInElapsedTime = 0.0;
     }
 
-    percentageVoltageBased = voltageRampLimiter.getValue(socVoltageMap.map(voltage / cell_series), 0.1, 5000, 5000, dt_s * 1000.0);
+    double _socVoltageMapPercentage = socVoltageMap.map(voltage / cell_series);
+    voltageRampLimiter.initValue(_socVoltageMapPercentage);
+    percentageVoltageBased = voltageRampLimiter.getValue(_socVoltageMapPercentage, 0.1, 5000, 5000, dt_s * 1000.0);
 
     // combined percentage
     timeVoltageSettledMsElapsed += (dt_s * 1000.0);
@@ -223,18 +225,19 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
 
     _percentage = savedVoltagePercentage - accPercentageChange;
     static RampLimiter voltageTransition;
+    voltageTransition.initValue(savedVoltagePercentage);
     static double _percentage2 = 0.0;
 
     // slowly adjust the percentage shown if theres a big difference between the voltagePercentage/_percentage hybrid
     // and just the voltagePercentage one
     if (!AMPHOUR_ESTIMATE_T.isVoltageBased) {
         if ((_percentage2 - _percentage) >= 0.1 || (_percentage - _percentage2) >= 0.1) {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s * 1000.0);
         } else {
-            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1, dt_s);
+            _percentage2 = voltageTransition.getValue(_percentage, 0.1, 1, 1, dt_s * 1000.0);
         }
     } else {
-        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s);
+        _percentage2 = voltageTransition.getValue(_percentage, 0.1, 20000, 20000, dt_s * 1000.0);
     }
 
     // AMPHOUR COUNTING WITH DATA ACCUMULATED DURING USAGE
@@ -313,6 +316,8 @@ void Battery::processLoop(double voltage_, double current_, bool batteryPercenta
 
 char* Battery::getStatus() {
     snprintf(_statusString, sizeof(_statusString),
+        "   Voltage:                         %.5f V\n"
+        "   Current:                         %.5f A\n"
         "   IsVoltageBased:                  %d\n"
         "   Percentage shown:                %.3f %%\n"
         "   percentage Voltage Based:        %.3f %%\n"
@@ -327,6 +332,8 @@ char* Battery::getStatus() {
         "   Accumulated Watthours during usage: %.3f Wh\n"
         "   Estimated Capacity from test:       %.3f %%\n"
         "   Delta Percentage:                   %.3f %%\n"
+        , voltage
+        , current
         , AMPHOUR_ESTIMATE_T.isVoltageBased
         , percentage
         , percentageVoltageBased

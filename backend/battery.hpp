@@ -19,7 +19,7 @@ private:
 
     const float idleMaxDischargingCurrent = 0.5;
     const float idleMaxChargingCurrent = 0.35;
-    const double voltageSettlingTimeMs = 600 * 1000; // 20 minutes
+    const double voltageSettlingTimeMs = 600 * 1000; // 10 minutes
     const double accumulatedAmpHoursThreshold = 8; // number of amphours needed to proceed with calculating the estimated capacity
 
     double savedVoltagePercentage;

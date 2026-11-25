@@ -1,5 +1,12 @@
 #include "rampLimiter.hpp"
 
+void RampLimiter::initValue(double value) {
+    if (!isInit) {
+        isInit = true;
+        output = value;
+    }
+}
+
 double RampLimiter::getValue(double targetValue, double rampValueOverTime, double rampTimeMs_up, double rampTimeMs_down, double dt_ms) {
     double timeDivider_up = rampTimeMs_up / dt_ms;
     double rampValueDivided_up = rampValueOverTime / timeDivider_up;

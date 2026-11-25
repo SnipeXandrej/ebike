@@ -29,6 +29,8 @@ void MovingAverage::setInput(float input) {
 }
 
 float MovingAverage::moveAverage(float input) {
+    initInput(input);
+
     output = smoothValue(input, previousOutput, smoothingFactor);
     previousOutput = output;
 
